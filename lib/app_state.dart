@@ -108,7 +108,10 @@ class AppState extends ChangeNotifier {
       try {
         final decoded = jsonDecode(storedStrokes) as Map<String, dynamic>;
         for (final entry in decoded.entries) {
-          strokes[entry.key] = (entry.value as List)
+          // Older builds stored one stroke list per notebook. Preserve those
+          // notes on the first page while using page-scoped keys from now on.
+          final key = entry.key.contains(':') ? entry.key : '${entry.key}:1';
+          strokes[key] = (entry.value as List)
               .map((item) => InkStroke.fromJson(item as Map<String, dynamic>))
               .toList();
         }
@@ -232,7 +235,9 @@ class AppState extends ChangeNotifier {
 
   void removeNotebook(String notebookId) {
     notebooks.removeWhere((item) => item.id == notebookId);
-    strokes.remove(notebookId);
+    strokes.removeWhere(
+      (key, _) => key == notebookId || key.startsWith('$notebookId:'),
+    );
     pinnedNotes.remove(notebookId);
     pageImages.remove(notebookId);
     imagePlacements.removeWhere(
@@ -344,11 +349,18 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  List<InkStroke> strokesFor(String notebookId) =>
-      strokes.putIfAbsent(notebookId, () => []);
+  String _strokeKey(String notebookId, int page) => '$notebookId:$page';
 
-  void saveStrokes(String notebookId, List<InkStroke> value) {
-    strokes[notebookId] = List.of(value);
+  List<InkStroke> strokesFor(String notebookId, [int? page]) {
+    final resolvedPage =
+        page ?? (openNotebook?.id == notebookId ? openPage : 1);
+    return strokes.putIfAbsent(_strokeKey(notebookId, resolvedPage), () => []);
+  }
+
+  void saveStrokes(String notebookId, List<InkStroke> value, [int? page]) {
+    final resolvedPage =
+        page ?? (openNotebook?.id == notebookId ? openPage : 1);
+    strokes[_strokeKey(notebookId, resolvedPage)] = List.of(value);
     notifyListeners();
     if (autoSave) _persistStrokes();
   }

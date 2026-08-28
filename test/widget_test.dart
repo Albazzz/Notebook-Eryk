@@ -55,6 +55,42 @@ void main() {
     expect(find.text('Đã hoàn tác · chạm hai ngón'), findsOneWidget);
   });
 
+  testWidgets('nét vẽ không bị đè khi chuyển trang', (tester) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    state.open(state.notebooks.first, page: 1);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    Future<void> drawStroke(Offset start, Offset end) async {
+      final stylus = TestPointer(
+        100 + state.openPage,
+        PointerDeviceKind.stylus,
+      );
+      await tester.sendEventToBinding(stylus.down(start));
+      await tester.sendEventToBinding(stylus.move(end));
+      await tester.sendEventToBinding(stylus.up());
+      await tester.pump();
+    }
+
+    await drawStroke(const Offset(600, 310), const Offset(700, 330));
+    expect(state.strokesFor('n3', 1), hasLength(1));
+
+    await tester.tap(
+      find.byWidgetPredicate((widget) => widget is Text && widget.data == '2'),
+    );
+    await tester.pump();
+    await drawStroke(const Offset(600, 360), const Offset(700, 380));
+
+    expect(state.strokesFor('n3', 1), hasLength(1));
+    expect(state.strokesFor('n3', 2), hasLength(1));
+  });
+
   testWidgets('bấm thumbnail để chuyển nhanh đến trang', (tester) async {
     tester.view.physicalSize = const Size(1180, 820);
     tester.view.devicePixelRatio = 1;

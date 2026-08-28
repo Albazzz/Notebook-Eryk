@@ -93,11 +93,17 @@ class _EditorScreenState extends State<EditorScreen> {
   double _quickEditTop = 24;
   double _quickEditWidth = 390;
   double _quickEditHeight = 520;
+  late int _strokesPage;
+  late String _strokesNotebookId;
 
   @override
   void initState() {
     super.initState();
-    strokes = List.of(widget.state.strokesFor(widget.notebook.id));
+    _strokesPage = widget.state.openPage;
+    _strokesNotebookId = widget.notebook.id;
+    strokes = List.of(
+      widget.state.strokesFor(widget.notebook.id, _strokesPage),
+    );
     if (widget.state.focusSource) {
       Future<void>.delayed(const Duration(milliseconds: 500), () {
         if (mounted) {
@@ -231,8 +237,22 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
+  void _syncStrokesWithCurrentPage() {
+    final page = widget.state.openPage;
+    final notebookId = widget.notebook.id;
+    if (_strokesPage == page && _strokesNotebookId == notebookId) return;
+    strokes = List.of(widget.state.strokesFor(notebookId, page));
+    redo.clear();
+    activePoints = null;
+    selectionStart = null;
+    selectionEnd = null;
+    _strokesPage = page;
+    _strokesNotebookId = notebookId;
+  }
+
   @override
   Widget build(BuildContext context) {
+    _syncStrokesWithCurrentPage();
     return Scaffold(
       // The software keyboard should float over the notebook instead of
       // shrinking the page, toolbar and floating lookup windows.
@@ -1063,7 +1083,7 @@ class _EditorScreenState extends State<EditorScreen> {
       );
       activePoints = null;
       redo.clear();
-      widget.state.saveStrokes(widget.notebook.id, strokes);
+      widget.state.saveStrokes(widget.notebook.id, strokes, _strokesPage);
       setState(() {});
     } else if (selectionStart != null && selectionEnd != null) {
       _processSelection();
@@ -2086,7 +2106,7 @@ class _EditorScreenState extends State<EditorScreen> {
     );
     if (index >= 0) {
       redo.add(strokes.removeAt(index));
-      widget.state.saveStrokes(widget.notebook.id, strokes);
+      widget.state.saveStrokes(widget.notebook.id, strokes, _strokesPage);
       setState(() {});
     }
   }
@@ -2094,14 +2114,14 @@ class _EditorScreenState extends State<EditorScreen> {
   void _undo() {
     if (strokes.isEmpty) return;
     redo.add(strokes.removeLast());
-    widget.state.saveStrokes(widget.notebook.id, strokes);
+    widget.state.saveStrokes(widget.notebook.id, strokes, _strokesPage);
     setState(() {});
   }
 
   void _redo() {
     if (redo.isEmpty) return;
     strokes.add(redo.removeLast());
-    widget.state.saveStrokes(widget.notebook.id, strokes);
+    widget.state.saveStrokes(widget.notebook.id, strokes, _strokesPage);
     setState(() {});
   }
 

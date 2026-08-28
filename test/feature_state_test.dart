@@ -91,4 +91,30 @@ void main() {
     expect(updated.path, '/tmp/cropped.png');
     expect(updated.rect, placement.rect);
   });
+
+  test('nét viết được lưu riêng theo từng trang', () {
+    final state = AppState();
+    addTearDown(state.dispose);
+    state.autoSave = false;
+    final stroke = InkStroke(
+      points: [StrokePoint(Offset(10, 10), 1)],
+      color: Color(0xff000000),
+      width: 3,
+      tool: EditorTool.pen,
+      createdAt: DateTime(2026, 1, 1),
+    );
+    final otherStroke = InkStroke(
+      points: [StrokePoint(Offset(20, 20), 1)],
+      color: Color(0xffff0000),
+      width: 3,
+      tool: EditorTool.pen,
+      createdAt: DateTime(2026, 1, 1),
+    );
+
+    state.saveStrokes('book', [stroke], 1);
+    state.saveStrokes('book', [otherStroke], 2);
+
+    expect(state.strokesFor('book', 1), [stroke]);
+    expect(state.strokesFor('book', 2), [otherStroke]);
+  });
 }
