@@ -93,6 +93,10 @@ class _EditorScreenState extends State<EditorScreen> {
   double _quickEditTop = 24;
   double _quickEditWidth = 390;
   double _quickEditHeight = 520;
+  final TransformationController _canvasController = TransformationController();
+  final TransformationController _canvasGestureStartController =
+      TransformationController();
+  Offset _canvasGestureStartFocal = Offset.zero;
   late int _strokesPage;
   late String _strokesNotebookId;
 
@@ -121,6 +125,8 @@ class _EditorScreenState extends State<EditorScreen> {
     _quickDictionaryDebounce?.cancel();
     _quickDictionaryController.dispose();
     _quickDictionaryFocus.dispose();
+    _canvasController.dispose();
+    _canvasGestureStartController.dispose();
     super.dispose();
   }
 
@@ -288,7 +294,11 @@ class _EditorScreenState extends State<EditorScreen> {
                                 child: GestureDetector(
                                   behavior: HitTestBehavior.translucent,
                                   onHorizontalDragEnd:
-                                      pageLocked || tool == EditorTool.image
+                                      pageLocked ||
+                                          tool == EditorTool.image ||
+                                          tool == EditorTool.pen ||
+                                          tool == EditorTool.highlighter ||
+                                          tool == EditorTool.eraser
                                       ? null
                                       : _onPageSwipe,
                                   child: _buildWorkspace(),
@@ -767,198 +777,203 @@ class _EditorScreenState extends State<EditorScreen> {
       builder: (context, constraints) {
         final targetHeight = math.min(constraints.maxHeight - 26, 770.0) * zoom;
         final targetWidth = targetHeight * .72;
-        // A writing gesture must never be claimed by InteractiveViewer. The
-        // Listener below handles Pencil/stylus input; allowing the ancestor
-        // viewer to pan at the same time makes the paper slide while writing.
-        final canvasNavigationEnabled =
-            !pageLocked &&
-            tool != EditorTool.image &&
-            tool != EditorTool.pen &&
-            tool != EditorTool.highlighter &&
-            tool != EditorTool.eraser;
-        return InteractiveViewer(
-          panEnabled: canvasNavigationEnabled,
-          scaleEnabled: canvasNavigationEnabled,
-          minScale: .7,
-          maxScale: 2.5,
-          child: SizedBox(
-            width: constraints.maxWidth,
-            height: constraints.maxHeight,
-            child: Center(
-              child: SizedBox(
-                width: targetWidth,
-                height: targetHeight,
-                child: Transform.rotate(
-                  angle: pageRotation * math.pi / 2,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: AppColors.paper,
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x24000000),
-                          blurRadius: 20,
-                          offset: Offset(0, 8),
-                        ),
-                      ],
-                    ),
-                    child: ClipRect(
-                      child: Listener(
-                        behavior: HitTestBehavior.opaque,
-                        onPointerDown: _onPointerDown,
-                        onPointerMove: _onPointerMove,
-                        onPointerUp: _onPointerUp,
-                        onPointerCancel: _onPointerCancel,
-                        child: Stack(
-                          children: [
-                            Positioned.fill(
-                              child: RepaintBoundary(
-                                key: _pageBoundaryKey,
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    CustomPaint(
-                                      painter: _PaperPainter(
-                                        style: widget.notebook.paperStyle,
-                                        isPdf:
-                                            widget.notebook.isPdf &&
-                                            !widget.state.blankPages.contains(
-                                              '${widget.notebook.id}:${widget.state.openPage}',
-                                            ),
-                                        lineOpacity:
-                                            widget.notebook.paperLineOpacity,
-                                      ),
-                                    ),
-                                    if (widget.state
-                                        .imagePlacementsForPage(
-                                          widget.notebook.id,
-                                          widget.state.openPage,
-                                        )
-                                        .isNotEmpty)
-                                      Positioned.fill(
-                                        child: _PageImageLayer(
-                                          placements: widget.state
-                                              .imagePlacementsForPage(
-                                                widget.notebook.id,
-                                                widget.state.openPage,
+        // Keep touch navigation separate from Pencil input. InteractiveViewer
+        // listens to every pointer kind, so its built-in recognizers can steal
+        // a Pencil drag. The outer scale recognizer below accepts touch only.
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          supportedDevices: const {
+            PointerDeviceKind.touch,
+            PointerDeviceKind.trackpad,
+          },
+          onScaleStart: pageLocked ? null : _onCanvasScaleStart,
+          onScaleUpdate: pageLocked ? null : _onCanvasScaleUpdate,
+          child: InteractiveViewer(
+            transformationController: _canvasController,
+            panEnabled: false,
+            scaleEnabled: false,
+            minScale: .7,
+            maxScale: 2.5,
+            child: SizedBox(
+              width: constraints.maxWidth,
+              height: constraints.maxHeight,
+              child: Center(
+                child: SizedBox(
+                  width: targetWidth,
+                  height: targetHeight,
+                  child: Transform.rotate(
+                    angle: pageRotation * math.pi / 2,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: AppColors.paper,
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x24000000),
+                            blurRadius: 20,
+                            offset: Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: ClipRect(
+                        child: Listener(
+                          behavior: HitTestBehavior.opaque,
+                          onPointerDown: _onPointerDown,
+                          onPointerMove: _onPointerMove,
+                          onPointerUp: _onPointerUp,
+                          onPointerCancel: _onPointerCancel,
+                          child: Stack(
+                            children: [
+                              Positioned.fill(
+                                child: RepaintBoundary(
+                                  key: _pageBoundaryKey,
+                                  child: Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      CustomPaint(
+                                        painter: _PaperPainter(
+                                          style: widget.notebook.paperStyle,
+                                          isPdf:
+                                              widget.notebook.isPdf &&
+                                              !widget.state.blankPages.contains(
+                                                '${widget.notebook.id}:${widget.state.openPage}',
                                               ),
-                                          editing: tool == EditorTool.image,
-                                          selectedId: selectedImageId,
-                                          onSelected: (id) => setState(
-                                            () => selectedImageId = id,
+                                          lineOpacity:
+                                              widget.notebook.paperLineOpacity,
+                                        ),
+                                      ),
+                                      if (widget.state
+                                          .imagePlacementsForPage(
+                                            widget.notebook.id,
+                                            widget.state.openPage,
+                                          )
+                                          .isNotEmpty)
+                                        Positioned.fill(
+                                          child: _PageImageLayer(
+                                            placements: widget.state
+                                                .imagePlacementsForPage(
+                                                  widget.notebook.id,
+                                                  widget.state.openPage,
+                                                ),
+                                            editing: tool == EditorTool.image,
+                                            selectedId: selectedImageId,
+                                            onSelected: (id) => setState(
+                                              () => selectedImageId = id,
+                                            ),
+                                            onMove: _movePageImage,
+                                            onResize: _resizePageImage,
+                                            onRotate: _rotatePageImage,
+                                            onCrop: _cropPageImage,
+                                            onDelete: _deletePageImage,
                                           ),
-                                          onMove: _movePageImage,
-                                          onResize: _resizePageImage,
-                                          onRotate: _rotatePageImage,
-                                          onCrop: _cropPageImage,
-                                          onDelete: _deletePageImage,
                                         ),
-                                      ),
-                                    IgnorePointer(
-                                      child: CustomPaint(
-                                        painter: _InkPainter(
-                                          strokes: strokes,
-                                          activePoints: activePoints,
-                                          activeColor:
-                                              tool == EditorTool.highlighter
-                                              ? highlightColor.withValues(
-                                                  alpha: highlightOpacity,
-                                                )
-                                              : penColor.withValues(
-                                                  alpha: penOpacity,
-                                                ),
-                                          activeWidth:
-                                              tool == EditorTool.highlighter
-                                              ? highlightWidth
-                                              : penWidth,
-                                          selectionStart: null,
-                                          selectionEnd: null,
-                                          selectionTool: tool,
-                                          sourcePulse: false,
-                                        ),
-                                      ),
-                                    ),
-                                    if (rulerVisible)
-                                      Positioned.fill(
-                                        child: LayoutBuilder(
-                                          builder: (context, pageConstraints) {
-                                            final pageSize =
-                                                pageConstraints.biggest;
-                                            return Stack(
-                                              children: [
-                                                Positioned(
-                                                  left:
-                                                      _rulerPosition.dx *
-                                                      pageSize.width,
-                                                  top:
-                                                      _rulerPosition.dy *
-                                                      pageSize.height,
-                                                  width:
-                                                      _rulerWidthFraction *
-                                                      pageSize.width,
-                                                  child: _Ruler(
-                                                    angle: _rulerAngle,
-                                                    height: _rulerHeight,
-                                                    onScaleStart: (_) {
-                                                      _rulerGestureStartWidth =
-                                                          _rulerWidthFraction;
-                                                      _rulerGestureStartHeight =
-                                                          _rulerHeight;
-                                                      _rulerGestureStartAngle =
-                                                          _rulerAngle;
-                                                    },
-                                                    onScaleUpdate: (details) =>
-                                                        _updateRulerGesture(
-                                                          details,
-                                                          pageSize,
-                                                        ),
+                                      IgnorePointer(
+                                        child: CustomPaint(
+                                          painter: _InkPainter(
+                                            strokes: strokes,
+                                            activePoints: activePoints,
+                                            activeColor:
+                                                tool == EditorTool.highlighter
+                                                ? highlightColor.withValues(
+                                                    alpha: highlightOpacity,
+                                                  )
+                                                : penColor.withValues(
+                                                    alpha: penOpacity,
                                                   ),
-                                                ),
-                                              ],
-                                            );
-                                          },
+                                            activeWidth:
+                                                tool == EditorTool.highlighter
+                                                ? highlightWidth
+                                                : penWidth,
+                                            selectionStart: null,
+                                            selectionEnd: null,
+                                            selectionTool: tool,
+                                            sourcePulse: false,
+                                          ),
                                         ),
                                       ),
-                                    ...(annotationsVisible
-                                        ? widget
-                                                  .state
-                                                  .pinnedNotes[widget
-                                                      .notebook
-                                                      .id]
-                                                  ?.asMap()
-                                                  .entries
-                                                  .map(
-                                                    (entry) => Positioned(
-                                                      right: 22,
-                                                      bottom:
-                                                          30 + entry.key * 110,
-                                                      child: _PinnedNoteCard(
-                                                        note: entry.value,
-                                                      ),
+                                      if (rulerVisible)
+                                        Positioned.fill(
+                                          child: LayoutBuilder(
+                                            builder: (context, pageConstraints) {
+                                              final pageSize =
+                                                  pageConstraints.biggest;
+                                              return Stack(
+                                                children: [
+                                                  Positioned(
+                                                    left:
+                                                        _rulerPosition.dx *
+                                                        pageSize.width,
+                                                    top:
+                                                        _rulerPosition.dy *
+                                                        pageSize.height,
+                                                    width:
+                                                        _rulerWidthFraction *
+                                                        pageSize.width,
+                                                    child: _Ruler(
+                                                      angle: _rulerAngle,
+                                                      height: _rulerHeight,
+                                                      onScaleStart: (_) {
+                                                        _rulerGestureStartWidth =
+                                                            _rulerWidthFraction;
+                                                        _rulerGestureStartHeight =
+                                                            _rulerHeight;
+                                                        _rulerGestureStartAngle =
+                                                            _rulerAngle;
+                                                      },
+                                                      onScaleUpdate: (details) =>
+                                                          _updateRulerGesture(
+                                                            details,
+                                                            pageSize,
+                                                          ),
                                                     ),
-                                                  ) ??
-                                              const []
-                                        : const []),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            Positioned.fill(
-                              child: IgnorePointer(
-                                child: CustomPaint(
-                                  painter: _InkPainter(
-                                    strokes: const [],
-                                    activePoints: null,
-                                    activeColor: Colors.transparent,
-                                    activeWidth: 0,
-                                    selectionStart: selectionStart,
-                                    selectionEnd: selectionEnd,
-                                    selectionTool: tool,
-                                    sourcePulse: widget.state.focusSource,
+                                                  ),
+                                                ],
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                      ...(annotationsVisible
+                                          ? widget
+                                                    .state
+                                                    .pinnedNotes[widget
+                                                        .notebook
+                                                        .id]
+                                                    ?.asMap()
+                                                    .entries
+                                                    .map(
+                                                      (entry) => Positioned(
+                                                        right: 22,
+                                                        bottom:
+                                                            30 +
+                                                            entry.key * 110,
+                                                        child: _PinnedNoteCard(
+                                                          note: entry.value,
+                                                        ),
+                                                      ),
+                                                    ) ??
+                                                const []
+                                          : const []),
+                                    ],
                                   ),
                                 ),
                               ),
-                            ),
-                          ],
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: CustomPaint(
+                                    painter: _InkPainter(
+                                      strokes: const [],
+                                      activePoints: null,
+                                      activeColor: Colors.transparent,
+                                      activeWidth: 0,
+                                      selectionStart: selectionStart,
+                                      selectionEnd: selectionEnd,
+                                      selectionTool: tool,
+                                      sourcePulse: widget.state.focusSource,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -970,6 +985,24 @@ class _EditorScreenState extends State<EditorScreen> {
         );
       },
     );
+  }
+
+  void _onCanvasScaleStart(ScaleStartDetails details) {
+    _canvasGestureStartController.value = _canvasController.value;
+    _canvasGestureStartFocal = details.localFocalPoint;
+  }
+
+  void _onCanvasScaleUpdate(ScaleUpdateDetails details) {
+    final matrix = _canvasGestureStartController.value.clone();
+    final startScale = matrix.getMaxScaleOnAxis();
+    final nextScale = (startScale * details.scale).clamp(.7, 2.5).toDouble();
+    final focal = details.localFocalPoint;
+    final focalDelta = focal - _canvasGestureStartFocal;
+    matrix.translateByDouble(focalDelta.dx, focalDelta.dy, 0, 1);
+    matrix.translateByDouble(focal.dx, focal.dy, 0, 1);
+    matrix.scaleByDouble(nextScale / startScale, nextScale / startScale, 1, 1);
+    matrix.translateByDouble(-focal.dx, -focal.dy, 0, 1);
+    _canvasController.value = matrix;
   }
 
   bool _acceptPointer(PointerEvent event) {

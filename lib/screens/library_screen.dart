@@ -55,11 +55,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (!mounted || _handlingSharedFiles || widget.sharedFiles.isEmpty) return;
     _handlingSharedFiles = true;
     final paths = List<String>.of(widget.sharedFiles);
+    var imported = false;
     try {
-      await _showImportPreview(paths);
+      imported = await _showImportPreview(paths);
+    } catch (exception) {
+      if (mounted) {
+        showAppSnack(context, 'Không thể nhập tệp: $exception');
+      }
     } finally {
       _handlingSharedFiles = false;
-      widget.onSharedFilesHandled?.call(paths);
+      // Keep staged files until a notebook is actually created. Previously a
+      // dismissed preview or a failed PDF render acknowledged (and deleted)
+      // the files, making the share action look like it did nothing.
+      if (imported) widget.onSharedFilesHandled?.call(paths);
     }
   }
 
@@ -477,7 +485,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     await _showImportPreview(paths);
   }
 
-  Future<void> _showImportPreview(List<String> inputPaths) async {
+  Future<bool> _showImportPreview(List<String> inputPaths) async {
     final paths = inputPaths
         .where((path) => File(path).existsSync())
         .where(
@@ -495,10 +503,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
           }.contains(_extension(path)),
         )
         .toList();
-    if (!mounted) return;
+    if (!mounted) return false;
     if (paths.isEmpty) {
       showAppSnack(context, 'Không có PDF hoặc ảnh hợp lệ để nhập');
-      return;
+      return false;
     }
     var imageMode = 'pages';
     var cropImages = false;
@@ -611,11 +619,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final importedTitle = titleController.text.trim();
     await Future<void>.delayed(const Duration(milliseconds: 300));
     titleController.dispose();
-    if (!mounted || accepted != true) return;
+    if (!mounted || accepted != true) return false;
     final documents = paths.where((path) => !_isImagePath(path)).toList();
     if (documents.length > 1) {
       showAppSnack(context, 'Hãy nhập từng tệp PDF hoặc Word riêng');
-      return;
+      return false;
     }
     final firstDocument = documents.firstOrNull;
     final isPdf = firstDocument != null && _extension(firstDocument) == 'pdf';
@@ -625,7 +633,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       if (firstDocument != null) {
         copiedDocument = await _copyImportedFile(firstDocument);
         if (isPdf) {
-          if (!mounted) return;
+          if (!mounted) return false;
           final progress = ValueNotifier('Đang mở PDF…');
           BuildContext? progressContext;
           unawaited(
@@ -677,7 +685,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       if (mounted) {
         showAppSnack(context, 'Không thể đọc PDF: $exception');
       }
-      return;
+      return false;
     }
     var importedImages = paths.where(_isImagePath).toList();
     if (cropImages) {
@@ -690,7 +698,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     } else {
       importedImages = await Future.wait(importedImages.map(_copyImportedFile));
     }
-    if (!mounted) return;
+    if (!mounted) return false;
     final type = firstDocument == null ? 'Vở ghi' : (isPdf ? 'PDF' : 'Word');
     final pageCount = isPdf
         ? pdfPages.length + importedImages.length
@@ -732,13 +740,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
         }
       }
     }
-    if (!mounted) return;
+    if (!mounted) return false;
     showAppSnack(
       context,
       isPdf
           ? 'Đã nhập ${notebook.title} · ${pdfPages.length} trang PDF'
           : 'Đã nhập ${notebook.title}',
     );
+    return true;
   }
 
   Future<List<String>> _renderPdfPages(

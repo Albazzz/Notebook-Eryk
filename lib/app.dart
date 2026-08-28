@@ -50,7 +50,14 @@ class _NihongoNotebookAppState extends State<NihongoNotebookApp>
   Future<void> _checkSharedFiles() async {
     if (_checkingSharedFiles || _pendingSharedFiles.isNotEmpty) return;
     _checkingSharedFiles = true;
-    final paths = await _sharedImport.pendingFiles();
+    var paths = await _sharedImport.pendingFiles();
+    // The Share Extension writes into the App Group immediately before it
+    // closes. On iPadOS the containing app can receive `resumed` a fraction
+    // earlier, so give the filesystem a short chance to publish the files.
+    for (var attempt = 0; paths.isEmpty && attempt < 3; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      paths = await _sharedImport.pendingFiles();
+    }
     _checkingSharedFiles = false;
     if (!mounted || paths.isEmpty) return;
     widget.state.goTo(AppDestination.library);

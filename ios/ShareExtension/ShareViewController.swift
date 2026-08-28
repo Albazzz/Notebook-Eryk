@@ -62,7 +62,11 @@ final class ShareViewController: UIViewController {
       return
     }
 
-    let providers = (extensionContext?.inputItems as? [NSExtensionItem] ?? [])
+    // inputItems is exposed by UIKit as [Any]. Do not require the whole array
+    // to bridge to [NSExtensionItem], otherwise one unexpected host item can
+    // make the cast fail and silently produce an empty import.
+    let providers = (extensionContext?.inputItems ?? [])
+      .compactMap { $0 as? NSExtensionItem }
       .flatMap { $0.attachments ?? [] }
     let group = DispatchGroup()
     let lock = NSLock()
@@ -181,14 +185,17 @@ final class ShareViewController: UIViewController {
       [weak self] source, _ in
       guard let self else { completion(false); return }
       if let source {
-        completion(self.copy(
+        let copied = self.copy(
           source: source,
           suggestedName: provider.suggestedName,
           fallbackExtension: UTType(typeIdentifier)?.preferredFilenameExtension,
           index: index,
           into: directory
-        ))
-        return
+        )
+        if copied {
+          completion(true)
+          return
+        }
       }
 
       // Some Files/Photos providers expose data but decline a temporary file
@@ -263,6 +270,12 @@ final class ShareViewController: UIViewController {
     in directory: URL
   ) -> URL? {
     var name = sourceName
+    let sourceExtension = URL(fileURLWithPath: name).pathExtension.lowercased()
+    if !acceptedExtensions.contains(sourceExtension),
+       let suggestedName,
+       !suggestedName.isEmpty {
+      name = suggestedName
+    }
     if URL(fileURLWithPath: name).pathExtension.isEmpty,
        let suggestedName,
        !suggestedName.isEmpty {
@@ -294,7 +307,7 @@ final class ShareViewController: UIViewController {
     spinner.stopAnimating()
     statusLabel.text = message
     statusLabel.textColor = success ? .label : .systemRed
-    DispatchQueue.main.asyncAfter(deadline: .now() + (success ? 0.65 : 1.5)) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + (success ? 1.2 : 2.5)) {
       if success {
         self.extensionContext?.completeRequest(returningItems: nil)
       } else {
