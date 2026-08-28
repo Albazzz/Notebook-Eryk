@@ -351,6 +351,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted) return;
       widget.state.open(notebook, page: 1);
+      if (!context.mounted) return;
       showAppSnack(context, 'Đã tạo vở mới · Trang trắng');
       return;
     }

@@ -52,6 +52,13 @@ class _EditorScreenState extends State<EditorScreen> {
   String? _latestOcrText;
   String? _latestCropPath;
   int _aiRequestSerial = 0;
+  bool _resultEditing = false;
+  double _resultWidth = 410;
+  double _resultHeight = 530;
+  double _resultEditRight = 24;
+  double _resultEditTop = 24;
+  double _resultEditWidth = 410;
+  double _resultEditHeight = 530;
   final TextEditingController _quickDictionaryController =
       TextEditingController();
   final FocusNode _quickDictionaryFocus = FocusNode();
@@ -60,6 +67,15 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _quickDictionaryOpen = false;
   bool _quickDictionaryLoading = false;
   int _quickDictionaryRequestSerial = 0;
+  bool _quickDictionaryEditing = false;
+  double _quickRight = 24;
+  double _quickTop = 24;
+  double _quickWidth = 390;
+  double _quickHeight = 520;
+  double _quickEditRight = 24;
+  double _quickEditTop = 24;
+  double _quickEditWidth = 390;
+  double _quickEditHeight = 520;
 
   @override
   void initState() {
@@ -83,6 +99,119 @@ class _EditorScreenState extends State<EditorScreen> {
     _quickDictionaryController.dispose();
     _quickDictionaryFocus.dispose();
     super.dispose();
+  }
+
+  void _beginResultEdit() {
+    setState(() {
+      _resultEditing = true;
+      _resultEditRight = _resultRight;
+      _resultEditTop = _resultTop;
+      _resultEditWidth = _resultWidth;
+      _resultEditHeight = _resultHeight;
+    });
+  }
+
+  void _cancelResultEdit() {
+    setState(() {
+      _resultRight = _resultEditRight;
+      _resultTop = _resultEditTop;
+      _resultWidth = _resultEditWidth;
+      _resultHeight = _resultEditHeight;
+      _resultEditing = false;
+    });
+  }
+
+  void _confirmResultEdit() => setState(() => _resultEditing = false);
+
+  void _moveResult(Offset delta) {
+    if (!_resultEditing) return;
+    final size = MediaQuery.sizeOf(context);
+    setState(() {
+      _resultRight = (_resultRight - delta.dx).clamp(
+        8.0,
+        math.max(8.0, size.width - _resultWidth - 8),
+      );
+      _resultTop = (_resultTop + delta.dy).clamp(
+        8.0,
+        math.max(8.0, size.height - _resultHeight - 8),
+      );
+    });
+  }
+
+  void _resizeResult(Offset delta) {
+    if (!_resultEditing) return;
+    final size = MediaQuery.sizeOf(context);
+    setState(() {
+      final nextWidth = (_resultWidth + delta.dx)
+          .clamp(280.0, math.max(280.0, size.width - _resultRight - 16))
+          .toDouble();
+      _resultWidth = nextWidth;
+      _resultRight = (_resultRight - delta.dx).clamp(
+        8.0,
+        math.max(8.0, size.width - nextWidth - 8),
+      );
+      _resultHeight = (_resultHeight + delta.dy).clamp(
+        220.0,
+        math.max(220.0, size.height - _resultTop - 16),
+      );
+    });
+  }
+
+  void _beginQuickDictionaryEdit() {
+    setState(() {
+      _quickDictionaryEditing = true;
+      _quickEditRight = _quickRight;
+      _quickEditTop = _quickTop;
+      _quickEditWidth = _quickWidth;
+      _quickEditHeight = _quickHeight;
+    });
+  }
+
+  void _cancelQuickDictionaryEdit() {
+    setState(() {
+      _quickRight = _quickEditRight;
+      _quickTop = _quickEditTop;
+      _quickWidth = _quickEditWidth;
+      _quickHeight = _quickEditHeight;
+      _quickDictionaryEditing = false;
+    });
+  }
+
+  void _confirmQuickDictionaryEdit() =>
+      setState(() => _quickDictionaryEditing = false);
+
+  void _moveQuickDictionary(Offset delta) {
+    if (!_quickDictionaryEditing) return;
+    final size = MediaQuery.sizeOf(context);
+    setState(() {
+      _quickRight = (_quickRight - delta.dx).clamp(
+        8.0,
+        math.max(8.0, size.width - _quickWidth - 8),
+      );
+      _quickTop = (_quickTop + delta.dy).clamp(
+        8.0,
+        math.max(8.0, size.height - _quickHeight - 8),
+      );
+    });
+  }
+
+  void _resizeQuickDictionary(Offset delta) {
+    if (!_quickDictionaryEditing) return;
+    final size = MediaQuery.sizeOf(context);
+    setState(() {
+      final nextWidth = (_quickWidth + delta.dx)
+          .clamp(280.0, math.max(280.0, size.width - _quickRight - 16))
+          .toDouble();
+      _quickWidth = nextWidth;
+      _quickRight = (_quickRight - delta.dx).clamp(
+        8.0,
+        math.max(8.0, size.width - nextWidth - 8),
+      );
+      _quickHeight = (_quickHeight + delta.dy).clamp(
+        260.0,
+        math.max(260.0, size.height - _quickTop - 16),
+      );
+    });
   }
 
   @override
@@ -161,35 +290,24 @@ class _EditorScreenState extends State<EditorScreen> {
                                   top: _resultTop,
                                   child: _ResultCard(
                                     result: result!,
+                                    width: _resultWidth,
+                                    height: _resultHeight,
+                                    editing: _resultEditing,
                                     onClose: () =>
                                         setState(() => result = null),
                                     onPin: _pinResult,
                                     onWeakness: _openWeaknessDraft,
-                                    onDrag: (delta) => setState(() {
-                                      final maxRight = math.max(
-                                        8.0,
-                                        MediaQuery.sizeOf(context).width - 330,
-                                      );
-                                      _resultRight = (_resultRight - delta.dx)
-                                          .clamp(8, maxRight);
-                                      _resultTop = (_resultTop + delta.dy)
-                                          .clamp(
-                                            8,
-                                            math.max(
-                                              8,
-                                              MediaQuery.sizeOf(
-                                                    context,
-                                                  ).height -
-                                                  220,
-                                            ),
-                                          );
-                                    }),
+                                    onEdit: _beginResultEdit,
+                                    onCancelEdit: _cancelResultEdit,
+                                    onConfirmEdit: _confirmResultEdit,
+                                    onDrag: _moveResult,
+                                    onResize: _resizeResult,
                                   ),
                                 ),
                               if (_quickDictionaryOpen)
                                 Positioned(
-                                  right: 24,
-                                  top: 24,
+                                  right: _quickRight,
+                                  top: _quickTop,
                                   child: _QuickDictionaryCard(
                                     controller: _quickDictionaryController,
                                     focusNode: _quickDictionaryFocus,
@@ -199,6 +317,14 @@ class _EditorScreenState extends State<EditorScreen> {
                                     onClear: _clearQuickDictionary,
                                     onSelect: _selectQuickDictionaryEntry,
                                     onClose: _toggleQuickDictionary,
+                                    width: _quickWidth,
+                                    height: _quickHeight,
+                                    editing: _quickDictionaryEditing,
+                                    onEdit: _beginQuickDictionaryEdit,
+                                    onCancelEdit: _cancelQuickDictionaryEdit,
+                                    onConfirmEdit: _confirmQuickDictionaryEdit,
+                                    onDrag: _moveQuickDictionary,
+                                    onResize: _resizeQuickDictionary,
                                   ),
                                 ),
                               Positioned(
@@ -325,35 +451,42 @@ class _EditorScreenState extends State<EditorScreen> {
       child: ListView(
         scrollDirection: Axis.horizontal,
         children: [
-          FilterChip(
-            avatar: Icon(
-              Icons.touch_app_rounded,
-              size: 18,
-              color: widget.state.touchWritingEnabled
+          IconButton(
+            tooltip: widget.state.touchWritingEnabled
+                ? 'Viết bằng tay: Bật'
+                : 'Bật viết tay',
+            isSelected: widget.state.touchWritingEnabled,
+            style: IconButton.styleFrom(
+              backgroundColor: widget.state.touchWritingEnabled
+                  ? AppColors.primary.withValues(alpha: .14)
+                  : null,
+              foregroundColor: widget.state.touchWritingEnabled
                   ? AppColors.primary
-                  : Colors.grey,
+                  : null,
             ),
-            label: Text(
-              widget.state.touchWritingEnabled
-                  ? 'Viết bằng tay: Bật'
-                  : 'Bật viết tay',
-            ),
-            selected: widget.state.touchWritingEnabled,
-            onSelected: (value) {
-              setState(() => widget.state.touchWritingEnabled = value);
+            onPressed: () {
+              setState(
+                () => widget.state.touchWritingEnabled =
+                    !widget.state.touchWritingEnabled,
+              );
               widget.state.saveGeneralSettings();
             },
+            icon: const Icon(Icons.touch_app_rounded),
           ),
           const SizedBox(width: 8),
-          FilterChip(
-            avatar: Icon(
-              pageLocked ? Icons.lock_rounded : Icons.lock_open_rounded,
-              size: 18,
-              color: pageLocked ? AppColors.primary : Colors.grey,
+          IconButton(
+            tooltip: pageLocked ? 'Mở khóa trang' : 'Khóa trang',
+            isSelected: pageLocked,
+            style: IconButton.styleFrom(
+              backgroundColor: pageLocked
+                  ? AppColors.primary.withValues(alpha: .14)
+                  : null,
+              foregroundColor: pageLocked ? AppColors.primary : null,
             ),
-            label: Text(pageLocked ? 'Khóa trang: Bật' : 'Khóa trang'),
-            selected: pageLocked,
-            onSelected: (value) => setState(() => pageLocked = value),
+            onPressed: () => setState(() => pageLocked = !pageLocked),
+            icon: Icon(
+              pageLocked ? Icons.lock_rounded : Icons.lock_open_rounded,
+            ),
           ),
           const SizedBox(width: 8),
           _ToolButton(
@@ -518,13 +651,11 @@ class _EditorScreenState extends State<EditorScreen> {
                                           ),
                                     ),
                                   ),
-                                  _PrintedPage(
-                                    isPdf:
-                                        widget.notebook.isPdf &&
-                                        !widget.state.blankPages.contains(
-                                          '${widget.notebook.id}:${widget.state.openPage}',
-                                        ),
-                                  ),
+                                  if (widget.notebook.isPdf &&
+                                      !widget.state.blankPages.contains(
+                                        '${widget.notebook.id}:${widget.state.openPage}',
+                                      ))
+                                    _PrintedPage(isPdf: true),
                                   if (widget.state
                                       .imagesForPage(
                                         widget.notebook.id,
@@ -2550,6 +2681,14 @@ class _QuickDictionaryCard extends StatelessWidget {
     required this.onClear,
     required this.onSelect,
     required this.onClose,
+    required this.width,
+    required this.height,
+    required this.editing,
+    required this.onEdit,
+    required this.onCancelEdit,
+    required this.onConfirmEdit,
+    required this.onDrag,
+    required this.onResize,
   });
 
   final TextEditingController controller;
@@ -2560,6 +2699,14 @@ class _QuickDictionaryCard extends StatelessWidget {
   final VoidCallback onClear;
   final ValueChanged<DictionaryEntry> onSelect;
   final VoidCallback onClose;
+  final double width;
+  final double height;
+  final bool editing;
+  final VoidCallback onEdit;
+  final VoidCallback onCancelEdit;
+  final VoidCallback onConfirmEdit;
+  final ValueChanged<Offset> onDrag;
+  final ValueChanged<Offset> onResize;
 
   @override
   Widget build(BuildContext context) {
@@ -2569,111 +2716,156 @@ class _QuickDictionaryCard extends StatelessWidget {
       color: Theme.of(context).colorScheme.surface,
       borderRadius: BorderRadius.circular(20),
       clipBehavior: Clip.antiAlias,
-      child: Container(
-        width: math.min(390, MediaQuery.sizeOf(context).width * .46),
-        height: math.min(520, MediaQuery.sizeOf(context).height * .66),
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      child: SizedBox(
+        width: width,
+        height: height,
+        child: Stack(
           children: [
-            Row(
-              children: [
-                const Icon(
-                  Icons.menu_book_outlined,
-                  color: AppColors.dictionary,
-                ),
-                const SizedBox(width: 9),
-                Expanded(
-                  child: Text(
-                    'Tra từ nhanh',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                ),
-                IconButton(
-                  onPressed: onClose,
-                  icon: const Icon(Icons.close),
-                  tooltip: 'Đóng tra từ nhanh',
-                ),
-              ],
-            ),
-            const Text(
-              'Kana · Kanji · Hán Việt · nghĩa tiếng Việt',
-              style: TextStyle(fontSize: 11, color: Colors.grey),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: controller,
-              focusNode: focusNode,
-              onChanged: onChanged,
-              textInputAction: TextInputAction.search,
-              decoration: InputDecoration(
-                hintText: 'Ví dụ: 食べる, たべる, ăn...',
-                prefixIcon: const Icon(Icons.search_rounded),
-                suffixIcon: loading
-                    ? const Padding(
-                        padding: EdgeInsets.all(14),
-                        child: SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+            Container(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onPanUpdate: editing
+                        ? (details) => onDrag(details.delta)
+                        : null,
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.menu_book_outlined,
+                          color: AppColors.dictionary,
                         ),
-                      )
-                    : query.isEmpty
-                    ? null
-                    : IconButton(
-                        onPressed: onClear,
-                        icon: const Icon(Icons.close_rounded),
-                        tooltip: 'Xóa từ khóa',
-                      ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: query.isEmpty
-                  ? const _QuickDictionaryMessage(
-                      icon: Icons.keyboard_alt_outlined,
-                      message: 'Gõ từ cần tra để tìm trong kho ngoại tuyến.',
-                    )
-                  : !loading && results.isEmpty
-                  ? const _QuickDictionaryMessage(
-                      icon: Icons.search_off_rounded,
-                      message: 'Không tìm thấy từ phù hợp.',
-                    )
-                  : ListView.separated(
-                      itemCount: results.length,
-                      separatorBuilder: (_, _) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        final entry = results[index];
-                        return ListTile(
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 4,
-                            vertical: 3,
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Text(
+                            'Tra từ nhanh',
+                            style: Theme.of(context).textTheme.titleLarge,
                           ),
-                          onTap: () => onSelect(entry),
-                          title: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  '${entry.word}【${entry.reading}】',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                  ),
+                        ),
+                        if (editing) ...[
+                          IconButton(
+                            onPressed: onCancelEdit,
+                            icon: const Icon(Icons.close),
+                            tooltip: 'Hủy thay đổi vị trí/kích thước',
+                          ),
+                          IconButton(
+                            onPressed: onConfirmEdit,
+                            icon: const Icon(Icons.check_rounded),
+                            tooltip: 'Xác nhận vị trí/kích thước',
+                          ),
+                        ] else ...[
+                          IconButton(
+                            onPressed: onEdit,
+                            icon: const Icon(Icons.open_with_rounded),
+                            tooltip: 'Chỉnh vị trí/kích thước',
+                          ),
+                          IconButton(
+                            onPressed: onClose,
+                            icon: const Icon(Icons.close),
+                            tooltip: 'Đóng tra từ nhanh',
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const Text(
+                    'Kana · Kanji · Hán Việt · nghĩa tiếng Việt',
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    onChanged: onChanged,
+                    textInputAction: TextInputAction.search,
+                    decoration: InputDecoration(
+                      hintText: 'Ví dụ: 食べる, たべる, ăn...',
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      suffixIcon: loading
+                          ? const Padding(
+                              padding: EdgeInsets.all(14),
+                              child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
                                 ),
                               ),
-                              if (entry.level.isNotEmpty)
-                                _TinyBadge(label: entry.level),
-                            ],
-                          ),
-                          subtitle: Text(
-                            entry.meaning,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          trailing: const Icon(Icons.chevron_right_rounded),
-                        );
-                      },
+                            )
+                          : query.isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: onClear,
+                              icon: const Icon(Icons.close_rounded),
+                              tooltip: 'Xóa từ khóa',
+                            ),
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: query.isEmpty
+                        ? const _QuickDictionaryMessage(
+                            icon: Icons.keyboard_alt_outlined,
+                            message:
+                                'Gõ từ cần tra để tìm trong kho ngoại tuyến.',
+                          )
+                        : !loading && results.isEmpty
+                        ? const _QuickDictionaryMessage(
+                            icon: Icons.search_off_rounded,
+                            message: 'Không tìm thấy từ phù hợp.',
+                          )
+                        : ListView.separated(
+                            itemCount: results.length,
+                            separatorBuilder: (_, _) =>
+                                const Divider(height: 1),
+                            itemBuilder: (context, index) {
+                              final entry = results[index];
+                              return ListTile(
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 4,
+                                  vertical: 3,
+                                ),
+                                onTap: () => onSelect(entry),
+                                title: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        '${entry.word}【${entry.reading}】',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ),
+                                    if (entry.level.isNotEmpty)
+                                      _TinyBadge(label: entry.level),
+                                  ],
+                                ),
+                                subtitle: Text(
+                                  entry.meaning,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                trailing: const Icon(
+                                  Icons.chevron_right_rounded,
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
             ),
+            if (editing)
+              Positioned(
+                right: 5,
+                bottom: 5,
+                child: GestureDetector(
+                  onPanUpdate: (details) => onResize(details.delta),
+                  child: const Icon(Icons.drag_handle_rounded, size: 22),
+                ),
+              ),
           ],
         ),
       ),
@@ -2711,180 +2903,231 @@ class _QuickDictionaryMessage extends StatelessWidget {
 class _ResultCard extends StatelessWidget {
   const _ResultCard({
     required this.result,
+    required this.width,
+    required this.height,
+    required this.editing,
     required this.onClose,
     required this.onPin,
     required this.onWeakness,
+    required this.onEdit,
+    required this.onCancelEdit,
+    required this.onConfirmEdit,
     required this.onDrag,
+    required this.onResize,
   });
   final _SmartResult result;
+  final double width;
+  final double height;
+  final bool editing;
   final VoidCallback onClose;
   final VoidCallback onPin;
   final VoidCallback onWeakness;
+  final VoidCallback onEdit;
+  final VoidCallback onCancelEdit;
+  final VoidCallback onConfirmEdit;
   final ValueChanged<Offset> onDrag;
+  final ValueChanged<Offset> onResize;
   @override
   Widget build(BuildContext context) => Material(
     elevation: 12,
     borderRadius: BorderRadius.circular(20),
-    child: Container(
-      width: math.min(410, MediaQuery.sizeOf(context).width * .42),
-      constraints: const BoxConstraints(maxHeight: 530),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onPanUpdate: (details) => onDrag(details.delta),
-              child: MouseRegion(
-                cursor: SystemMouseCursors.move,
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.drag_indicator_rounded,
-                      color: Colors.grey,
-                    ),
-                    const SizedBox(width: 5),
-                    Icon(
-                      result.dictionaryEntry == null
-                          ? Icons.auto_awesome
-                          : Icons.menu_book_outlined,
-                      color: result.dictionaryEntry == null
-                          ? AppColors.explain
-                          : AppColors.dictionary,
-                    ),
-                    const SizedBox(width: 9),
-                    Expanded(
-                      child: Text(
-                        result.title,
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: onClose,
-                      icon: const Icon(Icons.close),
-                      tooltip: 'Đóng',
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.only(left: 30, top: 2),
-              child: Text(
-                'Kéo thanh tiêu đề để di chuyển',
-                style: TextStyle(fontSize: 10, color: Colors.grey),
-              ),
-            ),
-            if (result.dictionaryEntry != null)
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                children: [
-                  const _TinyBadge(label: 'Từ điển ngoại tuyến'),
-                  if (result.dictionaryEntry!.level.isNotEmpty)
-                    _TinyBadge(label: 'JLPT ${result.dictionaryEntry!.level}'),
-                ],
-              ),
-            const SizedBox(height: 12),
-            Text(
-              result.source,
-              style: TextStyle(
-                fontSize: result.dictionaryEntry != null ? 18 : 13,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                height: 1.55,
-              ),
-            ),
-            const Divider(height: 24),
-            Text(
-              result.body,
-              style: const TextStyle(fontSize: 15, height: 1.55),
-            ),
-            if (result.dictionaryEntry case final entry?
-                when entry.similarEntries.isNotEmpty) ...[
-              const SizedBox(height: 18),
-              Text(
-                'Gợi ý gần nghĩa',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 8),
-              ...entry.similarEntries.map(
-                (similar) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.surfaceContainerLow,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+    child: Stack(
+      children: [
+        Container(
+          width: width,
+          constraints: BoxConstraints(minHeight: height, maxHeight: height),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onPanUpdate: editing
+                      ? (details) => onDrag(details.delta)
+                      : null,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.move,
+                    child: Row(
                       children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                '${similar.word}【${similar.reading}】',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                            if (similar.level.isNotEmpty)
-                              _TinyBadge(label: similar.level),
-                          ],
+                        const Icon(
+                          Icons.drag_indicator_rounded,
+                          color: Colors.grey,
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          similar.meaning,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onSurfaceVariant,
+                        const SizedBox(width: 5),
+                        Icon(
+                          result.dictionaryEntry == null
+                              ? Icons.auto_awesome
+                              : Icons.menu_book_outlined,
+                          color: result.dictionaryEntry == null
+                              ? AppColors.explain
+                              : AppColors.dictionary,
+                        ),
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Text(
+                            result.title,
+                            style: Theme.of(context).textTheme.titleLarge,
                           ),
                         ),
+                        if (editing) ...[
+                          IconButton(
+                            onPressed: onCancelEdit,
+                            icon: const Icon(Icons.close),
+                            tooltip: 'Hủy thay đổi vị trí/kích thước',
+                          ),
+                          IconButton(
+                            onPressed: onConfirmEdit,
+                            icon: const Icon(Icons.check_rounded),
+                            tooltip: 'Xác nhận vị trí/kích thước',
+                          ),
+                        ] else ...[
+                          IconButton(
+                            onPressed: onEdit,
+                            icon: const Icon(Icons.open_with_rounded),
+                            tooltip: 'Chỉnh vị trí/kích thước',
+                          ),
+                          IconButton(
+                            onPressed: onClose,
+                            icon: const Icon(Icons.close),
+                            tooltip: 'Đóng',
+                          ),
+                        ],
                       ],
                     ),
                   ),
                 ),
-              ),
-            ],
-            const SizedBox(height: 18),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                FilledButton.icon(
-                  onPressed: onPin,
-                  icon: const Icon(Icons.push_pin_outlined, size: 18),
-                  label: const Text('Ghim'),
+                const Padding(
+                  padding: EdgeInsets.only(left: 30, top: 2),
+                  child: Text(
+                    'Kéo thanh tiêu đề để di chuyển',
+                    style: TextStyle(fontSize: 10, color: Colors.grey),
+                  ),
                 ),
-                OutlinedButton.icon(
-                  onPressed: onWeakness,
-                  icon: const Icon(Icons.bookmark_add_outlined, size: 18),
-                  label: const Text('Điểm yếu'),
+                if (result.dictionaryEntry != null)
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      const _TinyBadge(label: 'Từ điển ngoại tuyến'),
+                      if (result.dictionaryEntry!.level.isNotEmpty)
+                        _TinyBadge(
+                          label: 'JLPT ${result.dictionaryEntry!.level}',
+                        ),
+                    ],
+                  ),
+                const SizedBox(height: 12),
+                Text(
+                  result.source,
+                  style: TextStyle(
+                    fontSize: result.dictionaryEntry != null ? 18 : 13,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    height: 1.55,
+                  ),
                 ),
-                TextButton(
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: result.body));
-                    showAppSnack(context, 'Đã sao chép');
-                  },
-                  child: const Text('Sao chép'),
+                const Divider(height: 24),
+                Text(
+                  result.body,
+                  style: const TextStyle(fontSize: 15, height: 1.55),
+                ),
+                if (result.dictionaryEntry case final entry?
+                    when entry.similarEntries.isNotEmpty) ...[
+                  const SizedBox(height: 18),
+                  Text(
+                    'Gợi ý gần nghĩa',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ...entry.similarEntries.map(
+                    (similar) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.surfaceContainerLow,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    '${similar.word}【${similar.reading}】',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                                if (similar.level.isNotEmpty)
+                                  _TinyBadge(label: similar.level),
+                              ],
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              similar.meaning,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 18),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: onPin,
+                      icon: const Icon(Icons.push_pin_outlined, size: 18),
+                      label: const Text('Ghim'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: onWeakness,
+                      icon: const Icon(Icons.bookmark_add_outlined, size: 18),
+                      label: const Text('Điểm yếu'),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: result.body));
+                        showAppSnack(context, 'Đã sao chép');
+                      },
+                      child: const Text('Sao chép'),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
+          ),
         ),
-      ),
+        if (editing)
+          Positioned(
+            right: 5,
+            bottom: 5,
+            child: GestureDetector(
+              onPanUpdate: (details) => onResize(details.delta),
+              child: const Icon(Icons.drag_handle_rounded, size: 22),
+            ),
+          ),
+      ],
     ),
   );
 }

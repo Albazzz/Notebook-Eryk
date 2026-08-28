@@ -48,40 +48,8 @@ class AppState extends ChangeNotifier {
     super.dispose();
   }
 
-  final List<NotebookData> notebooks = [
-    const NotebookData(
-      id: 'n3',
-      title: 'N3 Grammar',
-      type: 'Vở ghi',
-      pages: 124,
-      color: Color(0xff3859c7),
-    ),
-    const NotebookData(
-      id: 'soumatome',
-      title: 'Từ vựng Soumatome',
-      type: 'PDF',
-      pages: 210,
-      color: Color(0xff2e8b70),
-      lastOpened: 'Hôm qua',
-    ),
-    const NotebookData(
-      id: 'reading',
-      title: 'Đọc hiểu tháng 8',
-      type: 'Vở ghi',
-      pages: 45,
-      color: Color(0xff7a5bc7),
-      paperStyle: PaperStyle.lined,
-      lastOpened: '3 ngày trước',
-    ),
-    const NotebookData(
-      id: 'shinkanzen',
-      title: 'Shinkanzen PDF',
-      type: 'PDF',
-      pages: 168,
-      color: Color(0xffd9822b),
-      lastOpened: '1 tuần trước',
-    ),
-  ];
+  /// User-created notebooks only. The library starts empty on a fresh install.
+  final List<NotebookData> notebooks = [];
 
   final Map<String, List<InkStroke>> strokes = {};
   final Map<String, List<PinnedNote>> pinnedNotes = {};
