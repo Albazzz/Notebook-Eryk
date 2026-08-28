@@ -539,8 +539,9 @@ Giữ tên riêng; câu dịch tự nhiên; nuance tối đa 1 câu.''',
       AiTask.explain =>
         '''
 Nhiệm vụ: giải thích tiếng Nhật bằng $language ở độ khó phù hợp $jlpt.
-Schema bắt buộc: {"meaning":"...","structures":[{"pattern":"...","meaning":"...","usage":"..."}],"segments":[{"japanese":"...","meaning":"..."}],"warning":""}.
-Chỉ chọn tối đa 3 cấu trúc chính và tối đa 6 đoạn tách câu.''',
+Schema bắt buộc: {"meaning":"...","structures":[{"pattern":"...","meaning":"...","usage":"..."}],"segments":[{"japanese":"...","meaning":"..."}],"choiceAnalysis":[{"label":"A","correct":false,"reason":"..."}],"warning":""}.
+Chỉ chọn tối đa 3 cấu trúc chính và tối đa 6 đoạn tách câu.
+Nếu nội dung là câu hỏi có các lựa chọn, xác định đáp án đúng rồi giải thích thật đơn giản vì sao đúng và vì sao từng lựa chọn còn lại sai. Mỗi reason tối đa 2 câu. Nếu không có lựa chọn, trả choiceAnalysis là [].''',
       AiTask.solve =>
         '''
 Nhiệm vụ: giải bài bằng $language, phù hợp $jlpt.
@@ -603,6 +604,25 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
     for (final rawItem in segments) {
       final item = rawItem as Map<String, dynamic>;
       buffer.write('\n${item['japanese'] ?? ''} → ${item['meaning'] ?? ''}');
+    }
+    final choices = data['choiceAnalysis'] as List<dynamic>? ?? const [];
+    if (choices.isNotEmpty) {
+      final correctLabels = choices
+          .whereType<Map<String, dynamic>>()
+          .where((item) => item['correct'] == true)
+          .map((item) => '${item['label'] ?? ''}')
+          .where((label) => label.isNotEmpty)
+          .join(', ');
+      if (correctLabels.isNotEmpty) {
+        buffer.write('\n\nĐáp án đúng: $correctLabels');
+      }
+      buffer.write('\nGiải thích đơn giản từng lựa chọn:');
+    }
+    for (final rawItem in choices) {
+      final item = rawItem as Map<String, dynamic>;
+      buffer.write(
+        '\n${item['label'] ?? ''}${item['correct'] == true ? ' ✓' : ' ✗'}: ${item['reason'] ?? ''}',
+      );
     }
     return buffer.toString();
   }

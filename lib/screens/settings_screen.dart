@@ -148,6 +148,30 @@ class _GeneralSettings extends StatelessWidget {
               trailing: Icon(Icons.chevron_right),
             ),
             const Divider(),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.grid_4x4_rounded),
+              title: const Text(
+                'Độ đậm đường kẻ mặc định',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: Slider(
+                value: state.paperLineOpacity,
+                min: .03,
+                max: .35,
+                divisions: 32,
+                label: '${(state.paperLineOpacity * 100).round()}%',
+                onChanged: state.setPaperLineOpacity,
+              ),
+              trailing: SizedBox(
+                width: 46,
+                child: Text(
+                  '${(state.paperLineOpacity * 100).round()}%',
+                  textAlign: TextAlign.end,
+                ),
+              ),
+            ),
+            const Divider(),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               secondary: const Icon(Icons.cloud_done_outlined),
@@ -518,6 +542,12 @@ class _AiSettingsState extends State<_AiSettings> {
                 style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
               ),
               const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _showBulkModelDialog,
+                icon: const Icon(Icons.playlist_add_check_rounded),
+                label: const Text('Gán nhanh một model cho nhiều chức năng'),
+              ),
+              const SizedBox(height: 12),
               ...AiModelSlot.values.map(
                 (slot) => Padding(
                   padding: const EdgeInsets.only(bottom: 10),
@@ -856,6 +886,165 @@ class _AiSettingsState extends State<_AiSettings> {
         },
       ),
     );
+  }
+
+  Future<void> _showBulkModelDialog() async {
+    final idController = TextEditingController();
+    final nameController = TextEditingController();
+    final selectedSlots = <AiModelSlot>{
+      AiModelSlot.translate,
+      AiModelSlot.explain,
+      AiModelSlot.solve,
+      AiModelSlot.weakness,
+      AiModelSlot.dictionary,
+    };
+    final models = <OpenRouterModel>[
+      ...widget.state.availableModels,
+      ...widget.state.savedModels.where(
+        (saved) => !widget.state.availableModels.any(
+          (available) => available.id == saved.id,
+        ),
+      ),
+    ];
+    OpenRouterModel? selectedModel;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Gán nhanh model'),
+          content: SizedBox(
+            width: 560,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (models.isNotEmpty) ...[
+                    DropdownButtonFormField<String>(
+                      decoration: const InputDecoration(
+                        labelText: 'Chọn model đã tải hoặc đã lưu',
+                      ),
+                      items: models
+                          .map(
+                            (model) => DropdownMenuItem(
+                              value: model.id,
+                              child: Text(
+                                model.name,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (id) {
+                        final model = models
+                            .where((item) => item.id == id)
+                            .firstOrNull;
+                        if (model == null) return;
+                        selectedModel = model;
+                        idController.text = model.id;
+                        nameController.text = model.name;
+                        setDialogState(() {});
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  TextField(
+                    controller: idController,
+                    autofocus: models.isEmpty,
+                    decoration: const InputDecoration(
+                      labelText: 'Model ID',
+                      hintText: 'google/gemini-2.0-flash-001',
+                    ),
+                    onChanged: (_) => setDialogState(() {
+                      selectedModel = null;
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Tên hiển thị (tùy chọn)',
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'Dùng model này cho:',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 6),
+                  ...AiModelSlot.values.map(
+                    (slot) => CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      value: selectedSlots.contains(slot),
+                      secondary: Icon(_slotIcon(slot), color: _slotColor(slot)),
+                      title: Text(slot.label),
+                      subtitle: Text(slot.helper),
+                      onChanged: (checked) => setDialogState(() {
+                        if (checked == true) {
+                          selectedSlots.add(slot);
+                        } else {
+                          selectedSlots.remove(slot);
+                        }
+                      }),
+                    ),
+                  ),
+                  if (selectedSlots.contains(AiModelSlot.vision) &&
+                      selectedModel?.vision == false)
+                    Text(
+                      'Model đã chọn chưa được đánh dấu hỗ trợ ảnh. Hãy kiểm tra khả năng Vision của model.',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                        fontSize: 12,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Hủy'),
+            ),
+            FilledButton.icon(
+              onPressed:
+                  idController.text.trim().isEmpty || selectedSlots.isEmpty
+                  ? null
+                  : () => Navigator.pop(context, true),
+              icon: const Icon(Icons.done_all_rounded),
+              label: Text('Gán cho ${selectedSlots.length} chức năng'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (accepted == true) {
+      final id = idController.text.trim();
+      final model = selectedModel?.id == id
+          ? selectedModel!
+          : OpenRouterModel(
+              id: id,
+              name: nameController.text.trim().isEmpty
+                  ? id
+                  : nameController.text.trim(),
+              contextLength: 0,
+              vision: selectedSlots.contains(AiModelSlot.vision),
+              free: id.endsWith(':free'),
+            );
+      widget.state.setModelForSlots(selectedSlots, model);
+      await widget.state.saveAiSettings(key: '');
+      if (mounted) {
+        setState(() {});
+        showAppSnack(
+          context,
+          'Đã gán ${model.name} cho ${selectedSlots.length} chức năng',
+        );
+      }
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    idController.dispose();
+    nameController.dispose();
   }
 
   Future<void> _showManualModelDialog(AiModelSlot slot) async {

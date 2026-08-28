@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 
 import '../app_state.dart';
@@ -24,6 +27,10 @@ class EditorScreen extends StatefulWidget {
 }
 
 class _EditorScreenState extends State<EditorScreen> {
+  static const _nativeChannel = MethodChannel(
+    'com.example.noteeryk/shared_import',
+  );
+
   EditorTool tool = EditorTool.pen;
   Color penColor = AppColors.ink;
   Color highlightColor = const Color(0x88f4c542);
@@ -31,8 +38,16 @@ class _EditorScreenState extends State<EditorScreen> {
   double penOpacity = 1;
   double highlightWidth = 22;
   double highlightOpacity = .64;
+  String? selectedImageId;
   bool railOpen = true;
   bool rulerVisible = false;
+  Offset _rulerPosition = const Offset(.12, .38);
+  double _rulerWidthFraction = .72;
+  double _rulerHeight = 62;
+  double _rulerAngle = -.08;
+  double _rulerGestureStartWidth = .72;
+  double _rulerGestureStartHeight = 62;
+  double _rulerGestureStartAngle = -.08;
   bool pageLocked = false;
   bool annotationsVisible = true;
   int pageRotation = 0;
@@ -57,12 +72,10 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _resultEditing = false;
   double _resultWidth = 410;
   double _resultHeight = 530;
-  double _resultOpacity = 1;
   double _resultEditRight = 24;
   double _resultEditTop = 24;
   double _resultEditWidth = 410;
   double _resultEditHeight = 530;
-  double _resultEditOpacity = 1;
   final TextEditingController _quickDictionaryController =
       TextEditingController();
   final FocusNode _quickDictionaryFocus = FocusNode();
@@ -76,12 +89,10 @@ class _EditorScreenState extends State<EditorScreen> {
   double _quickTop = 24;
   double _quickWidth = 390;
   double _quickHeight = 520;
-  double _quickOpacity = 1;
   double _quickEditRight = 24;
   double _quickEditTop = 24;
   double _quickEditWidth = 390;
   double _quickEditHeight = 520;
-  double _quickEditOpacity = 1;
 
   @override
   void initState() {
@@ -114,7 +125,6 @@ class _EditorScreenState extends State<EditorScreen> {
       _resultEditTop = _resultTop;
       _resultEditWidth = _resultWidth;
       _resultEditHeight = _resultHeight;
-      _resultEditOpacity = _resultOpacity;
     });
   }
 
@@ -124,7 +134,6 @@ class _EditorScreenState extends State<EditorScreen> {
       _resultTop = _resultEditTop;
       _resultWidth = _resultEditWidth;
       _resultHeight = _resultEditHeight;
-      _resultOpacity = _resultEditOpacity;
       _resultEditing = false;
     });
   }
@@ -172,7 +181,6 @@ class _EditorScreenState extends State<EditorScreen> {
       _quickEditTop = _quickTop;
       _quickEditWidth = _quickWidth;
       _quickEditHeight = _quickHeight;
-      _quickEditOpacity = _quickOpacity;
     });
   }
 
@@ -182,7 +190,6 @@ class _EditorScreenState extends State<EditorScreen> {
       _quickTop = _quickEditTop;
       _quickWidth = _quickEditWidth;
       _quickHeight = _quickEditHeight;
-      _quickOpacity = _quickEditOpacity;
       _quickDictionaryEditing = false;
     });
   }
@@ -246,6 +253,9 @@ class _EditorScreenState extends State<EditorScreen> {
                       onPageSelected: widget.state.goToPage,
                       onAddPage: _askCreatePage,
                       onClose: () => setState(() => railOpen = false),
+                      thumbnailPathForPage: (page) => widget.state
+                          .imagesForPage(widget.notebook.id, page)
+                          .firstOrNull,
                     ),
                   Expanded(
                     child: Column(
@@ -257,7 +267,8 @@ class _EditorScreenState extends State<EditorScreen> {
                               Positioned.fill(
                                 child: GestureDetector(
                                   behavior: HitTestBehavior.translucent,
-                                  onHorizontalDragEnd: pageLocked
+                                  onHorizontalDragEnd:
+                                      pageLocked || tool == EditorTool.image
                                       ? null
                                       : _onPageSwipe,
                                   child: _buildWorkspace(),
@@ -302,7 +313,6 @@ class _EditorScreenState extends State<EditorScreen> {
                                     result: result!,
                                     width: _resultWidth,
                                     height: _resultHeight,
-                                    opacity: _resultOpacity,
                                     editing: _resultEditing,
                                     onClose: () =>
                                         setState(() => result = null),
@@ -313,8 +323,6 @@ class _EditorScreenState extends State<EditorScreen> {
                                     onConfirmEdit: _confirmResultEdit,
                                     onDrag: _moveResult,
                                     onResize: _resizeResult,
-                                    onOpacityChanged: (value) =>
-                                        setState(() => _resultOpacity = value),
                                   ),
                                 ),
                               if (_quickDictionaryOpen)
@@ -332,15 +340,12 @@ class _EditorScreenState extends State<EditorScreen> {
                                     onClose: _toggleQuickDictionary,
                                     width: _quickWidth,
                                     height: _quickHeight,
-                                    opacity: _quickOpacity,
                                     editing: _quickDictionaryEditing,
                                     onEdit: _beginQuickDictionaryEdit,
                                     onCancelEdit: _cancelQuickDictionaryEdit,
                                     onConfirmEdit: _confirmQuickDictionaryEdit,
                                     onDrag: _moveQuickDictionary,
                                     onResize: _resizeQuickDictionary,
-                                    onOpacityChanged: (value) =>
-                                        setState(() => _quickOpacity = value),
                                   ),
                                 ),
                               Positioned(
@@ -450,6 +455,8 @@ class _EditorScreenState extends State<EditorScreen> {
                     showAppSnack(context, 'Đã xoay trang');
                   case 'export':
                     _exportCurrentPage();
+                  case 'paper':
+                    unawaited(_showNotebookPaperSettings());
                 }
               },
               itemBuilder: (_) => [
@@ -460,6 +467,10 @@ class _EditorScreenState extends State<EditorScreen> {
                   ),
                 ),
                 PopupMenuItem(value: 'rotate', child: Text('Xoay trang')),
+                const PopupMenuItem(
+                  value: 'paper',
+                  child: Text('Cài đặt giấy của vở'),
+                ),
                 PopupMenuItem(
                   value: 'export',
                   child: Text('Xuất PDF có ghi chú'),
@@ -479,29 +490,6 @@ class _EditorScreenState extends State<EditorScreen> {
       child: ListView(
         scrollDirection: Axis.horizontal,
         children: [
-          IconButton(
-            tooltip: widget.state.touchWritingEnabled
-                ? 'Viết bằng tay: Bật'
-                : 'Bật viết tay',
-            isSelected: widget.state.touchWritingEnabled,
-            style: IconButton.styleFrom(
-              backgroundColor: widget.state.touchWritingEnabled
-                  ? AppColors.primary.withValues(alpha: .14)
-                  : null,
-              foregroundColor: widget.state.touchWritingEnabled
-                  ? AppColors.primary
-                  : null,
-            ),
-            onPressed: () {
-              setState(
-                () => widget.state.touchWritingEnabled =
-                    !widget.state.touchWritingEnabled,
-              );
-              widget.state.saveGeneralSettings();
-            },
-            icon: const Icon(Icons.touch_app_rounded),
-          ),
-          const SizedBox(width: 8),
           IconButton(
             tooltip: pageLocked ? 'Mở khóa trang' : 'Khóa trang',
             isSelected: pageLocked,
@@ -536,6 +524,11 @@ class _EditorScreenState extends State<EditorScreen> {
             tool: EditorTool.ruler,
             selected: rulerVisible,
             onTap: _toggleRuler,
+          ),
+          _ToolButton(
+            tool: EditorTool.image,
+            selected: tool == EditorTool.image,
+            onTap: _activateImageTool,
           ),
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 8),
@@ -755,8 +748,8 @@ class _EditorScreenState extends State<EditorScreen> {
         final targetHeight = math.min(constraints.maxHeight - 26, 770.0) * zoom;
         final targetWidth = targetHeight * .72;
         return InteractiveViewer(
-          panEnabled: !pageLocked,
-          scaleEnabled: !pageLocked,
+          panEnabled: !pageLocked && tool != EditorTool.image,
+          scaleEnabled: !pageLocked && tool != EditorTool.image,
           minScale: .7,
           maxScale: 2.5,
           child: SizedBox(
@@ -802,55 +795,99 @@ class _EditorScreenState extends State<EditorScreen> {
                                             !widget.state.blankPages.contains(
                                               '${widget.notebook.id}:${widget.state.openPage}',
                                             ),
+                                        lineOpacity:
+                                            widget.notebook.paperLineOpacity,
                                       ),
                                     ),
-                                    if (widget.notebook.isPdf &&
-                                        !widget.state.blankPages.contains(
-                                          '${widget.notebook.id}:${widget.state.openPage}',
-                                        ))
-                                      _PrintedPage(isPdf: true),
                                     if (widget.state
-                                        .imagesForPage(
+                                        .imagePlacementsForPage(
                                           widget.notebook.id,
                                           widget.state.openPage,
                                         )
                                         .isNotEmpty)
                                       Positioned.fill(
                                         child: _PageImageLayer(
-                                          paths: widget.state.imagesForPage(
-                                            widget.notebook.id,
-                                            widget.state.openPage,
+                                          placements: widget.state
+                                              .imagePlacementsForPage(
+                                                widget.notebook.id,
+                                                widget.state.openPage,
+                                              ),
+                                          editing: tool == EditorTool.image,
+                                          selectedId: selectedImageId,
+                                          onSelected: (id) => setState(
+                                            () => selectedImageId = id,
                                           ),
+                                          onMove: _movePageImage,
+                                          onResize: _resizePageImage,
+                                          onRotate: _rotatePageImage,
+                                          onCrop: _cropPageImage,
+                                          onDelete: _deletePageImage,
                                         ),
                                       ),
-                                    CustomPaint(
-                                      painter: _InkPainter(
-                                        strokes: strokes,
-                                        activePoints: activePoints,
-                                        activeColor:
-                                            tool == EditorTool.highlighter
-                                            ? highlightColor.withValues(
-                                                alpha: highlightOpacity,
-                                              )
-                                            : penColor.withValues(
-                                                alpha: penOpacity,
-                                              ),
-                                        activeWidth:
-                                            tool == EditorTool.highlighter
-                                            ? highlightWidth
-                                            : penWidth,
-                                        selectionStart: null,
-                                        selectionEnd: null,
-                                        selectionTool: tool,
-                                        sourcePulse: false,
+                                    IgnorePointer(
+                                      child: CustomPaint(
+                                        painter: _InkPainter(
+                                          strokes: strokes,
+                                          activePoints: activePoints,
+                                          activeColor:
+                                              tool == EditorTool.highlighter
+                                              ? highlightColor.withValues(
+                                                  alpha: highlightOpacity,
+                                                )
+                                              : penColor.withValues(
+                                                  alpha: penOpacity,
+                                                ),
+                                          activeWidth:
+                                              tool == EditorTool.highlighter
+                                              ? highlightWidth
+                                              : penWidth,
+                                          selectionStart: null,
+                                          selectionEnd: null,
+                                          selectionTool: tool,
+                                          sourcePulse: false,
+                                        ),
                                       ),
                                     ),
                                     if (rulerVisible)
-                                      const Positioned(
-                                        left: 70,
-                                        right: 40,
-                                        top: 350,
-                                        child: _Ruler(),
+                                      Positioned.fill(
+                                        child: LayoutBuilder(
+                                          builder: (context, pageConstraints) {
+                                            final pageSize =
+                                                pageConstraints.biggest;
+                                            return Stack(
+                                              children: [
+                                                Positioned(
+                                                  left:
+                                                      _rulerPosition.dx *
+                                                      pageSize.width,
+                                                  top:
+                                                      _rulerPosition.dy *
+                                                      pageSize.height,
+                                                  width:
+                                                      _rulerWidthFraction *
+                                                      pageSize.width,
+                                                  child: _Ruler(
+                                                    angle: _rulerAngle,
+                                                    height: _rulerHeight,
+                                                    onScaleStart: (_) {
+                                                      _rulerGestureStartWidth =
+                                                          _rulerWidthFraction;
+                                                      _rulerGestureStartHeight =
+                                                          _rulerHeight;
+                                                      _rulerGestureStartAngle =
+                                                          _rulerAngle;
+                                                    },
+                                                    onScaleUpdate: (details) =>
+                                                        _updateRulerGesture(
+                                                          details,
+                                                          pageSize,
+                                                        ),
+                                                  ),
+                                                ),
+                                              ],
+                                            );
+                                          },
+                                        ),
                                       ),
                                     ...(annotationsVisible
                                         ? widget
@@ -907,16 +944,12 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   bool _acceptPointer(PointerEvent event) {
-    if (event.kind == PointerDeviceKind.touch &&
-        widget.state.touchWritingEnabled) {
-      return true;
-    }
     if (event.kind == PointerDeviceKind.stylus ||
         event.kind == PointerDeviceKind.invertedStylus ||
         event.kind == PointerDeviceKind.mouse) {
       return true;
     }
-    return !widget.state.palmRejection;
+    return false;
   }
 
   double _pressure(PointerEvent event) {
@@ -930,11 +963,10 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _onPointerDown(PointerDownEvent event) {
+    if (tool == EditorTool.image) return;
     if (event.kind == PointerDeviceKind.touch) {
       _trackTouchDown(event);
-      if (!widget.state.touchWritingEnabled || _touchStarts.length > 1) {
-        return;
-      }
+      return;
     }
     if (!_acceptPointer(event)) return;
     _cancelPendingAi();
@@ -969,14 +1001,13 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _onPointerMove(PointerMoveEvent event) {
+    if (tool == EditorTool.image) return;
     if (event.kind == PointerDeviceKind.touch) {
       final start = _touchStarts[event.pointer];
       if (start != null && (event.localPosition - start).distance > 14) {
         _twoFingerCandidate = false;
       }
-      if (!widget.state.touchWritingEnabled || _touchStarts.length > 1) {
-        return;
-      }
+      return;
     }
     if (!_acceptPointer(event)) return;
     if (tool == EditorTool.eraser) {
@@ -996,27 +1027,25 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _onPointerUp(PointerUpEvent event) {
+    if (tool == EditorTool.image) return;
     if (event.kind == PointerDeviceKind.touch) {
-      final wasWriting =
-          widget.state.touchWritingEnabled &&
-          _touchStarts.length == 1 &&
-          !_twoFingerCandidate;
-      if (!wasWriting) {
-        _trackTouchUp(event);
-        return;
-      }
-      _touchStarts.remove(event.pointer);
-      _firstTouchAt = null;
-      _twoFingerCandidate = false;
+      _trackTouchUp(event);
+      return;
     }
     if (!_acceptPointer(event)) return;
     if (activePoints != null && activePoints!.length > 1) {
       final drawingTool = tool;
       var points = List<StrokePoint>.of(activePoints!);
       if (rulerVisible && drawingTool == EditorTool.pen) {
+        final direction = Offset(math.cos(_rulerAngle), math.sin(_rulerAngle));
+        final delta = points.last.offset - points.first.offset;
+        final projected = delta.dx * direction.dx + delta.dy * direction.dy;
         points = [
           points.first,
-          StrokePoint(points.last.offset, points.last.pressure),
+          StrokePoint(
+            points.first.offset + direction * projected,
+            points.last.pressure,
+          ),
         ];
       }
       strokes.add(
@@ -1305,6 +1334,361 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
+  Future<void> _activateImageTool() async {
+    _cancelPendingAi();
+    final alreadySelected = tool == EditorTool.image;
+    setState(() {
+      tool = EditorTool.image;
+      error = null;
+      selectionStart = null;
+      selectionEnd = null;
+    });
+    final editableImages = widget.state
+        .imagePlacementsForPage(widget.notebook.id, widget.state.openPage)
+        .where((item) => !item.isBackground)
+        .toList();
+    if (alreadySelected || editableImages.isEmpty) {
+      await _pickImagesForPage();
+    } else {
+      showAppSnack(context, 'Chạm ảnh để kéo, co giãn, xoay, cắt hoặc xóa');
+    }
+  }
+
+  Future<void> _pickImagesForPage() async {
+    final result = await FilePicker.pickFiles(type: FileType.image);
+    if (!mounted || result.isEmpty) return;
+    final sources = result
+        .map((file) => file.path)
+        .whereType<String>()
+        .where((path) => File(path).existsSync())
+        .toList();
+    if (sources.isEmpty) {
+      showAppSnack(context, 'Không đọc được ảnh đã chọn');
+      return;
+    }
+    final directory = await getApplicationDocumentsDirectory();
+    final imageDirectory = Directory(
+      '${directory.path}${Platform.pathSeparator}imports${Platform.pathSeparator}page_images',
+    );
+    await imageDirectory.create(recursive: true);
+    final copied = <String>[];
+    for (var index = 0; index < sources.length; index++) {
+      final source = sources[index];
+      final name = source.split(RegExp(r'[/\\]')).last;
+      final target =
+          '${imageDirectory.path}${Platform.pathSeparator}${DateTime.now().microsecondsSinceEpoch}_${index}_$name';
+      copied.add((await File(source).copy(target)).path);
+    }
+    if (!mounted) return;
+    widget.state.attachImages(
+      widget.notebook.id,
+      widget.state.openPage,
+      copied,
+      asPageBackground: false,
+    );
+    final inserted = widget.state
+        .imagePlacementsForPage(widget.notebook.id, widget.state.openPage)
+        .where((item) => copied.contains(item.path))
+        .lastOrNull;
+    setState(() => selectedImageId = inserted?.id);
+    showAppSnack(context, 'Đã chèn ${copied.length} ảnh vào trang');
+  }
+
+  void _movePageImage(PageImagePlacement placement, Offset delta) {
+    final rect = placement.rect;
+    final left = (rect.left + delta.dx).clamp(0.0, 1.0 - rect.width);
+    final top = (rect.top + delta.dy).clamp(0.0, 1.0 - rect.height);
+    widget.state.updateImagePlacement(
+      placement.copyWith(
+        rect: Rect.fromLTWH(left, top, rect.width, rect.height),
+      ),
+    );
+  }
+
+  void _resizePageImage(PageImagePlacement placement, Offset delta) {
+    final rect = placement.rect;
+    final width = (rect.width + delta.dx).clamp(.12, 1.0 - rect.left);
+    final height = (rect.height + delta.dy).clamp(.12, 1.0 - rect.top);
+    widget.state.updateImagePlacement(
+      placement.copyWith(
+        rect: Rect.fromLTWH(rect.left, rect.top, width, height),
+      ),
+    );
+  }
+
+  void _rotatePageImage(PageImagePlacement placement) {
+    widget.state.updateImagePlacement(
+      placement.copyWith(rotation: placement.rotation + math.pi / 2),
+    );
+  }
+
+  Future<void> _cropPageImage(PageImagePlacement placement) async {
+    final source = File(placement.path);
+    if (!await source.exists()) return;
+    final bytes = await source.readAsBytes();
+    int imageWidth;
+    int imageHeight;
+    try {
+      final codec = await instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      imageWidth = frame.image.width;
+      imageHeight = frame.image.height;
+      frame.image.dispose();
+      codec.dispose();
+    } catch (_) {
+      if (mounted) showAppSnack(context, 'iPad không đọc được ảnh này');
+      return;
+    }
+    if (!mounted) return;
+    var left = 0.0;
+    var top = 0.0;
+    var right = 0.0;
+    var bottom = 0.0;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Cắt ảnh'),
+          content: SizedBox(
+            width: 620,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    height: 260,
+                    child: Center(
+                      child: AspectRatio(
+                        aspectRatio: imageWidth / imageHeight,
+                        child: LayoutBuilder(
+                          builder: (context, constraints) => Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              Image.memory(bytes, fit: BoxFit.fill),
+                              Positioned(
+                                left: left * constraints.maxWidth,
+                                top: top * constraints.maxHeight,
+                                right: right * constraints.maxWidth,
+                                bottom: bottom * constraints.maxHeight,
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                      color: AppColors.primary,
+                                      width: 3,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  _ImageCropSlider(
+                    label: 'Trái',
+                    value: left,
+                    onChanged: (value) => setDialogState(() => left = value),
+                  ),
+                  _ImageCropSlider(
+                    label: 'Trên',
+                    value: top,
+                    onChanged: (value) => setDialogState(() => top = value),
+                  ),
+                  _ImageCropSlider(
+                    label: 'Phải',
+                    value: right,
+                    onChanged: (value) => setDialogState(() => right = value),
+                  ),
+                  _ImageCropSlider(
+                    label: 'Dưới',
+                    value: bottom,
+                    onChanged: (value) => setDialogState(() => bottom = value),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Hủy'),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(context, true),
+              icon: const Icon(Icons.crop_rounded),
+              label: const Text('Cắt ảnh'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || accepted != true) return;
+    final directory = await getApplicationDocumentsDirectory();
+    final imageDirectory = Directory(
+      '${directory.path}${Platform.pathSeparator}imports${Platform.pathSeparator}page_images',
+    );
+    await imageDirectory.create(recursive: true);
+    final target =
+        '${imageDirectory.path}${Platform.pathSeparator}crop_${DateTime.now().microsecondsSinceEpoch}.png';
+    try {
+      if (Platform.isIOS) {
+        await _nativeChannel.invokeMethod<String>('cropImage', {
+          'sourcePath': placement.path,
+          'outputPath': target,
+          'left': left,
+          'top': top,
+          'right': right,
+          'bottom': bottom,
+        });
+      } else {
+        final croppedBytes = await Isolate.run(() {
+          final sourceImage = img.decodeImage(bytes)!;
+          final x = (sourceImage.width * left).round();
+          final y = (sourceImage.height * top).round();
+          final width = (sourceImage.width * (1 - left - right)).round().clamp(
+            1,
+            sourceImage.width - x,
+          );
+          final height = (sourceImage.height * (1 - top - bottom))
+              .round()
+              .clamp(1, sourceImage.height - y);
+          return img.encodePng(
+            img.copyCrop(sourceImage, x: x, y: y, width: width, height: height),
+          );
+        });
+        await File(target).writeAsBytes(croppedBytes);
+      }
+    } catch (exception) {
+      if (mounted) showAppSnack(context, 'Không thể cắt ảnh: $exception');
+      return;
+    }
+    widget.state.replacePageImage(
+      widget.notebook.id,
+      widget.state.openPage,
+      placement,
+      target,
+    );
+    await source.delete().catchError((_) => source);
+    if (!mounted) return;
+    showAppSnack(context, 'Đã cắt ảnh');
+  }
+
+  Future<void> _showNotebookPaperSettings() async {
+    var style = widget.notebook.paperStyle;
+    var opacity = widget.notebook.paperLineOpacity;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Cài đặt giấy của vở'),
+          content: SizedBox(
+            width: 560,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Kiểu giấy',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: PaperStyle.values
+                      .map(
+                        (value) => ChoiceChip(
+                          label: Text(_paperStyleName(value)),
+                          selected: style == value,
+                          onSelected: (_) =>
+                              setDialogState(() => style = value),
+                        ),
+                      )
+                      .toList(),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Độ đậm đường kẻ',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    Text('${(opacity * 100).round()}%'),
+                  ],
+                ),
+                Slider(
+                  value: opacity,
+                  min: .03,
+                  max: .35,
+                  divisions: 32,
+                  label: '${(opacity * 100).round()}%',
+                  onChanged: (value) => setDialogState(() => opacity = value),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Lưu'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || accepted != true) return;
+    widget.state.updateNotebook(
+      widget.notebook.copyWith(paperStyle: style, paperLineOpacity: opacity),
+    );
+    showAppSnack(context, 'Đã cập nhật giấy của vở');
+  }
+
+  String _paperStyleName(PaperStyle style) => switch (style) {
+    PaperStyle.blank => 'Trắng',
+    PaperStyle.lined => 'Kẻ ngang',
+    PaperStyle.grid => 'Ô vuông',
+    PaperStyle.dotted => 'Chấm',
+    PaperStyle.genkou => 'Genkō',
+  };
+
+  void _deletePageImage(PageImagePlacement placement) {
+    widget.state.removePageImage(
+      widget.notebook.id,
+      widget.state.openPage,
+      placement.id,
+    );
+    File(placement.path).delete().catchError((_) => File(placement.path));
+    setState(() => selectedImageId = null);
+    showAppSnack(context, 'Đã xóa ảnh khỏi trang');
+  }
+
+  void _updateRulerGesture(ScaleUpdateDetails details, Size pageSize) {
+    if (pageSize.isEmpty) return;
+    setState(() {
+      final width = (_rulerGestureStartWidth * details.scale).clamp(.3, .95);
+      final next = Offset(
+        _rulerPosition.dx + details.focalPointDelta.dx / pageSize.width,
+        _rulerPosition.dy + details.focalPointDelta.dy / pageSize.height,
+      );
+      _rulerWidthFraction = width;
+      _rulerHeight = (_rulerGestureStartHeight * details.scale).clamp(
+        42.0,
+        108.0,
+      );
+      _rulerAngle = _rulerGestureStartAngle + details.rotation;
+      _rulerPosition = Offset(
+        next.dx.clamp(0.0, 1.0 - width),
+        next.dy.clamp(.02, .9),
+      );
+    });
+  }
+
   void _toggleRuler() {
     _cancelPendingAi();
     setState(() {
@@ -1316,6 +1700,12 @@ class _EditorScreenState extends State<EditorScreen> {
       selectionStart = null;
       selectionEnd = null;
     });
+    if (rulerVisible) {
+      showAppSnack(
+        context,
+        'Một ngón để kéo · Hai ngón để thu phóng và xoay thước',
+      );
+    }
   }
 
   void _toggleQuickDictionary() {
@@ -2170,6 +2560,7 @@ class _ToolButton extends StatelessWidget {
       EditorTool.highlighter => (Icons.border_color_outlined, 'Highlight'),
       EditorTool.eraser => (Icons.auto_fix_normal_outlined, 'Tẩy'),
       EditorTool.ruler => (Icons.straighten_rounded, 'Thước'),
+      EditorTool.image => (Icons.add_photo_alternate_outlined, 'Ảnh'),
       EditorTool.dictionary => (Icons.menu_book_outlined, 'Tra từ'),
       EditorTool.quickDictionary => (Icons.search_rounded, 'Tra từ nhanh'),
       EditorTool.aiDictionary => (Icons.auto_stories_outlined, 'AI Tra từ'),
@@ -2267,6 +2658,7 @@ class _ColorSlider extends StatelessWidget {
 }
 
 Color _toolColor(EditorTool tool) => switch (tool) {
+  EditorTool.image => AppColors.primary,
   EditorTool.dictionary => AppColors.dictionary,
   EditorTool.quickDictionary => AppColors.dictionary,
   EditorTool.aiDictionary => AppColors.translate,
@@ -2283,12 +2675,14 @@ class _PageRail extends StatelessWidget {
     required this.onPageSelected,
     required this.onAddPage,
     required this.onClose,
+    required this.thumbnailPathForPage,
   });
   final int currentPage;
   final int pageCount;
   final ValueChanged<int> onPageSelected;
   final VoidCallback onAddPage;
   final VoidCallback onClose;
+  final String? Function(int page) thumbnailPathForPage;
   @override
   Widget build(BuildContext context) => Container(
     width: 150,
@@ -2352,9 +2746,19 @@ class _PageRail extends StatelessWidget {
                                   width: active ? 2.5 : 1,
                                 ),
                               ),
-                              // Keep thumbnails blank until the user writes
-                              // or imports content on that page.
-                              child: const SizedBox.shrink(),
+                              child: thumbnailPathForPage(page) == null
+                                  ? const SizedBox.shrink()
+                                  : ClipRRect(
+                                      borderRadius: BorderRadius.circular(5),
+                                      child: Image.file(
+                                        File(thumbnailPathForPage(page)!),
+                                        fit: BoxFit.contain,
+                                        errorBuilder: (_, _, _) => const Icon(
+                                          Icons.broken_image_outlined,
+                                          size: 18,
+                                        ),
+                                      ),
+                                    ),
                             ),
                             const SizedBox(height: 4),
                             Text(
@@ -2390,164 +2794,195 @@ class _PageRail extends StatelessWidget {
   );
 }
 
-class _PrintedPage extends StatelessWidget {
-  const _PrintedPage({required this.isPdf});
-  final bool isPdf;
+class _PageImageLayer extends StatelessWidget {
+  const _PageImageLayer({
+    required this.placements,
+    required this.editing,
+    required this.selectedId,
+    required this.onSelected,
+    required this.onMove,
+    required this.onResize,
+    required this.onRotate,
+    required this.onCrop,
+    required this.onDelete,
+  });
+  final List<PageImagePlacement> placements;
+  final bool editing;
+  final String? selectedId;
+  final ValueChanged<String> onSelected;
+  final void Function(PageImagePlacement, Offset) onMove;
+  final void Function(PageImagePlacement, Offset) onResize;
+  final ValueChanged<PageImagePlacement> onRotate;
+  final ValueChanged<PageImagePlacement> onCrop;
+  final ValueChanged<PageImagePlacement> onDelete;
+
   @override
-  Widget build(BuildContext context) => FittedBox(
-    fit: BoxFit.contain,
-    alignment: Alignment.topCenter,
-    child: SizedBox(
-      width: 684,
-      height: 950,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(54, 42, 46, 40),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) => Stack(
+      clipBehavior: Clip.none,
+      children: placements.map((placement) {
+        final rect = Rect.fromLTWH(
+          placement.rect.left * constraints.maxWidth,
+          placement.rect.top * constraints.maxHeight,
+          placement.rect.width * constraints.maxWidth,
+          placement.rect.height * constraints.maxHeight,
+        );
+        final selected = editing && selectedId == placement.id;
+        final canEdit = editing && !placement.isBackground;
+        return Positioned.fromRect(
+          rect: rect,
+          child: IgnorePointer(
+            ignoring: !canEdit,
+            child: Stack(
+              clipBehavior: Clip.none,
               children: [
-                Container(
-                  width: 7,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: isPdf ? AppColors.weakness : AppColors.primary,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        isPdf ? '読解問題  12' : '文法ノート',
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.ink,
+                Positioned.fill(
+                  child: GestureDetector(
+                    supportedDevices: const {PointerDeviceKind.touch},
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => onSelected(placement.id),
+                    onPanUpdate: (details) => onMove(
+                      placement,
+                      Offset(
+                        details.delta.dx / constraints.maxWidth,
+                        details.delta.dy / constraints.maxHeight,
+                      ),
+                    ),
+                    child: Transform.rotate(
+                      angle: placement.rotation,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: placement.isBackground
+                              ? Colors.white
+                              : Colors.transparent,
+                          border: selected
+                              ? Border.all(color: AppColors.primary, width: 2)
+                              : null,
+                        ),
+                        child: Image.file(
+                          File(placement.path),
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, _, _) => const Center(
+                            child: Icon(Icons.broken_image_outlined),
+                          ),
                         ),
                       ),
-                      Text(
-                        isPdf ? 'Shinkanzen Master N3' : '〜ながら・〜からといって',
-                        style: const TextStyle(
-                          color: Color(0xff747684),
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
+                if (selected) ...[
+                  Positioned(
+                    right: -14,
+                    top: -14,
+                    child: _ImageControl(
+                      icon: Icons.close,
+                      color: Colors.red,
+                      onTap: () => onDelete(placement),
+                    ),
+                  ),
+                  Positioned(
+                    left: -14,
+                    top: -14,
+                    child: _ImageControl(
+                      icon: Icons.rotate_90_degrees_ccw,
+                      onTap: () => onRotate(placement),
+                    ),
+                  ),
+                  Positioned(
+                    left: -14,
+                    bottom: -14,
+                    child: _ImageControl(
+                      icon: Icons.crop_rounded,
+                      onTap: () => onCrop(placement),
+                    ),
+                  ),
+                  Positioned(
+                    right: -14,
+                    bottom: -14,
+                    child: GestureDetector(
+                      supportedDevices: const {PointerDeviceKind.touch},
+                      behavior: HitTestBehavior.opaque,
+                      onPanUpdate: (details) => onResize(
+                        placement,
+                        Offset(
+                          details.delta.dx / constraints.maxWidth,
+                          details.delta.dy / constraints.maxHeight,
+                        ),
+                      ),
+                      child: const _ImageControl(
+                        icon: Icons.open_in_full_rounded,
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
-            const SizedBox(height: 40),
-            const Text(
-              '彼の意見を尊重しながら、',
-              style: TextStyle(fontSize: 19, height: 1.8, color: AppColors.ink),
-            ),
-            const Text(
-              'もう一度検討する必要がある。',
-              style: TextStyle(fontSize: 19, height: 1.8, color: AppColors.ink),
-            ),
-            const SizedBox(height: 28),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xfffff5cf),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: const Text(
-                '〜ながら：Hai hành động xảy ra đồng thời.\nChủ ngữ của hai vế thường giống nhau.',
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.7,
-                  color: AppColors.ink,
-                ),
-              ),
-            ),
-            const SizedBox(height: 34),
-            if (isPdf) ...[
-              const Text(
-                '日本に10年住んでいるからといって、日本語が＿＿＿。',
-                style: TextStyle(
-                  fontSize: 15,
-                  height: 1.7,
-                  color: AppColors.ink,
-                ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'A. 上手なはずだ\nB. 上手とは限らない\nC. 上手に違いない\nD. 上手になった',
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.9,
-                  color: AppColors.ink,
-                ),
-              ),
-            ] else ...[
-              const Text(
-                '例：音楽を聞きながら、宿題をします。',
-                style: TextStyle(fontSize: 15, color: AppColors.ink),
-              ),
-              const SizedBox(height: 22),
-              const Text(
-                'Ghi nhớ',
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.primary,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                '「ながら」前の động từ dùng thể ます bỏ ます.',
-                style: TextStyle(fontSize: 14, color: AppColors.ink),
-              ),
-            ],
-          ],
-        ),
+          ),
+        );
+      }).toList(),
+    ),
+  );
+}
+
+class _ImageControl extends StatelessWidget {
+  const _ImageControl({required this.icon, this.color, this.onTap});
+  final IconData icon;
+  final Color? color;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: color ?? AppColors.primary,
+    shape: const CircleBorder(),
+    elevation: 2,
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      supportedDevices: const {PointerDeviceKind.touch},
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.all(6),
+        child: Icon(icon, size: 15, color: Colors.white),
       ),
     ),
   );
 }
 
-class _PageImageLayer extends StatelessWidget {
-  const _PageImageLayer({required this.paths});
-  final List<String> paths;
+class _ImageCropSlider extends StatelessWidget {
+  const _ImageCropSlider({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+  final String label;
+  final double value;
+  final ValueChanged<double> onChanged;
 
   @override
-  Widget build(BuildContext context) => IgnorePointer(
-    child: ColoredBox(
-      color: Colors.white.withValues(alpha: .92),
-      child: Column(
-        children: paths
-            .map(
-              (path) => Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Image.file(
-                    File(path),
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, _, _) =>
-                        const Center(child: Icon(Icons.broken_image_outlined)),
-                  ),
-                ),
-              ),
-            )
-            .toList(),
+  Widget build(BuildContext context) => Row(
+    children: [
+      SizedBox(width: 52, child: Text(label)),
+      Expanded(
+        child: Slider(value: value, min: 0, max: .4, onChanged: onChanged),
       ),
-    ),
+      SizedBox(width: 42, child: Text('${(value * 100).round()}%')),
+    ],
   );
 }
 
 class _PaperPainter extends CustomPainter {
-  const _PaperPainter({required this.style, required this.isPdf});
+  const _PaperPainter({
+    required this.style,
+    required this.isPdf,
+    required this.lineOpacity,
+  });
   final PaperStyle style;
   final bool isPdf;
+  final double lineOpacity;
   @override
   void paint(Canvas canvas, Size size) {
     if (isPdf || style == PaperStyle.blank) return;
     final paint = Paint()
-      ..color = const Color(0x16758ab4)
+      ..color = const Color(0xff758ab4).withValues(alpha: lineOpacity)
       ..strokeWidth = .8;
     if (style == PaperStyle.lined) {
       for (double y = 72; y < size.height; y += 30) {
@@ -2565,14 +3000,18 @@ class _PaperPainter extends CustomPainter {
       const Offset(36, 0),
       Offset(36, size.height),
       Paint()
-        ..color = const Color(0x22d9822b)
+        ..color = const Color(
+          0xffd9822b,
+        ).withValues(alpha: (lineOpacity * 1.5).clamp(.04, .5))
         ..strokeWidth = 1,
     );
   }
 
   @override
   bool shouldRepaint(covariant _PaperPainter oldDelegate) =>
-      oldDelegate.style != style || oldDelegate.isPdf != isPdf;
+      oldDelegate.style != style ||
+      oldDelegate.isPdf != isPdf ||
+      oldDelegate.lineOpacity != lineOpacity;
 }
 
 class _InkPainter extends CustomPainter {
@@ -2742,40 +3181,56 @@ class _InkPainter extends CustomPainter {
 }
 
 class _Ruler extends StatelessWidget {
-  const _Ruler();
+  const _Ruler({
+    required this.angle,
+    required this.height,
+    required this.onScaleStart,
+    required this.onScaleUpdate,
+  });
+  final double angle;
+  final double height;
+  final GestureScaleStartCallback onScaleStart;
+  final GestureScaleUpdateCallback onScaleUpdate;
+
   @override
-  Widget build(BuildContext context) => Transform.rotate(
-    angle: -.08,
-    child: Container(
-      height: 62,
-      decoration: BoxDecoration(
-        color: const Color(0xbbdce1ff),
-        border: Border.all(color: AppColors.primary.withValues(alpha: .5)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Stack(
-        children: [
-          for (var i = 0; i < 20; i++)
-            Positioned(
-              left: i * 24.0,
-              top: 0,
-              child: Container(
-                width: 1,
-                height: i % 5 == 0 ? 20 : 11,
-                color: AppColors.primary,
+  Widget build(BuildContext context) => GestureDetector(
+    supportedDevices: const {PointerDeviceKind.touch},
+    behavior: HitTestBehavior.opaque,
+    onScaleStart: onScaleStart,
+    onScaleUpdate: onScaleUpdate,
+    child: Transform.rotate(
+      angle: angle,
+      child: Container(
+        height: height,
+        decoration: BoxDecoration(
+          color: const Color(0xbbdce1ff),
+          border: Border.all(color: AppColors.primary.withValues(alpha: .5)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Stack(
+          children: [
+            for (var i = 0; i < 28; i++)
+              Positioned(
+                left: i * 24.0,
+                top: 0,
+                child: Container(
+                  width: 1,
+                  height: i % 5 == 0 ? 20 : 11,
+                  color: AppColors.primary,
+                ),
+              ),
+            const Center(
+              child: Text(
+                'Một ngón kéo · Hai ngón thu phóng / xoay · Pencil để kẻ',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
-          const Center(
-            child: Text(
-              'Dùng Bút để kẻ · Bấm Thước lần nữa để ẩn',
-              style: TextStyle(
-                fontSize: 11,
-                color: AppColors.primary,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     ),
   );
@@ -2836,14 +3291,12 @@ class _QuickDictionaryCard extends StatelessWidget {
     required this.onClose,
     required this.width,
     required this.height,
-    required this.opacity,
     required this.editing,
     required this.onEdit,
     required this.onCancelEdit,
     required this.onConfirmEdit,
     required this.onDrag,
     required this.onResize,
-    required this.onOpacityChanged,
   });
 
   final TextEditingController controller;
@@ -2856,14 +3309,12 @@ class _QuickDictionaryCard extends StatelessWidget {
   final VoidCallback onClose;
   final double width;
   final double height;
-  final double opacity;
   final bool editing;
   final VoidCallback onEdit;
   final VoidCallback onCancelEdit;
   final VoidCallback onConfirmEdit;
   final ValueChanged<Offset> onDrag;
   final ValueChanged<Offset> onResize;
-  final ValueChanged<double> onOpacityChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -2877,7 +3328,7 @@ class _QuickDictionaryCard extends StatelessWidget {
         .toDouble();
     return Material(
       elevation: 12,
-      color: Theme.of(context).colorScheme.surface.withValues(alpha: opacity),
+      color: Theme.of(context).colorScheme.surface,
       borderRadius: BorderRadius.circular(20),
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
@@ -2891,6 +3342,7 @@ class _QuickDictionaryCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   GestureDetector(
+                    supportedDevices: const {PointerDeviceKind.touch},
                     behavior: HitTestBehavior.opaque,
                     onPanUpdate: editing
                         ? (details) => onDrag(details.delta)
@@ -2938,20 +3390,6 @@ class _QuickDictionaryCard extends StatelessWidget {
                     'Kana · Kanji · Hán Việt · nghĩa tiếng Việt',
                     style: TextStyle(fontSize: 11, color: Colors.grey),
                   ),
-                  if (editing)
-                    Row(
-                      children: [
-                        const Text('Đậm/nhạt', style: TextStyle(fontSize: 11)),
-                        Expanded(
-                          child: Slider(
-                            value: opacity,
-                            min: .35,
-                            max: 1,
-                            onChanged: onOpacityChanged,
-                          ),
-                        ),
-                      ],
-                    ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: controller,
@@ -3040,6 +3478,7 @@ class _QuickDictionaryCard extends StatelessWidget {
                 right: 5,
                 bottom: 5,
                 child: GestureDetector(
+                  supportedDevices: const {PointerDeviceKind.touch},
                   onPanUpdate: (details) => onResize(details.delta),
                   child: const Icon(Icons.drag_handle_rounded, size: 22),
                 ),
@@ -3083,7 +3522,6 @@ class _ResultCard extends StatelessWidget {
     required this.result,
     required this.width,
     required this.height,
-    required this.opacity,
     required this.editing,
     required this.onClose,
     required this.onPin,
@@ -3093,12 +3531,10 @@ class _ResultCard extends StatelessWidget {
     required this.onConfirmEdit,
     required this.onDrag,
     required this.onResize,
-    required this.onOpacityChanged,
   });
   final _SmartResult result;
   final double width;
   final double height;
-  final double opacity;
   final bool editing;
   final VoidCallback onClose;
   final VoidCallback onPin;
@@ -3108,7 +3544,6 @@ class _ResultCard extends StatelessWidget {
   final VoidCallback onConfirmEdit;
   final ValueChanged<Offset> onDrag;
   final ValueChanged<Offset> onResize;
-  final ValueChanged<double> onOpacityChanged;
   @override
   Widget build(BuildContext context) {
     final screen = MediaQuery.sizeOf(context);
@@ -3131,9 +3566,7 @@ class _ResultCard extends StatelessWidget {
             ),
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: Theme.of(
-                context,
-              ).colorScheme.surface.withValues(alpha: opacity),
+              color: Theme.of(context).colorScheme.surface,
               borderRadius: BorderRadius.circular(20),
             ),
             child: SingleChildScrollView(
@@ -3142,6 +3575,7 @@ class _ResultCard extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   GestureDetector(
+                    supportedDevices: const {PointerDeviceKind.touch},
                     behavior: HitTestBehavior.opaque,
                     onPanUpdate: editing
                         ? (details) => onDrag(details.delta)
@@ -3204,20 +3638,6 @@ class _ResultCard extends StatelessWidget {
                       style: TextStyle(fontSize: 10, color: Colors.grey),
                     ),
                   ),
-                  if (editing)
-                    Row(
-                      children: [
-                        const Text('Đậm/nhạt', style: TextStyle(fontSize: 11)),
-                        Expanded(
-                          child: Slider(
-                            value: opacity,
-                            min: .35,
-                            max: 1,
-                            onChanged: onOpacityChanged,
-                          ),
-                        ),
-                      ],
-                    ),
                   if (result.dictionaryEntry != null)
                     Wrap(
                       spacing: 8,
@@ -3332,6 +3752,7 @@ class _ResultCard extends StatelessWidget {
               right: 5,
               bottom: 5,
               child: GestureDetector(
+                supportedDevices: const {PointerDeviceKind.touch},
                 onPanUpdate: (details) => onResize(details.delta),
                 child: const Icon(Icons.drag_handle_rounded, size: 22),
               ),

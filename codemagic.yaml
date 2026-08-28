@@ -1,28 +1,68 @@
 workflows:
   ios-unsigned:
-    name: Build iPad IPA
+    name: Build iPad IPA (unsigned)
     instance_type: mac_mini_m2
     max_build_duration: 60
 
     environment:
       flutter: stable
+      xcode: latest
+      cocoapods: default
+
+    cache:
+      cache_paths:
+        - $HOME/.pub-cache
+        - $HOME/Library/Caches/CocoaPods
+        - ios/Pods
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+      cancel_previous_builds: true
 
     scripts:
       - name: Get Flutter packages
         script: |
           flutter pub get
 
-      - name: Build iOS
+      - name: Analyze and test
         script: |
-          flutter build ios --release --no-codesign
+          flutter analyze
+          flutter test --no-pub
+
+      - name: Install iOS pods
+        script: |
+          cd ios
+          pod install
+
+      - name: Verify Xcode targets
+        script: |
+          xcodebuild -list -project ios/Runner.xcodeproj
+          test -f ios/Runner/Runner.entitlements
+          test -f ios/ShareExtension/ShareExtension.entitlements
+
+      - name: Build iOS app and Share Extension
+        script: |
+          flutter build ios --release --no-codesign --build-number="$BUILD_NUMBER"
+
+      - name: Verify embedded Share Extension
+        script: |
+          test -d build/ios/iphoneos/Runner.app/PlugIns/ShareExtension.appex
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" \
+            build/ios/iphoneos/Runner.app/PlugIns/ShareExtension.appex/Info.plist
 
       - name: Create unsigned IPA
         script: |
           mkdir -p build/ios/ipa/Payload
-          cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+          ditto build/ios/iphoneos/Runner.app build/ios/ipa/Payload/Runner.app
           cd build/ios/ipa
-          zip -qry Notebook-Eryk-unsigned.ipa Payload
+          ditto -c -k --sequesterRsrc --keepParent Payload Notebook-Eryk-unsigned.ipa
 
     artifacts:
       - build/ios/ipa/*.ipa
       - build/ios/iphoneos/*.app
+      - flutter_drive.log

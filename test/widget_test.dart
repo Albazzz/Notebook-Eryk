@@ -13,7 +13,9 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    await tester.pumpWidget(NihongoNotebookApp(state: AppState()));
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
     await tester.pumpAndSettle();
 
     expect(find.text('Vở của tôi'), findsWidgets);
@@ -27,7 +29,8 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final state = AppState();
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
     state.open(state.notebooks.first);
     await tester.pumpWidget(NihongoNotebookApp(state: state));
     await tester.pumpAndSettle();
@@ -58,7 +61,8 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final state = AppState();
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
     state.open(state.notebooks.first);
     await tester.pumpWidget(NihongoNotebookApp(state: state));
     await tester.pumpAndSettle();
@@ -78,7 +82,8 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final state = AppState();
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
     state.open(state.notebooks.first);
     await tester.pumpWidget(NihongoNotebookApp(state: state));
     await tester.pumpAndSettle();
@@ -86,13 +91,16 @@ void main() {
     await tester.tap(find.text('Thước'));
     await tester.pump();
     expect(
-      find.text('Dùng Bút để kẻ · Bấm Thước lần nữa để ẩn'),
+      find.text('Một ngón kéo · Hai ngón thu phóng / xoay · Pencil để kẻ'),
       findsOneWidget,
     );
 
     await tester.tap(find.text('Thước'));
     await tester.pump();
-    expect(find.text('Dùng Bút để kẻ · Bấm Thước lần nữa để ẩn'), findsNothing);
+    expect(
+      find.text('Một ngón kéo · Hai ngón thu phóng / xoay · Pencil để kẻ'),
+      findsNothing,
+    );
   });
 
   testWidgets('tra từ nhanh mở ngay trên thanh công cụ và không chặn bút', (
@@ -103,7 +111,8 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final state = AppState();
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
     state.open(state.notebooks.first);
     await tester.pumpWidget(NihongoNotebookApp(state: state));
     await tester.pumpAndSettle();
@@ -133,7 +142,8 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final state = AppState();
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
     await tester.pumpWidget(NihongoNotebookApp(state: state));
     await tester.pumpAndSettle();
 
@@ -154,7 +164,8 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final state = AppState();
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
     state.open(state.notebooks.first);
     await tester.pumpWidget(NihongoNotebookApp(state: state));
     await tester.pumpAndSettle();
@@ -168,4 +179,19 @@ void main() {
     expect(state.openNotebook, isNull);
     expect(tester.takeException(), isNull);
   });
+}
+
+AppState _stateWithNotebook() {
+  final state = AppState();
+  state.addNotebook(
+    const NotebookData(
+      id: 'n3',
+      title: 'N3 Grammar',
+      type: 'Vở ghi',
+      pages: 12,
+      color: Color(0xff5269a8),
+      paperStyle: PaperStyle.grid,
+    ),
+  );
+  return state;
 }

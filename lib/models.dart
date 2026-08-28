@@ -7,6 +7,7 @@ enum EditorTool {
   highlighter,
   eraser,
   ruler,
+  image,
   dictionary,
   quickDictionary,
   aiDictionary,
@@ -16,6 +17,31 @@ enum EditorTool {
 }
 
 enum PaperStyle { blank, lined, grid, dotted, genkou }
+
+class PageImagePlacement {
+  const PageImagePlacement({
+    required this.id,
+    required this.path,
+    required this.rect,
+    this.rotation = 0,
+    this.isBackground = false,
+  });
+
+  final String id;
+  final String path;
+  final Rect rect;
+  final double rotation;
+  final bool isBackground;
+
+  PageImagePlacement copyWith({String? path, Rect? rect, double? rotation}) =>
+      PageImagePlacement(
+        id: id,
+        path: path ?? this.path,
+        rect: rect ?? this.rect,
+        rotation: rotation ?? this.rotation,
+        isBackground: isBackground,
+      );
+}
 
 enum WeaknessKind { grammar, vocabulary, kanji, reading, other }
 
@@ -61,6 +87,7 @@ class NotebookData {
     required this.pages,
     required this.color,
     this.paperStyle = PaperStyle.grid,
+    this.paperLineOpacity = .09,
     this.lastOpened = 'Vừa xong',
   });
 
@@ -70,6 +97,7 @@ class NotebookData {
   final int pages;
   final Color color;
   final PaperStyle paperStyle;
+  final double paperLineOpacity;
   final String lastOpened;
 
   bool get isPdf => type == 'PDF';
@@ -80,6 +108,7 @@ class NotebookData {
     int? pages,
     Color? color,
     PaperStyle? paperStyle,
+    double? paperLineOpacity,
     String? lastOpened,
   }) => NotebookData(
     id: id,
@@ -88,6 +117,7 @@ class NotebookData {
     pages: pages ?? this.pages,
     color: color ?? this.color,
     paperStyle: paperStyle ?? this.paperStyle,
+    paperLineOpacity: paperLineOpacity ?? this.paperLineOpacity,
     lastOpened: lastOpened ?? this.lastOpened,
   );
 }

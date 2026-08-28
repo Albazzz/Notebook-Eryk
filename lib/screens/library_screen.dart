@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
+import 'package:pdfx/pdfx.dart' as pdfx;
 
 import '../app_state.dart';
 import '../models.dart';
@@ -11,8 +14,15 @@ import '../theme.dart';
 import '../widgets/common.dart';
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key, required this.state});
+  const LibraryScreen({
+    super.key,
+    required this.state,
+    this.sharedFiles = const [],
+    this.onSharedFilesHandled,
+  });
   final AppState state;
+  final List<String> sharedFiles;
+  final ValueChanged<List<String>>? onSharedFilesHandled;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -22,6 +32,36 @@ class _LibraryScreenState extends State<LibraryScreen> {
   String filter = 'Tất cả';
   String search = '';
   bool gridView = true;
+  bool _handlingSharedFiles = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleSharedImport();
+  }
+
+  @override
+  void didUpdateWidget(covariant LibraryScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sharedFiles != widget.sharedFiles) _scheduleSharedImport();
+  }
+
+  void _scheduleSharedImport() {
+    if (_handlingSharedFiles || widget.sharedFiles.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _importSharedFiles());
+  }
+
+  Future<void> _importSharedFiles() async {
+    if (!mounted || _handlingSharedFiles || widget.sharedFiles.isEmpty) return;
+    _handlingSharedFiles = true;
+    final paths = List<String>.of(widget.sharedFiles);
+    try {
+      await _showImportPreview(paths);
+    } finally {
+      _handlingSharedFiles = false;
+      widget.onSharedFilesHandled?.call(paths);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -142,6 +182,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     NotebookData? createdNotebook;
     var importPdf = false;
     var paperStyle = PaperStyle.grid;
+    var paperLineOpacity = widget.state.paperLineOpacity;
     var cover = AppColors.primary;
     final openImporter = await showDialog<bool>(
       context: context,
@@ -267,7 +308,32 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           .toList(),
                     ),
                     const SizedBox(height: 14),
-                    _NotebookPreview(paperStyle: paperStyle, cover: cover),
+                    _NotebookPreview(
+                      paperStyle: paperStyle,
+                      cover: cover,
+                      lineOpacity: paperLineOpacity,
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Độ đậm đường kẻ',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        Text('${(paperLineOpacity * 100).round()}%'),
+                      ],
+                    ),
+                    Slider(
+                      value: paperLineOpacity,
+                      min: .03,
+                      max: .35,
+                      divisions: 32,
+                      label: '${(paperLineOpacity * 100).round()}%',
+                      onChanged: (value) =>
+                          setDialogState(() => paperLineOpacity = value),
+                    ),
                     const SizedBox(height: 18),
                     const Text(
                       'Màu bìa',
@@ -344,6 +410,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                             pages: 1,
                             color: cover,
                             paperStyle: paperStyle,
+                            paperLineOpacity: paperLineOpacity,
                           );
                           widget.state.addNotebook(createdNotebook!);
                           // Let the parent finish the dialog transition before
@@ -384,7 +451,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Future<void> _showImportFilesDialog() async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png', 'webp'],
+      allowedExtensions: [
+        'pdf',
+        'doc',
+        'docx',
+        'jpg',
+        'jpeg',
+        'png',
+        'webp',
+        'gif',
+        'heic',
+        'heif',
+      ],
     );
     if (!mounted || result.isEmpty) return;
     final paths = result
@@ -394,6 +472,32 @@ class _LibraryScreenState extends State<LibraryScreen> {
         .toList();
     if (paths.isEmpty) {
       showAppSnack(context, 'Không đọc được file đã chọn');
+      return;
+    }
+    await _showImportPreview(paths);
+  }
+
+  Future<void> _showImportPreview(List<String> inputPaths) async {
+    final paths = inputPaths
+        .where((path) => File(path).existsSync())
+        .where(
+          (path) => const {
+            'pdf',
+            'doc',
+            'docx',
+            'jpg',
+            'jpeg',
+            'png',
+            'webp',
+            'gif',
+            'heic',
+            'heif',
+          }.contains(_extension(path)),
+        )
+        .toList();
+    if (!mounted) return;
+    if (paths.isEmpty) {
+      showAppSnack(context, 'Không có PDF hoặc ảnh hợp lệ để nhập');
       return;
     }
     var imageMode = 'pages';
@@ -481,7 +585,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       ),
                       const SizedBox(height: 5),
                       const Text(
-                        'PDF và Word được giữ nguyên làm tài liệu để ghi chú.',
+                        'Mỗi trang PDF sẽ trở thành đúng một trang giấy để ghi chú.',
                         style: TextStyle(color: Colors.grey),
                       ),
                     ],
@@ -508,6 +612,73 @@ class _LibraryScreenState extends State<LibraryScreen> {
     await Future<void>.delayed(const Duration(milliseconds: 300));
     titleController.dispose();
     if (!mounted || accepted != true) return;
+    final documents = paths.where((path) => !_isImagePath(path)).toList();
+    if (documents.length > 1) {
+      showAppSnack(context, 'Hãy nhập từng tệp PDF hoặc Word riêng');
+      return;
+    }
+    final firstDocument = documents.firstOrNull;
+    final isPdf = firstDocument != null && _extension(firstDocument) == 'pdf';
+    String? copiedDocument;
+    var pdfPages = <String>[];
+    try {
+      if (firstDocument != null) {
+        copiedDocument = await _copyImportedFile(firstDocument);
+        if (isPdf) {
+          if (!mounted) return;
+          final progress = ValueNotifier('Đang mở PDF…');
+          BuildContext? progressContext;
+          unawaited(
+            showDialog<void>(
+              context: context,
+              barrierDismissible: false,
+              builder: (dialogContext) {
+                progressContext = dialogContext;
+                return PopScope(
+                  canPop: false,
+                  child: AlertDialog(
+                    content: Row(
+                      children: [
+                        const CircularProgressIndicator(),
+                        const SizedBox(width: 18),
+                        Expanded(
+                          child: ValueListenableBuilder<String>(
+                            valueListenable: progress,
+                            builder: (_, value, _) => Text(value),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+          await WidgetsBinding.instance.endOfFrame;
+          try {
+            pdfPages = await _renderPdfPages(
+              copiedDocument,
+              onProgress: (current, total) =>
+                  progress.value = 'Đang xử lý trang $current/$total…',
+            );
+          } finally {
+            final dialogContext = progressContext;
+            if (dialogContext != null && dialogContext.mounted) {
+              Navigator.pop(dialogContext);
+            }
+            progress.dispose();
+          }
+          if (pdfPages.isEmpty) {
+            throw const FormatException('PDF không có trang nào');
+          }
+        }
+      }
+    } catch (exception) {
+      if (mounted) {
+        showAppSnack(context, 'Không thể đọc PDF: $exception');
+      }
+      return;
+    }
     var importedImages = paths.where(_isImagePath).toList();
     if (cropImages) {
       final cropped = <String>[];
@@ -520,29 +691,34 @@ class _LibraryScreenState extends State<LibraryScreen> {
       importedImages = await Future.wait(importedImages.map(_copyImportedFile));
     }
     if (!mounted) return;
-    final documents = paths.where((path) => !_isImagePath(path)).toList();
-    final firstDocument = documents.firstOrNull;
-    final type = firstDocument == null
-        ? 'Vở ghi'
-        : (_extension(firstDocument) == 'pdf' ? 'PDF' : 'Word');
+    final type = firstDocument == null ? 'Vở ghi' : (isPdf ? 'PDF' : 'Word');
+    final pageCount = isPdf
+        ? pdfPages.length + importedImages.length
+        : importedImages.isEmpty
+        ? 1
+        : (imageMode == 'pages' ? importedImages.length : 1);
     final notebook = NotebookData(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
       title: importedTitle.isEmpty ? 'Tài liệu nhập mới' : importedTitle,
       type: type,
-      pages: importedImages.isEmpty
-          ? (type == 'PDF' ? 24 : 12)
-          : (imageMode == 'pages' ? importedImages.length : 1),
+      pages: pageCount,
       color: AppColors.primary,
       paperStyle: PaperStyle.blank,
     );
     widget.state.addNotebook(notebook);
-    if (firstDocument != null) {
-      final copiedDocument = await _copyImportedFile(firstDocument);
-      if (mounted) {
-        widget.state.attachSourceDocument(notebook.id, copiedDocument);
-      }
+    if (copiedDocument != null && mounted) {
+      widget.state.attachSourceDocument(notebook.id, copiedDocument);
     }
-    if (importedImages.isNotEmpty) {
+    if (isPdf) {
+      for (var index = 0; index < pdfPages.length; index++) {
+        widget.state.attachImages(notebook.id, index + 1, [pdfPages[index]]);
+      }
+      for (var index = 0; index < importedImages.length; index++) {
+        widget.state.attachImages(notebook.id, pdfPages.length + index + 1, [
+          importedImages[index],
+        ]);
+      }
+    } else if (importedImages.isNotEmpty) {
       widget.state.attachImages(
         notebook.id,
         1,
@@ -557,7 +733,69 @@ class _LibraryScreenState extends State<LibraryScreen> {
       }
     }
     if (!mounted) return;
-    showAppSnack(context, 'Đã nhập ${notebook.title}');
+    showAppSnack(
+      context,
+      isPdf
+          ? 'Đã nhập ${notebook.title} · ${pdfPages.length} trang PDF'
+          : 'Đã nhập ${notebook.title}',
+    );
+  }
+
+  Future<List<String>> _renderPdfPages(
+    String sourcePath, {
+    void Function(int current, int total)? onProgress,
+  }) async {
+    final document = await pdfx.PdfDocument.openFile(sourcePath);
+    final directory = await getApplicationDocumentsDirectory();
+    final targetDirectory = Directory(
+      '${directory.path}${Platform.pathSeparator}imports${Platform.pathSeparator}pdf_${DateTime.now().microsecondsSinceEpoch}',
+    );
+    await targetDirectory.create(recursive: true);
+    final renderedPaths = List<String?>.filled(document.pagesCount, null);
+    var completed = 0;
+    try {
+      // iPad can render several PDF pages concurrently. A group of three is
+      // fast on iPad Gen 11 without creating a large memory spike on long PDFs.
+      const batchSize = 3;
+      for (var start = 1; start <= document.pagesCount; start += batchSize) {
+        final end = math.min(start + batchSize - 1, document.pagesCount);
+        await Future.wait([
+          for (var pageNumber = start; pageNumber <= end; pageNumber++)
+            () async {
+              final page = await document.getPage(pageNumber);
+              try {
+                const targetWidth = 1200.0;
+                final image = await page.render(
+                  width: targetWidth,
+                  height: targetWidth * page.height / page.width,
+                  format: pdfx.PdfPageImageFormat.jpeg,
+                  quality: 90,
+                  backgroundColor: '#FFFFFF',
+                );
+                if (image == null) {
+                  throw FormatException('Không render được trang $pageNumber');
+                }
+                final target =
+                    '${targetDirectory.path}${Platform.pathSeparator}page_${pageNumber.toString().padLeft(4, '0')}.jpg';
+                await File(target).writeAsBytes(image.bytes);
+                renderedPaths[pageNumber - 1] = target;
+                completed++;
+                onProgress?.call(completed, document.pagesCount);
+              } finally {
+                await page.close();
+              }
+            }(),
+        ]);
+      }
+    } catch (_) {
+      if (await targetDirectory.exists()) {
+        await targetDirectory.delete(recursive: true);
+      }
+      rethrow;
+    } finally {
+      await document.close();
+    }
+    return renderedPaths.whereType<String>().toList();
   }
 
   Future<String> _copyImportedFile(String source) async {
@@ -574,7 +812,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Future<String?> _cropImage(String sourcePath) async {
     final bytes = await File(sourcePath).readAsBytes();
     final decoded = img.decodeImage(bytes);
-    if (decoded == null || !mounted) return null;
+    if (!mounted) return null;
+    // Native iPad photos may arrive as HEIC/HEIF. The editor can display
+    // those files even when the pure-Dart crop decoder cannot decode them.
+    if (decoded == null) return _copyImportedFile(sourcePath);
     var left = .04;
     var top = .04;
     var right = .04;
@@ -662,8 +903,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
   String _fileTitle(String path) => _fileName(path).split('.').first;
   String _extension(String path) =>
       _fileName(path).split('.').last.toLowerCase();
-  bool _isImagePath(String path) =>
-      const {'jpg', 'jpeg', 'png', 'webp'}.contains(_extension(path));
+  bool _isImagePath(String path) => const {
+    'jpg',
+    'jpeg',
+    'png',
+    'webp',
+    'gif',
+    'heic',
+    'heif',
+  }.contains(_extension(path));
 
   String _paperName(PaperStyle style) => switch (style) {
     PaperStyle.blank => 'Trắng',
@@ -687,6 +935,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
               onTap: () => Navigator.pop(context, 'open'),
             ),
             ListTile(
+              leading: const Icon(Icons.tune_rounded),
+              title: const Text('Cài đặt giấy'),
+              subtitle: const Text('Kiểu giấy và độ đậm đường kẻ'),
+              onTap: () => Navigator.pop(context, 'paper'),
+            ),
+            ListTile(
               leading: const Icon(Icons.delete_outline, color: Colors.red),
               title: const Text('Xóa vở'),
               onTap: () => Navigator.pop(context, 'delete'),
@@ -698,6 +952,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (!mounted) return;
     if (action == 'open') {
       widget.state.open(notebook);
+    } else if (action == 'paper') {
+      await _showNotebookPaperSettings(notebook);
     } else if (action == 'delete') {
       final confirmed = await showDialog<bool>(
         context: context,
@@ -724,12 +980,97 @@ class _LibraryScreenState extends State<LibraryScreen> {
       showAppSnack(context, 'Đã xóa ${notebook.title}');
     }
   }
+
+  Future<void> _showNotebookPaperSettings(NotebookData notebook) async {
+    var style = notebook.paperStyle;
+    var opacity = notebook.paperLineOpacity;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Cài đặt giấy · ${notebook.title}'),
+          content: SizedBox(
+            width: 560,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Kiểu giấy',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: PaperStyle.values
+                      .map(
+                        (value) => ChoiceChip(
+                          label: Text(_paperName(value)),
+                          selected: style == value,
+                          onSelected: (_) =>
+                              setDialogState(() => style = value),
+                        ),
+                      )
+                      .toList(),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Độ đậm đường kẻ',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    Text('${(opacity * 100).round()}%'),
+                  ],
+                ),
+                Slider(
+                  value: opacity,
+                  min: .03,
+                  max: .35,
+                  divisions: 32,
+                  label: '${(opacity * 100).round()}%',
+                  onChanged: (value) => setDialogState(() => opacity = value),
+                ),
+                _NotebookPreview(
+                  paperStyle: style,
+                  cover: notebook.color,
+                  lineOpacity: opacity,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Lưu'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || accepted != true) return;
+    widget.state.updateNotebook(
+      notebook.copyWith(paperStyle: style, paperLineOpacity: opacity),
+    );
+    showAppSnack(context, 'Đã cập nhật giấy của ${notebook.title}');
+  }
 }
 
 class _NotebookPreview extends StatelessWidget {
-  const _NotebookPreview({required this.paperStyle, required this.cover});
+  const _NotebookPreview({
+    required this.paperStyle,
+    required this.cover,
+    required this.lineOpacity,
+  });
   final PaperStyle paperStyle;
   final Color cover;
+  final double lineOpacity;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -752,7 +1093,7 @@ class _NotebookPreview extends StatelessWidget {
         ),
         Expanded(
           child: CustomPaint(
-            painter: _PreviewPaperPainter(paperStyle),
+            painter: _PreviewPaperPainter(paperStyle, lineOpacity),
             child: const Padding(
               padding: EdgeInsets.all(14),
               child: Text(
@@ -772,13 +1113,14 @@ class _NotebookPreview extends StatelessWidget {
 }
 
 class _PreviewPaperPainter extends CustomPainter {
-  const _PreviewPaperPainter(this.style);
+  const _PreviewPaperPainter(this.style, this.lineOpacity);
   final PaperStyle style;
+  final double lineOpacity;
   @override
   void paint(Canvas canvas, Size size) {
     if (style == PaperStyle.blank) return;
     final paint = Paint()
-      ..color = const Color(0x22758ab4)
+      ..color = const Color(0xff758ab4).withValues(alpha: lineOpacity)
       ..strokeWidth = .6;
     final step = style == PaperStyle.lined ? 24.0 : 18.0;
     for (double y = step; y < size.height; y += step) {
@@ -793,7 +1135,7 @@ class _PreviewPaperPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _PreviewPaperPainter oldDelegate) =>
-      oldDelegate.style != style;
+      oldDelegate.style != style || oldDelegate.lineOpacity != lineOpacity;
 }
 
 class _CropSlider extends StatelessWidget {

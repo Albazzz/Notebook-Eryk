@@ -52,3 +52,14 @@ open ios/Runner.xcworkspace
 ```
 
 Trong Xcode, chọn Team Apple Developer, đổi Bundle Identifier nếu cần, cắm iPad và bấm Run. Để gửi bản beta cho iPad, archive rồi upload lên App Store Connect và cài qua TestFlight. Project đã bật iPad và đặt iOS Deployment Target 15.5 vì ML Kit yêu cầu tối thiểu phiên bản này.
+
+### Share Extension trên iPad
+
+Target `ShareExtension` làm Note Eryk xuất hiện trong Share Sheet của Files và Photos. Tệp được đưa vào App Group rồi app mở hộp thoại xem trước khi nhập. Trong Xcode:
+
+1. Chọn cùng một Apple Developer Team cho `Runner` và `ShareExtension`.
+2. Đăng ký App Group `group.com.example.noteeryk` trong Apple Developer và bật group này cho cả hai App ID.
+3. Nếu đổi bundle identifier, đổi đồng bộ bundle ID của extension, App Group và hằng `appGroup` trong hai file Swift.
+4. Xóa app cũ khỏi iPad rồi cài lại. Trong Files/Photos chọn Share → More nếu cần → bật **Nhập vào Note Eryk**.
+
+iPadOS không cho Share Extension tự mở app chứa nó; tệp đã chia sẻ sẽ được app nhận ở lần mở hoặc quay lại foreground kế tiếp.

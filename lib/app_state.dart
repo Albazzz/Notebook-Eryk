@@ -26,8 +26,8 @@ class AppState extends ChangeNotifier {
   bool autoSave = true;
   bool pressureEnabled = true;
   bool palmRejection = true;
-  bool touchWritingEnabled = false;
   bool doubleTapEraser = true;
+  double paperLineOpacity = .09;
   String studentName = 'Eryk';
   String jlpt = 'N3';
   String explanationLanguage = 'Tiếng Việt';
@@ -57,6 +57,8 @@ class AppState extends ChangeNotifier {
 
   /// Local images attached to a notebook page (page number -> file paths).
   final Map<String, Map<int, List<String>>> pageImages = {};
+  final Map<String, PageImagePlacement> imagePlacements = {};
+  int _imagePlacementSequence = 0;
   final Set<String> blankPages = {};
   final Map<String, String> sourceDocuments = {};
   List<WeakPoint> weakPoints = [];
@@ -70,8 +72,11 @@ class AppState extends ChangeNotifier {
     autoSave = prefs.getBool('autoSave') ?? true;
     pressureEnabled = prefs.getBool('pressureEnabled') ?? true;
     palmRejection = prefs.getBool('palmRejection') ?? true;
-    touchWritingEnabled = prefs.getBool('touchWritingEnabled') ?? false;
     doubleTapEraser = prefs.getBool('doubleTapEraser') ?? true;
+    paperLineOpacity = (prefs.getDouble('paperLineOpacity') ?? .09).clamp(
+      .03,
+      .35,
+    );
     studentName = prefs.getString('studentName') ?? 'Eryk';
     jlpt = prefs.getString('jlpt') ?? 'N3';
     explanationLanguage =
@@ -217,11 +222,22 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void updateNotebook(NotebookData notebook) {
+    final index = notebooks.indexWhere((item) => item.id == notebook.id);
+    if (index < 0) return;
+    notebooks[index] = notebook;
+    if (openNotebook?.id == notebook.id) openNotebook = notebook;
+    notifyListeners();
+  }
+
   void removeNotebook(String notebookId) {
     notebooks.removeWhere((item) => item.id == notebookId);
     strokes.remove(notebookId);
     pinnedNotes.remove(notebookId);
     pageImages.remove(notebookId);
+    imagePlacements.removeWhere(
+      (_, value) => value.id.startsWith('$notebookId:'),
+    );
     sourceDocuments.remove(notebookId);
     debugPrint('[NoteEryk][Library] removeNotebook $notebookId');
     notifyListeners();
@@ -248,9 +264,78 @@ class AppState extends ChangeNotifier {
   List<String> imagesForPage(String notebookId, int page) =>
       pageImages[notebookId]?[page] ?? const [];
 
-  void attachImages(String notebookId, int page, List<String> paths) {
+  void attachImages(
+    String notebookId,
+    int page,
+    List<String> paths, {
+    bool asPageBackground = true,
+  }) {
     if (paths.isEmpty) return;
-    pageImages.putIfAbsent(notebookId, () => {})[page] = List.of(paths);
+    final pagePaths = pageImages
+        .putIfAbsent(notebookId, () => {})
+        .putIfAbsent(page, () => []);
+    for (var index = 0; index < paths.length; index++) {
+      final path = paths[index];
+      if (!pagePaths.contains(path)) pagePaths.add(path);
+      final id =
+          '$notebookId:$page:${DateTime.now().microsecondsSinceEpoch}:${_imagePlacementSequence++}:$index';
+      final rect = asPageBackground
+          ? paths.length == 1
+                ? const Rect.fromLTWH(0, 0, 1, 1)
+                : Rect.fromLTWH(
+                    .02,
+                    index / paths.length + .01,
+                    .96,
+                    1 / paths.length - .02,
+                  )
+          : Rect.fromLTWH(
+              (.14 + index * .04).clamp(.02, .5),
+              (.16 + index * .04).clamp(.02, .5),
+              .68,
+              .46,
+            );
+      imagePlacements[id] = PageImagePlacement(
+        id: id,
+        path: path,
+        rect: rect,
+        isBackground: asPageBackground,
+      );
+    }
+    notifyListeners();
+  }
+
+  List<PageImagePlacement> imagePlacementsForPage(String notebookId, int page) {
+    final paths = imagesForPage(notebookId, page);
+    return imagePlacements.values
+        .where((item) => item.id.startsWith('$notebookId:$page:'))
+        .where((item) => paths.contains(item.path))
+        .toList();
+  }
+
+  void updateImagePlacement(PageImagePlacement placement) {
+    if (!imagePlacements.containsKey(placement.id)) return;
+    imagePlacements[placement.id] = placement;
+    notifyListeners();
+  }
+
+  void replacePageImage(
+    String notebookId,
+    int page,
+    PageImagePlacement placement,
+    String newPath,
+  ) {
+    final paths = pageImages[notebookId]?[page];
+    if (paths == null || !imagePlacements.containsKey(placement.id)) return;
+    final pathIndex = paths.indexOf(placement.path);
+    if (pathIndex >= 0) paths[pathIndex] = newPath;
+    imagePlacements[placement.id] = placement.copyWith(path: newPath);
+    notifyListeners();
+  }
+
+  void removePageImage(String notebookId, int page, String placementId) {
+    final placement = imagePlacements.remove(placementId);
+    if (placement == null) return;
+    pageImages[notebookId]?[page]?.remove(placement.path);
     notifyListeners();
   }
 
@@ -326,8 +411,8 @@ class AppState extends ChangeNotifier {
     await prefs.setBool('autoSave', autoSave);
     await prefs.setBool('pressureEnabled', pressureEnabled);
     await prefs.setBool('palmRejection', palmRejection);
-    await prefs.setBool('touchWritingEnabled', touchWritingEnabled);
     await prefs.setBool('doubleTapEraser', doubleTapEraser);
+    await prefs.setDouble('paperLineOpacity', paperLineOpacity);
     await prefs.setString(
       'studentName',
       studentName.trim().isEmpty ? 'Eryk' : studentName.trim(),
@@ -443,6 +528,13 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  void setModelForSlots(Iterable<AiModelSlot> slots, OpenRouterModel model) {
+    for (final slot in slots) {
+      setModelFor(slot, model);
+    }
+    notifyListeners();
+  }
+
   Future<void> rememberManualModel(
     String id, {
     String? name,
@@ -477,6 +569,12 @@ class AppState extends ChangeNotifier {
 
   void setThemeMode(ThemeMode mode) {
     themeMode = mode;
+    saveGeneralSettings();
+  }
+
+  void setPaperLineOpacity(double value) {
+    paperLineOpacity = value.clamp(.03, .35);
+    notifyListeners();
     saveGeneralSettings();
   }
 }

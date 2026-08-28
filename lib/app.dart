@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
 import 'app_state.dart';
+import 'models.dart';
 import 'screens/editor_screen.dart';
 import 'screens/library_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/weaknesses_screen.dart';
 import 'screens/dictionary_screen.dart';
+import 'shared_import_service.dart';
 import 'theme.dart';
 import 'widgets/app_sidebar.dart';
 
@@ -17,20 +19,48 @@ class NihongoNotebookApp extends StatefulWidget {
   State<NihongoNotebookApp> createState() => _NihongoNotebookAppState();
 }
 
-class _NihongoNotebookAppState extends State<NihongoNotebookApp> {
+class _NihongoNotebookAppState extends State<NihongoNotebookApp>
+    with WidgetsBindingObserver {
   late ThemeMode _themeMode;
+  final SharedImportService _sharedImport = SharedImportService();
+  List<String> _pendingSharedFiles = const [];
+  bool _checkingSharedFiles = false;
 
   @override
   void initState() {
     super.initState();
     _themeMode = widget.state.themeMode;
     widget.state.addListener(_onStateChanged);
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkSharedFiles());
   }
 
   @override
   void dispose() {
     widget.state.removeListener(_onStateChanged);
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _checkSharedFiles();
+  }
+
+  Future<void> _checkSharedFiles() async {
+    if (_checkingSharedFiles || _pendingSharedFiles.isNotEmpty) return;
+    _checkingSharedFiles = true;
+    final paths = await _sharedImport.pendingFiles();
+    _checkingSharedFiles = false;
+    if (!mounted || paths.isEmpty) return;
+    widget.state.goTo(AppDestination.library);
+    setState(() => _pendingSharedFiles = paths);
+  }
+
+  Future<void> _finishSharedImport(List<String> paths) async {
+    await _sharedImport.acknowledge(paths);
+    if (!mounted) return;
+    setState(() => _pendingSharedFiles = const []);
   }
 
   void _onStateChanged() {
@@ -54,15 +84,25 @@ class _NihongoNotebookAppState extends State<NihongoNotebookApp> {
                 state: widget.state,
                 notebook: widget.state.openNotebook!,
               )
-            : _AppShell(state: widget.state),
+            : _AppShell(
+                state: widget.state,
+                sharedFiles: _pendingSharedFiles,
+                onSharedFilesHandled: _finishSharedImport,
+              ),
       ),
     );
   }
 }
 
 class _AppShell extends StatelessWidget {
-  const _AppShell({required this.state});
+  const _AppShell({
+    required this.state,
+    required this.sharedFiles,
+    required this.onSharedFilesHandled,
+  });
   final AppState state;
+  final List<String> sharedFiles;
+  final ValueChanged<List<String>> onSharedFilesHandled;
 
   @override
   Widget build(BuildContext context) {
@@ -77,7 +117,11 @@ class _AppShell extends StatelessWidget {
           index: state.destination.index,
           sizing: StackFit.expand,
           children: [
-            LibraryScreen(state: state),
+            LibraryScreen(
+              state: state,
+              sharedFiles: sharedFiles,
+              onSharedFilesHandled: onSharedFilesHandled,
+            ),
             WeaknessesScreen(state: state),
             DictionaryScreen(state: state),
             SettingsScreen(state: state),
