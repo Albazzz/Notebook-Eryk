@@ -69,7 +69,7 @@ iPadOS không cho Share Extension tự mở app chứa nó; tệp đã chia sẻ
 Workflow Codemagic tạo `Notebook-Eryk-unsigned.ipa` để Sideloadly ký bằng Apple ID. Khi cài:
 
 1. Giữ **Remove app extensions** ở trạng thái tắt để `ShareExtension.appex` không bị xóa.
-2. Có thể dùng Automatic Bundle ID; app đọc App Group thực tế từ entitlement sau khi Sideloadly ký.
+2. Có thể dùng Automatic Bundle ID; app đọc App Group được cấp trong provisioning profile sau khi Sideloadly ký.
 3. Dùng lại cùng Apple ID và bundle ID khi auto-refresh để cập nhật đè lên bản cũ.
 4. Tài khoản miễn phí cần ký lại trong 7 ngày và Share Extension dùng thêm một App ID.
 

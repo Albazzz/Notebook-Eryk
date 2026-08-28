@@ -1,6 +1,5 @@
 import Flutter
 import Foundation
-import Security
 import UIKit
 
 final class SharedImportPlugin: NSObject, FlutterPlugin {
@@ -77,22 +76,47 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
       .appendingPathComponent(inboxName, isDirectory: true)
   }
 
-  /// Sideloadly may rewrite identifiers while signing. Read the effective
-  /// App Group entitlement from the signed process instead of assuming the
-  /// identifier embedded in the unsigned project is still unchanged.
+  /// Sideloadly may rewrite identifiers while signing. Read the App Group
+  /// from the signed provisioning profile instead of assuming the identifier
+  /// embedded in the unsigned project is still unchanged.
   private static var resolvedAppGroup: String {
-    guard let task = SecTaskCreateFromSelf(nil),
-          let value = SecTaskCopyValueForEntitlement(
-            task,
-            "com.apple.security.application-groups" as CFString,
-            nil
-          ) as? [String],
-          !value.isEmpty else {
-      return fallbackAppGroup
+    for group in provisionedAppGroups {
+      if FileManager.default.containerURL(
+        forSecurityApplicationGroupIdentifier: group
+      ) != nil {
+        return group
+      }
     }
-    return value.first {
-      $0.localizedCaseInsensitiveContains("noteeryk")
-    } ?? value[0]
+    return fallbackAppGroup
+  }
+
+  /// The signed provisioning profile is present after Sideloadly re-signs the
+  /// IPA. Reading its plist payload avoids relying on SecTask APIs, which are
+  /// unavailable to iOS app-extension targets.
+  private static var provisionedAppGroups: [String] {
+    guard let profileURL = Bundle.main.url(
+      forResource: "embedded",
+      withExtension: "mobileprovision"
+    ),
+    let profileData = try? Data(contentsOf: profileURL),
+    let plistStart = profileData.range(of: Data("<plist".utf8)),
+    let plistEnd = profileData.range(of: Data("</plist>".utf8)),
+    plistEnd.upperBound > plistStart.lowerBound else {
+      return []
+    }
+
+    let plistData = Data(profileData[plistStart.lowerBound..<plistEnd.upperBound])
+    guard let profile = try? PropertyListSerialization.propertyList(
+      from: plistData,
+      options: [],
+      format: nil
+    ) as? [String: Any],
+    let entitlements = profile["Entitlements"] as? [String: Any],
+    let groups = entitlements["com.apple.security.application-groups"] as? [String]
+    else {
+      return []
+    }
+    return groups
   }
 
   private static func pendingFiles() -> [String] {
