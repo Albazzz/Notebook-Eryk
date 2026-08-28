@@ -21,6 +21,7 @@ class LibraryScreen extends StatefulWidget {
 class _LibraryScreenState extends State<LibraryScreen> {
   String filter = 'Tất cả';
   String search = '';
+  bool gridView = true;
 
   @override
   Widget build(BuildContext context) {
@@ -51,9 +52,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   onChanged: (value) => setState(() => search = value),
                 ),
                 IconButton.filledTonal(
-                  onPressed: () {},
-                  icon: const Icon(Icons.grid_view_rounded),
-                  tooltip: 'Dạng lưới',
+                  onPressed: () => setState(() => gridView = !gridView),
+                  icon: Icon(
+                    gridView
+                        ? Icons.grid_view_rounded
+                        : Icons.view_list_rounded,
+                  ),
+                  tooltip: gridView ? 'Dạng lưới' : 'Dạng danh sách',
                 ),
                 FilledButton.icon(
                   onPressed: () => _showCreateSheet(context),
@@ -90,6 +95,23 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     : constraints.maxWidth >= 470
                     ? 2
                     : 1;
+                if (!gridView) {
+                  return ListView.separated(
+                    padding: const EdgeInsets.only(bottom: 32),
+                    itemCount: notebooks.length + 1,
+                    separatorBuilder: (_, _) => const SizedBox(height: 14),
+                    itemBuilder: (context, index) => SizedBox(
+                      height: 245,
+                      child: index == notebooks.length
+                          ? _CreateCard(onTap: () => _showCreateSheet(context))
+                          : _NotebookCard(
+                              notebook: notebooks[index],
+                              onTap: () => widget.state.open(notebooks[index]),
+                              onMenu: () => _showNotebookMenu(notebooks[index]),
+                            ),
+                    ),
+                  );
+                }
                 return GridView.builder(
                   padding: const EdgeInsets.only(bottom: 32),
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(

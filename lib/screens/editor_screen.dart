@@ -34,6 +34,8 @@ class _EditorScreenState extends State<EditorScreen> {
   bool railOpen = true;
   bool rulerVisible = false;
   bool pageLocked = false;
+  bool annotationsVisible = true;
+  int pageRotation = 0;
   double zoom = 1;
   late List<InkStroke> strokes;
   final List<InkStroke> redo = [];
@@ -421,13 +423,12 @@ class _EditorScreenState extends State<EditorScreen> {
             ),
             const SizedBox(width: 6),
             IconButton(
-              onPressed: () {},
+              onPressed: _showNotebookSearch,
               icon: const Icon(Icons.search_rounded),
               tooltip: 'Tìm trong vở',
             ),
             IconButton(
-              onPressed: () =>
-                  showAppSnack(context, 'Đã sẵn sàng xuất bản có ghi chú'),
+              onPressed: _shareNotebook,
               icon: const Icon(Icons.ios_share_rounded),
               tooltip: 'Chia sẻ',
             ),
@@ -435,16 +436,29 @@ class _EditorScreenState extends State<EditorScreen> {
               tooltip: 'Tùy chọn trang',
               icon: const Icon(Icons.more_horiz),
               onSelected: (value) {
-                final message = switch (value) {
-                  'hide' => 'Đã ẩn annotation',
-                  'rotate' => 'Xoay trang đang sẵn sàng',
-                  'export' => 'Xuất PDF có ghi chú đang sẵn sàng',
-                  _ => 'Đã chọn tùy chọn',
-                };
-                showAppSnack(context, message);
+                switch (value) {
+                  case 'hide':
+                    setState(() => annotationsVisible = !annotationsVisible);
+                    showAppSnack(
+                      context,
+                      annotationsVisible
+                          ? 'Đã hiện annotations'
+                          : 'Đã ẩn annotations',
+                    );
+                  case 'rotate':
+                    setState(() => pageRotation = (pageRotation + 1) % 4);
+                    showAppSnack(context, 'Đã xoay trang');
+                  case 'export':
+                    _exportCurrentPage();
+                }
               },
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'hide', child: Text('Ẩn annotations')),
+              itemBuilder: (_) => [
+                PopupMenuItem(
+                  value: 'hide',
+                  child: Text(
+                    annotationsVisible ? 'Ẩn annotations' : 'Hiện annotations',
+                  ),
+                ),
                 PopupMenuItem(value: 'rotate', child: Text('Xoay trang')),
                 PopupMenuItem(
                   value: 'export',
@@ -612,6 +626,129 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
+  Future<void> _showNotebookSearch() async {
+    final controller = TextEditingController();
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final query = controller.text.trim().toLowerCase();
+          final pages = List<int>.generate(widget.notebook.pages, (i) => i + 1)
+              .where(
+                (page) =>
+                    query.isEmpty ||
+                    '$page'.contains(query) ||
+                    widget.notebook.title.toLowerCase().contains(query),
+              )
+              .take(30)
+              .toList();
+          return AlertDialog(
+            title: const Text('Tìm trong vở'),
+            content: SizedBox(
+              width: 420,
+              height: 360,
+              child: Column(
+                children: [
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    onChanged: (_) => setDialogState(() {}),
+                    decoration: const InputDecoration(
+                      hintText: 'Nhập số trang hoặc tên vở',
+                      prefixIcon: Icon(Icons.search_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: pages.isEmpty
+                        ? const Center(child: Text('Không tìm thấy trang'))
+                        : ListView.builder(
+                            itemCount: pages.length,
+                            itemBuilder: (_, index) => ListTile(
+                              leading: const Icon(Icons.description_outlined),
+                              title: Text('Trang ${pages[index]}'),
+                              subtitle: Text(widget.notebook.title),
+                              onTap: () {
+                                widget.state.goToPage(pages[index]);
+                                Navigator.pop(dialogContext);
+                              },
+                            ),
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Đóng'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    controller.dispose();
+  }
+
+  Future<void> _shareNotebook() async {
+    final details =
+        '${widget.notebook.title}\nTrang ${widget.state.openPage}/${widget.notebook.pages}';
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.copy_all_outlined),
+              title: const Text('Sao chép thông tin trang'),
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: details));
+                Navigator.pop(context);
+                showAppSnack(this.context, 'Đã sao chép thông tin trang');
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.image_outlined),
+              title: const Text('Xuất ảnh trang hiện tại'),
+              onTap: () {
+                Navigator.pop(context);
+                _exportCurrentPage();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _exportCurrentPage() async {
+    try {
+      final boundary =
+          _pageBoundaryKey.currentContext?.findRenderObject()
+              as RenderRepaintBoundary?;
+      if (boundary == null) throw const FormatException('Không thể chụp trang');
+      final image = await boundary.toImage(pixelRatio: 2);
+      final bytes = await image.toByteData(format: ImageByteFormat.png);
+      image.dispose();
+      if (bytes == null) throw const FormatException('Không thể tạo ảnh');
+      final directory = await getApplicationDocumentsDirectory();
+      final exportDirectory = Directory(
+        '${directory.path}${Platform.pathSeparator}exports',
+      );
+      await exportDirectory.create(recursive: true);
+      final path =
+          '${exportDirectory.path}${Platform.pathSeparator}${widget.notebook.id}_page_${widget.state.openPage}.png';
+      await File(path).writeAsBytes(bytes.buffer.asUint8List(), flush: true);
+      if (mounted) showAppSnack(context, 'Đã xuất ảnh trang hiện tại');
+    } catch (exception) {
+      if (mounted) showAppSnack(context, _friendlyError(exception));
+    }
+  }
+
   Widget _buildWorkspace() {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -629,126 +766,134 @@ class _EditorScreenState extends State<EditorScreen> {
               child: SizedBox(
                 width: targetWidth,
                 height: targetHeight,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: AppColors.paper,
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x24000000),
-                        blurRadius: 20,
-                        offset: Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: ClipRect(
-                    child: Listener(
-                      behavior: HitTestBehavior.opaque,
-                      onPointerDown: _onPointerDown,
-                      onPointerMove: _onPointerMove,
-                      onPointerUp: _onPointerUp,
-                      onPointerCancel: _onPointerCancel,
-                      child: Stack(
-                        children: [
-                          Positioned.fill(
-                            child: RepaintBoundary(
-                              key: _pageBoundaryKey,
-                              child: Stack(
-                                fit: StackFit.expand,
-                                children: [
-                                  CustomPaint(
-                                    painter: _PaperPainter(
-                                      style: widget.notebook.paperStyle,
-                                      isPdf:
-                                          widget.notebook.isPdf &&
-                                          !widget.state.blankPages.contains(
-                                            '${widget.notebook.id}:${widget.state.openPage}',
-                                          ),
-                                    ),
-                                  ),
-                                  if (widget.notebook.isPdf &&
-                                      !widget.state.blankPages.contains(
-                                        '${widget.notebook.id}:${widget.state.openPage}',
-                                      ))
-                                    _PrintedPage(isPdf: true),
-                                  if (widget.state
-                                      .imagesForPage(
-                                        widget.notebook.id,
-                                        widget.state.openPage,
-                                      )
-                                      .isNotEmpty)
-                                    Positioned.fill(
-                                      child: _PageImageLayer(
-                                        paths: widget.state.imagesForPage(
-                                          widget.notebook.id,
-                                          widget.state.openPage,
-                                        ),
+                child: Transform.rotate(
+                  angle: pageRotation * math.pi / 2,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: AppColors.paper,
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x24000000),
+                          blurRadius: 20,
+                          offset: Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: ClipRect(
+                      child: Listener(
+                        behavior: HitTestBehavior.opaque,
+                        onPointerDown: _onPointerDown,
+                        onPointerMove: _onPointerMove,
+                        onPointerUp: _onPointerUp,
+                        onPointerCancel: _onPointerCancel,
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              child: RepaintBoundary(
+                                key: _pageBoundaryKey,
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    CustomPaint(
+                                      painter: _PaperPainter(
+                                        style: widget.notebook.paperStyle,
+                                        isPdf:
+                                            widget.notebook.isPdf &&
+                                            !widget.state.blankPages.contains(
+                                              '${widget.notebook.id}:${widget.state.openPage}',
+                                            ),
                                       ),
                                     ),
-                                  CustomPaint(
-                                    painter: _InkPainter(
-                                      strokes: strokes,
-                                      activePoints: activePoints,
-                                      activeColor:
-                                          tool == EditorTool.highlighter
-                                          ? highlightColor.withValues(
-                                              alpha: highlightOpacity,
-                                            )
-                                          : penColor.withValues(
-                                              alpha: penOpacity,
-                                            ),
-                                      activeWidth:
-                                          tool == EditorTool.highlighter
-                                          ? highlightWidth
-                                          : penWidth,
-                                      selectionStart: null,
-                                      selectionEnd: null,
-                                      selectionTool: tool,
-                                      sourcePulse: false,
-                                    ),
-                                  ),
-                                  if (rulerVisible)
-                                    const Positioned(
-                                      left: 70,
-                                      right: 40,
-                                      top: 350,
-                                      child: _Ruler(),
-                                    ),
-                                  ...widget
-                                          .state
-                                          .pinnedNotes[widget.notebook.id]
-                                          ?.asMap()
-                                          .entries
-                                          .map(
-                                            (entry) => Positioned(
-                                              right: 22,
-                                              bottom: 30 + entry.key * 110,
-                                              child: _PinnedNoteCard(
-                                                note: entry.value,
+                                    if (widget.notebook.isPdf &&
+                                        !widget.state.blankPages.contains(
+                                          '${widget.notebook.id}:${widget.state.openPage}',
+                                        ))
+                                      _PrintedPage(isPdf: true),
+                                    if (widget.state
+                                        .imagesForPage(
+                                          widget.notebook.id,
+                                          widget.state.openPage,
+                                        )
+                                        .isNotEmpty)
+                                      Positioned.fill(
+                                        child: _PageImageLayer(
+                                          paths: widget.state.imagesForPage(
+                                            widget.notebook.id,
+                                            widget.state.openPage,
+                                          ),
+                                        ),
+                                      ),
+                                    CustomPaint(
+                                      painter: _InkPainter(
+                                        strokes: strokes,
+                                        activePoints: activePoints,
+                                        activeColor:
+                                            tool == EditorTool.highlighter
+                                            ? highlightColor.withValues(
+                                                alpha: highlightOpacity,
+                                              )
+                                            : penColor.withValues(
+                                                alpha: penOpacity,
                                               ),
-                                            ),
-                                          ) ??
-                                      const [],
-                                ],
-                              ),
-                            ),
-                          ),
-                          Positioned.fill(
-                            child: IgnorePointer(
-                              child: CustomPaint(
-                                painter: _InkPainter(
-                                  strokes: const [],
-                                  activePoints: null,
-                                  activeColor: Colors.transparent,
-                                  activeWidth: 0,
-                                  selectionStart: selectionStart,
-                                  selectionEnd: selectionEnd,
-                                  selectionTool: tool,
-                                  sourcePulse: widget.state.focusSource,
+                                        activeWidth:
+                                            tool == EditorTool.highlighter
+                                            ? highlightWidth
+                                            : penWidth,
+                                        selectionStart: null,
+                                        selectionEnd: null,
+                                        selectionTool: tool,
+                                        sourcePulse: false,
+                                      ),
+                                    ),
+                                    if (rulerVisible)
+                                      const Positioned(
+                                        left: 70,
+                                        right: 40,
+                                        top: 350,
+                                        child: _Ruler(),
+                                      ),
+                                    ...(annotationsVisible
+                                        ? widget
+                                                  .state
+                                                  .pinnedNotes[widget
+                                                      .notebook
+                                                      .id]
+                                                  ?.asMap()
+                                                  .entries
+                                                  .map(
+                                                    (entry) => Positioned(
+                                                      right: 22,
+                                                      bottom:
+                                                          30 + entry.key * 110,
+                                                      child: _PinnedNoteCard(
+                                                        note: entry.value,
+                                                      ),
+                                                    ),
+                                                  ) ??
+                                              const []
+                                        : const []),
+                                  ],
                                 ),
                               ),
                             ),
-                          ),
-                        ],
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: CustomPaint(
+                                  painter: _InkPainter(
+                                    strokes: const [],
+                                    activePoints: null,
+                                    activeColor: Colors.transparent,
+                                    activeWidth: 0,
+                                    selectionStart: selectionStart,
+                                    selectionEnd: selectionEnd,
+                                    selectionTool: tool,
+                                    sourcePulse: widget.state.focusSource,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
