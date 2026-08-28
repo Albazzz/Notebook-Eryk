@@ -2098,7 +2098,7 @@ class _PageRail extends StatelessWidget {
           child: OutlinedButton.icon(
             onPressed: onAddPage,
             icon: const Icon(Icons.add, size: 18),
-            label: const Text('Trang'),
+            label: const Text('Thêm trang'),
           ),
         ),
       ],
