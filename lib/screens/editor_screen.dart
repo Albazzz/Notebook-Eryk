@@ -2340,6 +2340,7 @@ class _PageRail extends StatelessWidget {
                         child: Column(
                           children: [
                             Container(
+                              width: double.infinity,
                               height: 112,
                               decoration: BoxDecoration(
                                 color: AppColors.paper,
