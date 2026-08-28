@@ -105,6 +105,7 @@ class _EditorScreenState extends State<EditorScreen> {
                       currentPage: widget.state.openPage,
                       pageCount: widget.notebook.pages,
                       onPageSelected: widget.state.goToPage,
+                      onAddPage: _askCreatePage,
                       onClose: () => setState(() => railOpen = false),
                     ),
                   Expanded(
@@ -1990,11 +1991,13 @@ class _PageRail extends StatelessWidget {
     required this.currentPage,
     required this.pageCount,
     required this.onPageSelected,
+    required this.onAddPage,
     required this.onClose,
   });
   final int currentPage;
   final int pageCount;
   final ValueChanged<int> onPageSelected;
+  final VoidCallback onAddPage;
   final VoidCallback onClose;
   @override
   Widget build(BuildContext context) => Container(
@@ -2093,7 +2096,7 @@ class _PageRail extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.all(12),
           child: OutlinedButton.icon(
-            onPressed: () {},
+            onPressed: onAddPage,
             icon: const Icon(Icons.add, size: 18),
             label: const Text('Trang'),
           ),
