@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
 import 'services.dart';
+import 'widgets/common.dart';
 
 class AppState extends ChangeNotifier {
   static const _keyStorageName = 'openrouter_api_key';
@@ -24,6 +25,7 @@ class AppState extends ChangeNotifier {
   bool focusSource = false;
   ThemeMode themeMode = ThemeMode.light;
   bool autoSave = true;
+  bool showSnackbars = true;
   bool pressureEnabled = true;
   bool palmRejection = true;
   bool doubleTapEraser = true;
@@ -42,6 +44,10 @@ class AppState extends ChangeNotifier {
   bool aiConnected = false;
   List<OpenRouterModel> availableModels = [];
   String _apiKey = '';
+
+  AppState() {
+    configureAppSnackbars(showSnackbars);
+  }
 
   @override
   void dispose() {
@@ -70,6 +76,8 @@ class AppState extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     themeMode = ThemeMode.values[prefs.getInt('themeMode') ?? 1];
     autoSave = prefs.getBool('autoSave') ?? true;
+    showSnackbars = prefs.getBool('showSnackbars') ?? true;
+    configureAppSnackbars(showSnackbars);
     pressureEnabled = prefs.getBool('pressureEnabled') ?? true;
     palmRejection = prefs.getBool('palmRejection') ?? true;
     doubleTapEraser = prefs.getBool('doubleTapEraser') ?? true;
@@ -421,6 +429,7 @@ class AppState extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('themeMode', themeMode.index);
     await prefs.setBool('autoSave', autoSave);
+    await prefs.setBool('showSnackbars', showSnackbars);
     await prefs.setBool('pressureEnabled', pressureEnabled);
     await prefs.setBool('palmRejection', palmRejection);
     await prefs.setBool('doubleTapEraser', doubleTapEraser);
@@ -586,6 +595,13 @@ class AppState extends ChangeNotifier {
 
   void setPaperLineOpacity(double value) {
     paperLineOpacity = value.clamp(.03, .35);
+    notifyListeners();
+    saveGeneralSettings();
+  }
+
+  void setShowSnackbars(bool value) {
+    showSnackbars = value;
+    configureAppSnackbars(value);
     notifyListeners();
     saveGeneralSettings();
   }

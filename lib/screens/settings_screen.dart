@@ -186,6 +186,20 @@ class _GeneralSettings extends StatelessWidget {
                 state.saveGeneralSettings();
               },
             ),
+            const Divider(),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              secondary: const Icon(Icons.notifications_none_rounded),
+              title: const Text(
+                'Thông báo nhanh',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: const Text(
+                'Tắt các popup thông báo nhỏ ở cuối màn hình',
+              ),
+              value: state.showSnackbars,
+              onChanged: state.setShowSnackbars,
+            ),
           ],
         ),
       ),

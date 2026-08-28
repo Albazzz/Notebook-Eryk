@@ -37,6 +37,15 @@ class PageHeader extends StatelessWidget {
   }
 }
 
+/// Global UI preference used by all screens for the lightweight bottom
+/// notifications. The app has one AppState, while SnackBars are triggered
+/// from several independent widgets.
+bool appSnackbarsEnabled = true;
+
+void configureAppSnackbars(bool enabled) {
+  appSnackbarsEnabled = enabled;
+}
+
 class SearchBox extends StatelessWidget {
   const SearchBox({
     super.key,
@@ -86,6 +95,7 @@ void showAppSnack(
   String? actionLabel,
   VoidCallback? onAction,
 }) {
+  if (!appSnackbarsEnabled) return;
   ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(
       content: Text(message),
