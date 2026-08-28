@@ -76,7 +76,7 @@ class AppSidebar extends StatelessWidget {
                 color: Theme.of(context).colorScheme.surface,
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: const Row(
+              child: Row(
                 children: [
                   CircleAvatar(
                     backgroundColor: Color(0xffdce1ff),
@@ -88,11 +88,11 @@ class AppSidebar extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Học viên Zen',
+                          'Học viên ${state.studentName}',
                           style: TextStyle(fontWeight: FontWeight.w700),
                         ),
                         Text(
-                          'Lưu cục bộ · N3',
+                          'Lưu cục bộ · ${state.jlpt}',
                           style: TextStyle(fontSize: 11, color: Colors.grey),
                         ),
                       ],

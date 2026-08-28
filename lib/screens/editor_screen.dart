@@ -55,10 +55,12 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _resultEditing = false;
   double _resultWidth = 410;
   double _resultHeight = 530;
+  double _resultOpacity = 1;
   double _resultEditRight = 24;
   double _resultEditTop = 24;
   double _resultEditWidth = 410;
   double _resultEditHeight = 530;
+  double _resultEditOpacity = 1;
   final TextEditingController _quickDictionaryController =
       TextEditingController();
   final FocusNode _quickDictionaryFocus = FocusNode();
@@ -72,10 +74,12 @@ class _EditorScreenState extends State<EditorScreen> {
   double _quickTop = 24;
   double _quickWidth = 390;
   double _quickHeight = 520;
+  double _quickOpacity = 1;
   double _quickEditRight = 24;
   double _quickEditTop = 24;
   double _quickEditWidth = 390;
   double _quickEditHeight = 520;
+  double _quickEditOpacity = 1;
 
   @override
   void initState() {
@@ -108,6 +112,7 @@ class _EditorScreenState extends State<EditorScreen> {
       _resultEditTop = _resultTop;
       _resultEditWidth = _resultWidth;
       _resultEditHeight = _resultHeight;
+      _resultEditOpacity = _resultOpacity;
     });
   }
 
@@ -117,6 +122,7 @@ class _EditorScreenState extends State<EditorScreen> {
       _resultTop = _resultEditTop;
       _resultWidth = _resultEditWidth;
       _resultHeight = _resultEditHeight;
+      _resultOpacity = _resultEditOpacity;
       _resultEditing = false;
     });
   }
@@ -164,6 +170,7 @@ class _EditorScreenState extends State<EditorScreen> {
       _quickEditTop = _quickTop;
       _quickEditWidth = _quickWidth;
       _quickEditHeight = _quickHeight;
+      _quickEditOpacity = _quickOpacity;
     });
   }
 
@@ -173,6 +180,7 @@ class _EditorScreenState extends State<EditorScreen> {
       _quickTop = _quickEditTop;
       _quickWidth = _quickEditWidth;
       _quickHeight = _quickEditHeight;
+      _quickOpacity = _quickEditOpacity;
       _quickDictionaryEditing = false;
     });
   }
@@ -292,6 +300,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                     result: result!,
                                     width: _resultWidth,
                                     height: _resultHeight,
+                                    opacity: _resultOpacity,
                                     editing: _resultEditing,
                                     onClose: () =>
                                         setState(() => result = null),
@@ -302,6 +311,8 @@ class _EditorScreenState extends State<EditorScreen> {
                                     onConfirmEdit: _confirmResultEdit,
                                     onDrag: _moveResult,
                                     onResize: _resizeResult,
+                                    onOpacityChanged: (value) =>
+                                        setState(() => _resultOpacity = value),
                                   ),
                                 ),
                               if (_quickDictionaryOpen)
@@ -319,12 +330,15 @@ class _EditorScreenState extends State<EditorScreen> {
                                     onClose: _toggleQuickDictionary,
                                     width: _quickWidth,
                                     height: _quickHeight,
+                                    opacity: _quickOpacity,
                                     editing: _quickDictionaryEditing,
                                     onEdit: _beginQuickDictionaryEdit,
                                     onCancelEdit: _cancelQuickDictionaryEdit,
                                     onConfirmEdit: _confirmQuickDictionaryEdit,
                                     onDrag: _moveQuickDictionary,
                                     onResize: _resizeQuickDictionary,
+                                    onOpacityChanged: (value) =>
+                                        setState(() => _quickOpacity = value),
                                   ),
                                 ),
                               Positioned(
@@ -2676,12 +2690,14 @@ class _QuickDictionaryCard extends StatelessWidget {
     required this.onClose,
     required this.width,
     required this.height,
+    required this.opacity,
     required this.editing,
     required this.onEdit,
     required this.onCancelEdit,
     required this.onConfirmEdit,
     required this.onDrag,
     required this.onResize,
+    required this.onOpacityChanged,
   });
 
   final TextEditingController controller;
@@ -2694,12 +2710,14 @@ class _QuickDictionaryCard extends StatelessWidget {
   final VoidCallback onClose;
   final double width;
   final double height;
+  final double opacity;
   final bool editing;
   final VoidCallback onEdit;
   final VoidCallback onCancelEdit;
   final VoidCallback onConfirmEdit;
   final ValueChanged<Offset> onDrag;
   final ValueChanged<Offset> onResize;
+  final ValueChanged<double> onOpacityChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -2713,7 +2731,7 @@ class _QuickDictionaryCard extends StatelessWidget {
         .toDouble();
     return Material(
       elevation: 12,
-      color: Theme.of(context).colorScheme.surface,
+      color: Theme.of(context).colorScheme.surface.withValues(alpha: opacity),
       borderRadius: BorderRadius.circular(20),
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
@@ -2774,6 +2792,20 @@ class _QuickDictionaryCard extends StatelessWidget {
                     'Kana · Kanji · Hán Việt · nghĩa tiếng Việt',
                     style: TextStyle(fontSize: 11, color: Colors.grey),
                   ),
+                  if (editing)
+                    Row(
+                      children: [
+                        const Text('Đậm/nhạt', style: TextStyle(fontSize: 11)),
+                        Expanded(
+                          child: Slider(
+                            value: opacity,
+                            min: .35,
+                            max: 1,
+                            onChanged: onOpacityChanged,
+                          ),
+                        ),
+                      ],
+                    ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: controller,
@@ -2905,6 +2937,7 @@ class _ResultCard extends StatelessWidget {
     required this.result,
     required this.width,
     required this.height,
+    required this.opacity,
     required this.editing,
     required this.onClose,
     required this.onPin,
@@ -2914,10 +2947,12 @@ class _ResultCard extends StatelessWidget {
     required this.onConfirmEdit,
     required this.onDrag,
     required this.onResize,
+    required this.onOpacityChanged,
   });
   final _SmartResult result;
   final double width;
   final double height;
+  final double opacity;
   final bool editing;
   final VoidCallback onClose;
   final VoidCallback onPin;
@@ -2927,6 +2962,7 @@ class _ResultCard extends StatelessWidget {
   final VoidCallback onConfirmEdit;
   final ValueChanged<Offset> onDrag;
   final ValueChanged<Offset> onResize;
+  final ValueChanged<double> onOpacityChanged;
   @override
   Widget build(BuildContext context) {
     final screen = MediaQuery.sizeOf(context);
@@ -2949,7 +2985,9 @@ class _ResultCard extends StatelessWidget {
             ),
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
+              color: Theme.of(
+                context,
+              ).colorScheme.surface.withValues(alpha: opacity),
               borderRadius: BorderRadius.circular(20),
             ),
             child: SingleChildScrollView(
@@ -3020,6 +3058,20 @@ class _ResultCard extends StatelessWidget {
                       style: TextStyle(fontSize: 10, color: Colors.grey),
                     ),
                   ),
+                  if (editing)
+                    Row(
+                      children: [
+                        const Text('Đậm/nhạt', style: TextStyle(fontSize: 11)),
+                        Expanded(
+                          child: Slider(
+                            value: opacity,
+                            min: .35,
+                            max: 1,
+                            onChanged: onOpacityChanged,
+                          ),
+                        ),
+                      ],
+                    ),
                   if (result.dictionaryEntry != null)
                     Wrap(
                       spacing: 8,

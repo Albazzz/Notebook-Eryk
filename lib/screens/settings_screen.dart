@@ -165,6 +165,43 @@ class _GeneralSettings extends StatelessWidget {
           ],
         ),
       ),
+      const SizedBox(height: 18),
+      SectionCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Hồ sơ hiển thị',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              initialValue: state.studentName,
+              decoration: const InputDecoration(
+                labelText: 'Tên học viên',
+                hintText: 'Ví dụ: Eryk',
+              ),
+              onChanged: (value) => state.studentName = value,
+              onEditingComplete: state.saveGeneralSettings,
+            ),
+            const SizedBox(height: 16),
+            const _FieldLabel('TRÌNH ĐỘ HIỂN THỊ'),
+            const SizedBox(height: 8),
+            SegmentedButton<String>(
+              segments: const ['N5', 'N4', 'N3', 'N2', 'N1']
+                  .map(
+                    (value) => ButtonSegment(value: value, label: Text(value)),
+                  )
+                  .toList(),
+              selected: {state.jlpt},
+              onSelectionChanged: (value) {
+                state.jlpt = value.first;
+                state.saveGeneralSettings();
+              },
+            ),
+          ],
+        ),
+      ),
     ],
   );
 }

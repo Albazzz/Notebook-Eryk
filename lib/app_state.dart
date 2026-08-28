@@ -28,6 +28,7 @@ class AppState extends ChangeNotifier {
   bool palmRejection = true;
   bool touchWritingEnabled = false;
   bool doubleTapEraser = true;
+  String studentName = 'Eryk';
   String jlpt = 'N3';
   String explanationLanguage = 'Tiếng Việt';
   String selectedModelId = '';
@@ -71,6 +72,7 @@ class AppState extends ChangeNotifier {
     palmRejection = prefs.getBool('palmRejection') ?? true;
     touchWritingEnabled = prefs.getBool('touchWritingEnabled') ?? false;
     doubleTapEraser = prefs.getBool('doubleTapEraser') ?? true;
+    studentName = prefs.getString('studentName') ?? 'Eryk';
     jlpt = prefs.getString('jlpt') ?? 'N3';
     explanationLanguage =
         prefs.getString('explanationLanguage') ?? 'Tiếng Việt';
@@ -326,6 +328,11 @@ class AppState extends ChangeNotifier {
     await prefs.setBool('palmRejection', palmRejection);
     await prefs.setBool('touchWritingEnabled', touchWritingEnabled);
     await prefs.setBool('doubleTapEraser', doubleTapEraser);
+    await prefs.setString(
+      'studentName',
+      studentName.trim().isEmpty ? 'Eryk' : studentName.trim(),
+    );
+    await prefs.setString('jlpt', jlpt);
     notifyListeners();
   }
 
