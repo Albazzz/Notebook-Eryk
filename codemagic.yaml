@@ -157,8 +157,10 @@ workflows:
           cd build/ios/ipa
           ditto -c -k --sequesterRsrc --keepParent Payload Notebook-Eryk-unsigned.ipa
           unzip -t Notebook-Eryk-unsigned.ipa
-          zipinfo -1 Notebook-Eryk-unsigned.ipa \
-            | grep -q '^Payload/Runner.app/PlugIns/ShareExtension.appex/Info.plist$'
+          zipinfo -1 Notebook-Eryk-unsigned.ipa > zip-contents.txt
+          grep -qx \
+            '^Payload/Runner.app/PlugIns/ShareExtension.appex/Info.plist$' \
+            zip-contents.txt
           cd "$CM_BUILD_DIR"
           python3 tool/validate_ios_ipa.py \
             build/ios/ipa/Notebook-Eryk-unsigned.ipa
