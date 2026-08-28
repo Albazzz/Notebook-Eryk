@@ -1,0 +1,662 @@
+@startchen JLAS_ALL_ENTITIES
+title J-LAS - Entity Interaction Diagram
+
+left to right direction
+
+<style>
+chenEerDiagram {
+  chenEntity {
+    BackGroundColor #D9EAD3
+    LineColor #6AA84F
+    FontColor #1F2937
+  }
+  chenRelationship {
+    BackGroundColor #FFF2CC
+    LineColor #E6A100
+    FontColor #1F2937
+  }
+}
+</style>
+
+' =============================================================================
+' ENTITIES / TABLES
+' =============================================================================
+
+' Accounts, billing and AI conversations
+entity "users" as USERS {}
+entity "roles" as ROLES {}
+entity "premium_plans" as PREMIUM_PLANS {}
+entity "payments" as PAYMENTS {}
+entity "auth_tokens" as AUTH_TOKENS {}
+entity "category" as CATEGORY {}
+entity "scenario_role" as SCENARIO_ROLE {}
+entity "prompt_template" as PROMPT_TEMPLATE {}
+entity "scenario" as SCENARIO {}
+entity "evaluation_rule" as EVALUATION_RULE {}
+entity "scenario_evaluation_rule" as SCENARIO_EVALUATION_RULE {}
+entity "conversation_session" as CONVERSATION_SESSION {}
+
+' Dictionary and curriculum
+entity "tag" as TAG {}
+entity "radical" as RADICAL {}
+entity "kanji" as KANJI {}
+entity "kanji_reading" as KANJI_READING {}
+entity "vocabulary_entry" as VOCABULARY_ENTRY {}
+entity "vocabulary_reading" as VOCABULARY_READING {}
+entity "vocabulary_variant" as VOCABULARY_VARIANT {}
+entity "vocabulary_kanji" as VOCABULARY_KANJI {}
+entity "vocabulary_sense" as VOCABULARY_SENSE {}
+entity "vocabulary_gloss" as VOCABULARY_GLOSS {}
+entity "dictionary_part_of_speech" as DICTIONARY_PART_OF_SPEECH {}
+entity "sense_part_of_speech" as SENSE_PART_OF_SPEECH {}
+entity "dictionary_domain" as DICTIONARY_DOMAIN {}
+entity "sense_domain" as SENSE_DOMAIN {}
+entity "dictionary_search_history" as DICTIONARY_SEARCH_HISTORY {}
+entity "dictionary_favorite" as DICTIONARY_FAVORITE {}
+entity "textbook" as TEXTBOOK {}
+entity "unit" as UNIT {}
+entity "lesson" as LESSON {}
+entity "lesson_tag" as LESSON_TAG {}
+entity "lesson_section" as LESSON_SECTION {}
+entity "content_item" as CONTENT_ITEM {}
+entity "grammar_point" as GRAMMAR_POINT {}
+entity "content_vocabulary" as CONTENT_VOCABULARY {}
+entity "conversion_rule" as CONVERSION_RULE {}
+entity "rule_pattern" as RULE_PATTERN {}
+entity "rule_example" as RULE_EXAMPLE {}
+
+' Assessment and personalization
+entity "assessment_quiz" as ASSESSMENT_QUIZ {}
+entity "assessment_question" as ASSESSMENT_QUESTION {}
+entity "question_tag" as QUESTION_TAG {}
+entity "assessment_question_pair" as ASSESSMENT_QUESTION_PAIR {}
+entity "assessment_quiz_question" as ASSESSMENT_QUIZ_QUESTION {}
+entity "jlpt_exam" as JLPT_EXAM {}
+entity "jlpt_exam_section" as JLPT_EXAM_SECTION {}
+entity "assessment_attempt" as ASSESSMENT_ATTEMPT {}
+entity "assessment_quiz_attempt" as ASSESSMENT_QUIZ_ATTEMPT {}
+entity "jlpt_exam_attempt" as JLPT_EXAM_ATTEMPT {}
+entity "jlpt_section_result" as JLPT_SECTION_RESULT {}
+entity "smart_test_session" as SMART_TEST_SESSION {}
+entity "smart_test_session_question" as SMART_TEST_SESSION_QUESTION {}
+entity "smart_test_skill_result" as SMART_TEST_SKILL_RESULT {}
+entity "assessment_answer" as ASSESSMENT_ANSWER {}
+entity "user_learning_path" as USER_LEARNING_PATH {}
+entity "user_learning_path_item" as USER_LEARNING_PATH_ITEM {}
+entity "lesson_progress" as LESSON_PROGRESS {}
+entity "user_knowledge_weakness" as USER_KNOWLEDGE_WEAKNESS {}
+entity "user_lesson_recommendation" as USER_LESSON_RECOMMENDATION {}
+
+' Flashcards, video and community
+entity "flashcard_set" as FLASHCARD_SET {}
+entity "flashcard_card" as FLASHCARD_CARD {}
+entity "flashcard_user_set_state" as FLASHCARD_USER_SET_STATE {}
+entity "flashcard_card_progress" as FLASHCARD_CARD_PROGRESS {}
+entity "flashcard_study_session" as FLASHCARD_STUDY_SESSION {}
+entity "flashcard_study_session_item" as FLASHCARD_STUDY_SESSION_ITEM {}
+entity "video" as VIDEO {}
+entity "subtitle" as SUBTITLE {}
+entity "video_tag" as VIDEO_TAG {}
+entity "video_user_state" as VIDEO_USER_STATE {}
+entity "content_comment" as CONTENT_COMMENT {}
+entity "sentence_translation" as SENTENCE_TRANSLATION {}
+
+' Moderation and AI usage
+entity "content_moderation_log" as CONTENT_MODERATION_LOG {}
+entity "moderation_policy" as MODERATION_POLICY {}
+entity "review_case" as REVIEW_CASE {}
+entity "user_sanction" as USER_SANCTION {}
+entity "ai_usage_daily" as AI_USAGE_DAILY {}
+entity "user_credit_transaction" as USER_CREDIT_TRANSACTION {}
+
+' Missions and games
+entity "mission_definition" as MISSION_DEFINITION {}
+entity "user_mission" as USER_MISSION {}
+entity "user_learning_targets" as USER_LEARNING_TARGETS {}
+entity "user_daily_progress" as USER_DAILY_PROGRESS {}
+entity "user_streaks" as USER_STREAKS {}
+entity "game_match" as GAME_MATCH {}
+entity "game_match_player" as GAME_MATCH_PLAYER {}
+entity "memory_match_result" as MEMORY_MATCH_RESULT {}
+entity "air_defense_result" as AIR_DEFENSE_RESULT {}
+entity "air_defense_spaceships" as AIR_DEFENSE_SPACESHIPS {}
+entity "user_spaceships" as USER_SPACESHIPS {}
+entity "user_permanent_upgrades" as USER_PERMANENT_UPGRADES {}
+
+' =============================================================================
+' RELATIONSHIPS: ACCOUNTS, BILLING AND AI CONVERSATIONS
+' =============================================================================
+relationship "assigned" as R_USER_ROLE {}
+R_USER_ROLE -1- ROLES
+R_USER_ROLE -N- USERS
+
+relationship "subscribes" as R_USER_PLAN {}
+R_USER_PLAN -1- PREMIUM_PLANS
+R_USER_PLAN -N- USERS
+
+relationship "makes" as R_USER_PAYMENT {}
+R_USER_PAYMENT -1- USERS
+R_USER_PAYMENT -N- PAYMENTS
+
+relationship "pays for" as R_PAYMENT_PLAN {}
+R_PAYMENT_PLAN -1- PREMIUM_PLANS
+R_PAYMENT_PLAN -N- PAYMENTS
+
+relationship "owns" as R_USER_TOKEN {}
+R_USER_TOKEN -1- USERS
+R_USER_TOKEN -N- AUTH_TOKENS
+
+relationship "classifies" as R_CATEGORY_SCENARIO {}
+R_CATEGORY_SCENARIO -1- CATEGORY
+R_CATEGORY_SCENARIO -N- SCENARIO
+
+relationship "acts as AI" as R_AI_ROLE_SCENARIO {}
+R_AI_ROLE_SCENARIO -1- SCENARIO_ROLE
+R_AI_ROLE_SCENARIO -N- SCENARIO
+
+relationship "acts as learner" as R_LEARNER_ROLE_SCENARIO {}
+R_LEARNER_ROLE_SCENARIO -1- SCENARIO_ROLE
+R_LEARNER_ROLE_SCENARIO -N- SCENARIO
+
+relationship "uses prompt" as R_PROMPT_SCENARIO {}
+R_PROMPT_SCENARIO -1- PROMPT_TEMPLATE
+R_PROMPT_SCENARIO -N- SCENARIO
+
+relationship "has rule mapping" as R_SCENARIO_RULE_MAP {}
+R_SCENARIO_RULE_MAP -1- SCENARIO
+R_SCENARIO_RULE_MAP -N- SCENARIO_EVALUATION_RULE
+
+relationship "applies" as R_MAP_EVALUATION_RULE {}
+R_MAP_EVALUATION_RULE -1- EVALUATION_RULE
+R_MAP_EVALUATION_RULE -N- SCENARIO_EVALUATION_RULE
+
+relationship "starts" as R_USER_CONVERSATION {}
+R_USER_CONVERSATION -1- USERS
+R_USER_CONVERSATION -N- CONVERSATION_SESSION
+
+relationship "runs" as R_SCENARIO_CONVERSATION {}
+R_SCENARIO_CONVERSATION -1- SCENARIO
+R_SCENARIO_CONVERSATION -N- CONVERSATION_SESSION
+
+' =============================================================================
+' RELATIONSHIPS: DICTIONARY AND CURRICULUM
+' =============================================================================
+relationship "classifies" as R_RADICAL_KANJI {}
+R_RADICAL_KANJI -1- RADICAL
+R_RADICAL_KANJI -N- KANJI
+
+relationship "has readings" as R_KANJI_READING {}
+R_KANJI_READING -1- KANJI
+R_KANJI_READING -N- KANJI_READING
+
+relationship "has readings" as R_VOCAB_READING {}
+R_VOCAB_READING -1- VOCABULARY_ENTRY
+R_VOCAB_READING -N- VOCABULARY_READING
+
+relationship "has variants" as R_VOCAB_VARIANT {}
+R_VOCAB_VARIANT -1- VOCABULARY_ENTRY
+R_VOCAB_VARIANT -N- VOCABULARY_VARIANT
+
+relationship "has kanji mapping" as R_VOCAB_KANJI_MAP {}
+R_VOCAB_KANJI_MAP -1- VOCABULARY_ENTRY
+R_VOCAB_KANJI_MAP -N- VOCABULARY_KANJI
+
+relationship "uses kanji" as R_KANJI_VOCAB_MAP {}
+R_KANJI_VOCAB_MAP -1- KANJI
+R_KANJI_VOCAB_MAP -N- VOCABULARY_KANJI
+
+relationship "has senses" as R_VOCAB_SENSE {}
+R_VOCAB_SENSE -1- VOCABULARY_ENTRY
+R_VOCAB_SENSE -N- VOCABULARY_SENSE
+
+relationship "has glosses" as R_SENSE_GLOSS {}
+R_SENSE_GLOSS -1- VOCABULARY_SENSE
+R_SENSE_GLOSS -N- VOCABULARY_GLOSS
+
+relationship "has POS mapping" as R_SENSE_POS_MAP {}
+R_SENSE_POS_MAP -1- VOCABULARY_SENSE
+R_SENSE_POS_MAP -N- SENSE_PART_OF_SPEECH
+
+relationship "uses POS" as R_POS_SENSE_MAP {}
+R_POS_SENSE_MAP -1- DICTIONARY_PART_OF_SPEECH
+R_POS_SENSE_MAP -N- SENSE_PART_OF_SPEECH
+
+relationship "has domain mapping" as R_SENSE_DOMAIN_MAP {}
+R_SENSE_DOMAIN_MAP -1- VOCABULARY_SENSE
+R_SENSE_DOMAIN_MAP -N- SENSE_DOMAIN
+
+relationship "uses domain" as R_DOMAIN_SENSE_MAP {}
+R_DOMAIN_SENSE_MAP -1- DICTIONARY_DOMAIN
+R_DOMAIN_SENSE_MAP -N- SENSE_DOMAIN
+
+relationship "searches" as R_USER_SEARCH_HISTORY {}
+R_USER_SEARCH_HISTORY -1- USERS
+R_USER_SEARCH_HISTORY -N- DICTIONARY_SEARCH_HISTORY
+
+relationship "selects" as R_HISTORY_VOCAB {}
+R_HISTORY_VOCAB -1- VOCABULARY_ENTRY
+R_HISTORY_VOCAB -N- DICTIONARY_SEARCH_HISTORY
+
+relationship "creates favorite" as R_USER_FAVORITE {}
+R_USER_FAVORITE -1- USERS
+R_USER_FAVORITE -N- DICTIONARY_FAVORITE
+
+relationship "references" as R_FAVORITE_VOCAB {}
+R_FAVORITE_VOCAB -1- VOCABULARY_ENTRY
+R_FAVORITE_VOCAB -N- DICTIONARY_FAVORITE
+
+relationship "contains" as R_TEXTBOOK_UNIT {}
+R_TEXTBOOK_UNIT -1- TEXTBOOK
+R_TEXTBOOK_UNIT -N- UNIT
+
+relationship "contains" as R_UNIT_LESSON {}
+R_UNIT_LESSON -1- UNIT
+R_UNIT_LESSON -N- LESSON
+
+relationship "classifies" as R_TAG_LESSON {}
+R_TAG_LESSON -1- TAG
+R_TAG_LESSON -N- LESSON
+
+relationship "has tag mapping" as R_LESSON_TAG_MAP {}
+R_LESSON_TAG_MAP -1- LESSON
+R_LESSON_TAG_MAP -N- LESSON_TAG
+
+relationship "uses tag" as R_TAG_LESSON_MAP {}
+R_TAG_LESSON_MAP -1- TAG
+R_TAG_LESSON_MAP -N- LESSON_TAG
+
+relationship "has sections" as R_LESSON_SECTION {}
+R_LESSON_SECTION -1- LESSON
+R_LESSON_SECTION -N- LESSON_SECTION
+
+relationship "contains" as R_SECTION_CONTENT {}
+R_SECTION_CONTENT -1- LESSON_SECTION
+R_SECTION_CONTENT -N- CONTENT_ITEM
+
+relationship "teaches" as R_LESSON_GRAMMAR {}
+R_LESSON_GRAMMAR -1- LESSON
+R_LESSON_GRAMMAR -N- GRAMMAR_POINT
+
+relationship "classifies" as R_TAG_GRAMMAR {}
+R_TAG_GRAMMAR -1- TAG
+R_TAG_GRAMMAR -N- GRAMMAR_POINT
+
+relationship "has vocabulary mapping" as R_CONTENT_VOCAB_MAP {}
+R_CONTENT_VOCAB_MAP -1- CONTENT_ITEM
+R_CONTENT_VOCAB_MAP -N- CONTENT_VOCABULARY
+
+relationship "uses vocabulary" as R_VOCAB_CONTENT_MAP {}
+R_VOCAB_CONTENT_MAP -1- VOCABULARY_ENTRY
+R_VOCAB_CONTENT_MAP -N- CONTENT_VOCABULARY
+
+relationship "defines rules" as R_LESSON_RULE {}
+R_LESSON_RULE -1- LESSON
+R_LESSON_RULE -N- CONVERSION_RULE
+
+relationship "has patterns" as R_RULE_PATTERN {}
+R_RULE_PATTERN -1- CONVERSION_RULE
+R_RULE_PATTERN -N- RULE_PATTERN
+
+relationship "has examples" as R_RULE_EXAMPLE {}
+R_RULE_EXAMPLE -1- CONVERSION_RULE
+R_RULE_EXAMPLE -N- RULE_EXAMPLE
+
+relationship "illustrates" as R_EXAMPLE_KANJI {}
+R_EXAMPLE_KANJI -1- KANJI
+R_EXAMPLE_KANJI -N- RULE_EXAMPLE
+
+' =============================================================================
+' RELATIONSHIPS: ASSESSMENT AND PERSONALIZATION
+' =============================================================================
+relationship "owns quiz" as R_LESSON_QUIZ {}
+R_LESSON_QUIZ -1- LESSON
+R_LESSON_QUIZ -N- ASSESSMENT_QUIZ
+
+relationship "owns final quiz" as R_UNIT_QUIZ {}
+R_UNIT_QUIZ -1- UNIT
+R_UNIT_QUIZ -N- ASSESSMENT_QUIZ
+
+relationship "generates" as R_RULE_QUESTION {}
+R_RULE_QUESTION -1- CONVERSION_RULE
+R_RULE_QUESTION -N- ASSESSMENT_QUESTION
+
+relationship "classifies" as R_TAG_QUESTION {}
+R_TAG_QUESTION -1- TAG
+R_TAG_QUESTION -N- ASSESSMENT_QUESTION
+
+relationship "has tag mapping" as R_QUESTION_TAG_MAP {}
+R_QUESTION_TAG_MAP -1- ASSESSMENT_QUESTION
+R_QUESTION_TAG_MAP -N- QUESTION_TAG
+
+relationship "uses tag" as R_TAG_QUESTION_MAP {}
+R_TAG_QUESTION_MAP -1- TAG
+R_TAG_QUESTION_MAP -N- QUESTION_TAG
+
+relationship "has matching pairs" as R_QUESTION_PAIR {}
+R_QUESTION_PAIR -1- ASSESSMENT_QUESTION
+R_QUESTION_PAIR -N- ASSESSMENT_QUESTION_PAIR
+
+relationship "has memberships" as R_QUIZ_QUESTION_MAP {}
+R_QUIZ_QUESTION_MAP -1- ASSESSMENT_QUIZ
+R_QUIZ_QUESTION_MAP -N- ASSESSMENT_QUIZ_QUESTION
+
+relationship "includes" as R_QUESTION_QUIZ_MAP {}
+R_QUESTION_QUIZ_MAP -1- ASSESSMENT_QUESTION
+R_QUESTION_QUIZ_MAP -N- ASSESSMENT_QUIZ_QUESTION
+
+relationship "contains" as R_EXAM_SECTION {}
+R_EXAM_SECTION -1- JLPT_EXAM
+R_EXAM_SECTION -N- JLPT_EXAM_SECTION
+
+relationship "uses quiz" as R_SECTION_QUIZ {}
+R_SECTION_QUIZ -1- ASSESSMENT_QUIZ
+R_SECTION_QUIZ -1- JLPT_EXAM_SECTION
+
+relationship "performs" as R_USER_ATTEMPT {}
+R_USER_ATTEMPT -1- USERS
+R_USER_ATTEMPT -N- ASSESSMENT_ATTEMPT
+
+relationship "specializes as quiz" as R_ATTEMPT_QUIZ_ATTEMPT {}
+R_ATTEMPT_QUIZ_ATTEMPT -1- ASSESSMENT_ATTEMPT
+R_ATTEMPT_QUIZ_ATTEMPT -1- ASSESSMENT_QUIZ_ATTEMPT
+
+relationship "targets" as R_QUIZ_ATTEMPT_QUIZ {}
+R_QUIZ_ATTEMPT_QUIZ -1- ASSESSMENT_QUIZ
+R_QUIZ_ATTEMPT_QUIZ -N- ASSESSMENT_QUIZ_ATTEMPT
+
+relationship "specializes as JLPT" as R_ATTEMPT_EXAM_ATTEMPT {}
+R_ATTEMPT_EXAM_ATTEMPT -1- ASSESSMENT_ATTEMPT
+R_ATTEMPT_EXAM_ATTEMPT -1- JLPT_EXAM_ATTEMPT
+
+relationship "targets" as R_EXAM_ATTEMPT_EXAM {}
+R_EXAM_ATTEMPT_EXAM -1- JLPT_EXAM
+R_EXAM_ATTEMPT_EXAM -N- JLPT_EXAM_ATTEMPT
+
+relationship "has section results" as R_EXAM_ATTEMPT_RESULT {}
+R_EXAM_ATTEMPT_RESULT -1- JLPT_EXAM_ATTEMPT
+R_EXAM_ATTEMPT_RESULT -N- JLPT_SECTION_RESULT
+
+relationship "scores" as R_SECTION_RESULT {}
+R_SECTION_RESULT -1- JLPT_EXAM_SECTION
+R_SECTION_RESULT -N- JLPT_SECTION_RESULT
+
+relationship "specializes as smart test" as R_ATTEMPT_SMART_SESSION {}
+R_ATTEMPT_SMART_SESSION -1- ASSESSMENT_ATTEMPT
+R_ATTEMPT_SMART_SESSION -1- SMART_TEST_SESSION
+
+relationship "presents" as R_SMART_SESSION_QUESTION {}
+R_SMART_SESSION_QUESTION -1- SMART_TEST_SESSION
+R_SMART_SESSION_QUESTION -N- SMART_TEST_SESSION_QUESTION
+
+relationship "uses question" as R_QUESTION_SMART_SESSION {}
+R_QUESTION_SMART_SESSION -1- ASSESSMENT_QUESTION
+R_QUESTION_SMART_SESSION -N- SMART_TEST_SESSION_QUESTION
+
+relationship "summarizes skills" as R_SMART_SKILL_RESULT {}
+R_SMART_SKILL_RESULT -1- SMART_TEST_SESSION
+R_SMART_SKILL_RESULT -N- SMART_TEST_SKILL_RESULT
+
+relationship "records answers" as R_ATTEMPT_ANSWER {}
+R_ATTEMPT_ANSWER -1- ASSESSMENT_ATTEMPT
+R_ATTEMPT_ANSWER -N- ASSESSMENT_ANSWER
+
+relationship "answers" as R_QUESTION_ANSWER {}
+R_QUESTION_ANSWER -1- ASSESSMENT_QUESTION
+R_QUESTION_ANSWER -N- ASSESSMENT_ANSWER
+
+relationship "owns paths" as R_USER_PATH {}
+R_USER_PATH -1- USERS
+R_USER_PATH -N- USER_LEARNING_PATH
+
+relationship "contains" as R_PATH_ITEM {}
+R_PATH_ITEM -1- USER_LEARNING_PATH
+R_PATH_ITEM -N- USER_LEARNING_PATH_ITEM
+
+relationship "schedules" as R_ITEM_LESSON {}
+R_ITEM_LESSON -1- LESSON
+R_ITEM_LESSON -N- USER_LEARNING_PATH_ITEM
+
+relationship "tracks progress" as R_USER_PROGRESS {}
+R_USER_PROGRESS -1- USERS
+R_USER_PROGRESS -N- LESSON_PROGRESS
+
+relationship "progresses" as R_LESSON_PROGRESS {}
+R_LESSON_PROGRESS -1- LESSON
+R_LESSON_PROGRESS -N- LESSON_PROGRESS
+
+relationship "has weaknesses" as R_USER_WEAKNESS {}
+R_USER_WEAKNESS -1- USERS
+R_USER_WEAKNESS -N- USER_KNOWLEDGE_WEAKNESS
+
+relationship "detects at tag" as R_TAG_WEAKNESS {}
+R_TAG_WEAKNESS -1- TAG
+R_TAG_WEAKNESS -N- USER_KNOWLEDGE_WEAKNESS
+
+relationship "receives recommendations" as R_USER_RECOMMENDATION {}
+R_USER_RECOMMENDATION -1- USERS
+R_USER_RECOMMENDATION -N- USER_LESSON_RECOMMENDATION
+
+relationship "explains" as R_WEAKNESS_RECOMMENDATION {}
+R_WEAKNESS_RECOMMENDATION -1- USER_KNOWLEDGE_WEAKNESS
+R_WEAKNESS_RECOMMENDATION -N- USER_LESSON_RECOMMENDATION
+
+relationship "recommends" as R_LESSON_RECOMMENDATION {}
+R_LESSON_RECOMMENDATION -1- LESSON
+R_LESSON_RECOMMENDATION -N- USER_LESSON_RECOMMENDATION
+
+' =============================================================================
+' RELATIONSHIPS: FLASHCARDS, VIDEO AND COMMUNITY
+' =============================================================================
+relationship "owns" as R_USER_SET {}
+R_USER_SET -1- USERS
+R_USER_SET -N- FLASHCARD_SET
+
+relationship "clones" as R_SET_CLONE {}
+R_SET_CLONE -1- FLASHCARD_SET
+R_SET_CLONE -N- FLASHCARD_SET
+
+relationship "contains" as R_SET_CARD {}
+R_SET_CARD -1- FLASHCARD_SET
+R_SET_CARD -N- FLASHCARD_CARD
+
+relationship "has set state" as R_USER_SET_STATE {}
+R_USER_SET_STATE -1- USERS
+R_USER_SET_STATE -N- FLASHCARD_USER_SET_STATE
+
+relationship "tracks set" as R_SET_USER_STATE {}
+R_SET_USER_STATE -1- FLASHCARD_SET
+R_SET_USER_STATE -N- FLASHCARD_USER_SET_STATE
+
+relationship "tracks card progress" as R_USER_CARD_PROGRESS {}
+R_USER_CARD_PROGRESS -1- USERS
+R_USER_CARD_PROGRESS -N- FLASHCARD_CARD_PROGRESS
+
+relationship "progresses" as R_CARD_PROGRESS {}
+R_CARD_PROGRESS -1- FLASHCARD_CARD
+R_CARD_PROGRESS -N- FLASHCARD_CARD_PROGRESS
+
+relationship "starts study" as R_USER_STUDY_SESSION {}
+R_USER_STUDY_SESSION -1- USERS
+R_USER_STUDY_SESSION -N- FLASHCARD_STUDY_SESSION
+
+relationship "studies set" as R_SET_STUDY_SESSION {}
+R_SET_STUDY_SESSION -1- FLASHCARD_SET
+R_SET_STUDY_SESSION -N- FLASHCARD_STUDY_SESSION
+
+relationship "contains attempts" as R_SESSION_ITEM {}
+R_SESSION_ITEM -1- FLASHCARD_STUDY_SESSION
+R_SESSION_ITEM -N- FLASHCARD_STUDY_SESSION_ITEM
+
+relationship "shows card" as R_ITEM_CARD {}
+R_ITEM_CARD -1- FLASHCARD_CARD
+R_ITEM_CARD -N- FLASHCARD_STUDY_SESSION_ITEM
+
+relationship "chooses card" as R_ITEM_CHOSEN_CARD {}
+R_ITEM_CHOSEN_CARD -1- FLASHCARD_CARD
+R_ITEM_CHOSEN_CARD -N- FLASHCARD_STUDY_SESSION_ITEM
+
+relationship "uploads" as R_USER_VIDEO {}
+R_USER_VIDEO -1- USERS
+R_USER_VIDEO -N- VIDEO
+
+relationship "contains" as R_VIDEO_SUBTITLE {}
+R_VIDEO_SUBTITLE -1- VIDEO
+R_VIDEO_SUBTITLE -N- SUBTITLE
+
+relationship "has tag mapping" as R_VIDEO_TAG_MAP {}
+R_VIDEO_TAG_MAP -1- VIDEO
+R_VIDEO_TAG_MAP -N- VIDEO_TAG
+
+relationship "uses tag" as R_TAG_VIDEO_MAP {}
+R_TAG_VIDEO_MAP -1- TAG
+R_TAG_VIDEO_MAP -N- VIDEO_TAG
+
+relationship "tracks video state" as R_USER_VIDEO_STATE {}
+R_USER_VIDEO_STATE -1- USERS
+R_USER_VIDEO_STATE -N- VIDEO_USER_STATE
+
+relationship "tracks" as R_VIDEO_USER_STATE {}
+R_VIDEO_USER_STATE -1- VIDEO
+R_VIDEO_USER_STATE -N- VIDEO_USER_STATE
+
+relationship "writes" as R_USER_COMMENT {}
+R_USER_COMMENT -1- USERS
+R_USER_COMMENT -N- CONTENT_COMMENT
+
+relationship "comments on" as R_COMMENT_SET {}
+R_COMMENT_SET -1- FLASHCARD_SET
+R_COMMENT_SET -N- CONTENT_COMMENT
+
+relationship "comments on" as R_COMMENT_VIDEO {}
+R_COMMENT_VIDEO -1- VIDEO
+R_COMMENT_VIDEO -N- CONTENT_COMMENT
+
+relationship "comments on" as R_COMMENT_LESSON {}
+R_COMMENT_LESSON -1- LESSON
+R_COMMENT_LESSON -N- CONTENT_COMMENT
+
+relationship "comments on" as R_COMMENT_SCENARIO {}
+R_COMMENT_SCENARIO -1- SCENARIO
+R_COMMENT_SCENARIO -N- CONTENT_COMMENT
+
+relationship "comments on" as R_COMMENT_TEXTBOOK {}
+R_COMMENT_TEXTBOOK -1- TEXTBOOK
+R_COMMENT_TEXTBOOK -N- CONTENT_COMMENT
+
+' sentence_translation has no direct entity relationship in the source schema.
+
+' =============================================================================
+' RELATIONSHIPS: MODERATION AND AI USAGE
+' =============================================================================
+relationship "owns moderated content" as R_USER_MODERATION_LOG {}
+R_USER_MODERATION_LOG -1- USERS
+R_USER_MODERATION_LOG -N- CONTENT_MODERATION_LOG
+
+relationship "updates policy" as R_USER_POLICY {}
+R_USER_POLICY -1- USERS
+R_USER_POLICY -N- MODERATION_POLICY
+
+relationship "opens review" as R_LOG_REVIEW {}
+R_LOG_REVIEW -1- CONTENT_MODERATION_LOG
+R_LOG_REVIEW -N- REVIEW_CASE
+
+relationship "requests" as R_USER_REQUEST_REVIEW {}
+R_USER_REQUEST_REVIEW -1- USERS
+R_USER_REQUEST_REVIEW -N- REVIEW_CASE
+
+relationship "owns reviewed content" as R_USER_OWNS_REVIEW {}
+R_USER_OWNS_REVIEW -1- USERS
+R_USER_OWNS_REVIEW -N- REVIEW_CASE
+
+relationship "reviews" as R_USER_REVIEWS_CASE {}
+R_USER_REVIEWS_CASE -1- USERS
+R_USER_REVIEWS_CASE -N- REVIEW_CASE
+
+relationship "receives sanction" as R_USER_RECEIVES_SANCTION {}
+R_USER_RECEIVES_SANCTION -1- USERS
+R_USER_RECEIVES_SANCTION -N- USER_SANCTION
+
+relationship "creates sanction" as R_USER_CREATES_SANCTION {}
+R_USER_CREATES_SANCTION -1- USERS
+R_USER_CREATES_SANCTION -N- USER_SANCTION
+
+relationship "consumes AI quota" as R_USER_AI_USAGE {}
+R_USER_AI_USAGE -1- USERS
+R_USER_AI_USAGE -N- AI_USAGE_DAILY
+
+relationship "owns credit ledger" as R_USER_CREDIT {}
+R_USER_CREDIT -1- USERS
+R_USER_CREDIT -N- USER_CREDIT_TRANSACTION
+
+' =============================================================================
+' RELATIONSHIPS: MISSIONS AND GAMES
+' =============================================================================
+relationship "receives missions" as R_USER_MISSION {}
+R_USER_MISSION -1- USERS
+R_USER_MISSION -N- USER_MISSION
+
+relationship "instantiates" as R_DEFINITION_USER_MISSION {}
+R_DEFINITION_USER_MISSION -1- MISSION_DEFINITION
+R_DEFINITION_USER_MISSION -N- USER_MISSION
+
+relationship "sets targets" as R_USER_TARGETS {}
+R_USER_TARGETS -1- USERS
+R_USER_TARGETS -1- USER_LEARNING_TARGETS
+
+relationship "records daily progress" as R_USER_DAILY_PROGRESS {}
+R_USER_DAILY_PROGRESS -1- USERS
+R_USER_DAILY_PROGRESS -N- USER_DAILY_PROGRESS
+
+relationship "maintains streak" as R_USER_STREAK {}
+R_USER_STREAK -1- USERS
+R_USER_STREAK -1- USER_STREAKS
+
+relationship "uses question set" as R_MATCH_SET {}
+R_MATCH_SET -1- FLASHCARD_SET
+R_MATCH_SET -N- GAME_MATCH
+
+relationship "wins" as R_USER_WINS_MATCH {}
+R_USER_WINS_MATCH -1- USERS
+R_USER_WINS_MATCH -N- GAME_MATCH
+
+relationship "has players" as R_MATCH_PLAYER {}
+R_MATCH_PLAYER -1- GAME_MATCH
+R_MATCH_PLAYER -N- GAME_MATCH_PLAYER
+
+relationship "participates" as R_USER_MATCH_PLAYER {}
+R_USER_MATCH_PLAYER -1- USERS
+R_USER_MATCH_PLAYER -N- GAME_MATCH_PLAYER
+
+relationship "produces memory results" as R_MATCH_MEMORY_RESULT {}
+R_MATCH_MEMORY_RESULT -1- GAME_MATCH
+R_MATCH_MEMORY_RESULT -N- MEMORY_MATCH_RESULT
+
+relationship "earns memory result" as R_USER_MEMORY_RESULT {}
+R_USER_MEMORY_RESULT -1- USERS
+R_USER_MEMORY_RESULT -N- MEMORY_MATCH_RESULT
+
+relationship "produces air results" as R_MATCH_AIR_RESULT {}
+R_MATCH_AIR_RESULT -1- GAME_MATCH
+R_MATCH_AIR_RESULT -N- AIR_DEFENSE_RESULT
+
+relationship "earns air result" as R_USER_AIR_RESULT {}
+R_USER_AIR_RESULT -1- USERS
+R_USER_AIR_RESULT -N- AIR_DEFENSE_RESULT
+
+relationship "owns ships" as R_USER_SHIPS {}
+R_USER_SHIPS -1- USERS
+R_USER_SHIPS -N- USER_SPACESHIPS
+
+relationship "unlocks" as R_SHIP_USER_SHIPS {}
+R_SHIP_USER_SHIPS -1- AIR_DEFENSE_SPACESHIPS
+R_SHIP_USER_SHIPS -N- USER_SPACESHIPS
+
+relationship "has upgrades" as R_USER_UPGRADES {}
+R_USER_UPGRADES -1- USERS
+R_USER_UPGRADES -1- USER_PERMANENT_UPGRADES
+
+relationship "equips" as R_SHIP_UPGRADES {}
+R_SHIP_UPGRADES -1- AIR_DEFENSE_SPACESHIPS
+R_SHIP_UPGRADES -N- USER_PERMANENT_UPGRADES
+
+@endchen

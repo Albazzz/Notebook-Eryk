@@ -1,0 +1,504 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'models.dart';
+import 'services.dart';
+
+class AppState extends ChangeNotifier {
+  static const _keyStorageName = 'openrouter_api_key';
+  static const _modelIdsStorageName = 'ai_model_ids';
+  static const _modelNamesStorageName = 'ai_model_names';
+  static const _savedModelsStorageName = 'ai_saved_models';
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
+  final OpenRouterService aiService = OpenRouterService();
+  final DictionaryRepository dictionary = LocalDictionaryRepository();
+  final OcrService ocr = MlKitJapaneseOcrService();
+
+  AppDestination destination = AppDestination.library;
+  NotebookData? openNotebook;
+  int openPage = 12;
+  bool focusSource = false;
+  ThemeMode themeMode = ThemeMode.light;
+  bool autoSave = true;
+  bool pressureEnabled = true;
+  bool palmRejection = true;
+  bool touchWritingEnabled = false;
+  bool doubleTapEraser = true;
+  String jlpt = 'N3';
+  String explanationLanguage = 'Tiếng Việt';
+  String selectedModelId = '';
+  String selectedModelName = '';
+
+  /// Per-feature model assignments. The same API key can use different models.
+  final Map<AiModelSlot, String> modelIds = {};
+  final Map<AiModelSlot, String> modelNames = {};
+  List<OpenRouterModel> savedModels = [];
+  bool useAiVision = false;
+  bool aiConnected = false;
+  List<OpenRouterModel> availableModels = [];
+  String _apiKey = '';
+
+  @override
+  void dispose() {
+    aiService.dispose();
+    super.dispose();
+  }
+
+  final List<NotebookData> notebooks = [
+    const NotebookData(
+      id: 'n3',
+      title: 'N3 Grammar',
+      type: 'Vở ghi',
+      pages: 124,
+      color: Color(0xff3859c7),
+    ),
+    const NotebookData(
+      id: 'soumatome',
+      title: 'Từ vựng Soumatome',
+      type: 'PDF',
+      pages: 210,
+      color: Color(0xff2e8b70),
+      lastOpened: 'Hôm qua',
+    ),
+    const NotebookData(
+      id: 'reading',
+      title: 'Đọc hiểu tháng 8',
+      type: 'Vở ghi',
+      pages: 45,
+      color: Color(0xff7a5bc7),
+      paperStyle: PaperStyle.lined,
+      lastOpened: '3 ngày trước',
+    ),
+    const NotebookData(
+      id: 'shinkanzen',
+      title: 'Shinkanzen PDF',
+      type: 'PDF',
+      pages: 168,
+      color: Color(0xffd9822b),
+      lastOpened: '1 tuần trước',
+    ),
+  ];
+
+  final Map<String, List<InkStroke>> strokes = {};
+  final Map<String, List<PinnedNote>> pinnedNotes = {};
+
+  /// Local images attached to a notebook page (page number -> file paths).
+  final Map<String, Map<int, List<String>>> pageImages = {};
+  final Set<String> blankPages = {};
+  final Map<String, String> sourceDocuments = {};
+  List<WeakPoint> weakPoints = [];
+
+  bool get hasApiKey => _apiKey.isNotEmpty;
+  String get apiKey => _apiKey;
+
+  Future<void> initialize() async {
+    final prefs = await SharedPreferences.getInstance();
+    themeMode = ThemeMode.values[prefs.getInt('themeMode') ?? 1];
+    autoSave = prefs.getBool('autoSave') ?? true;
+    pressureEnabled = prefs.getBool('pressureEnabled') ?? true;
+    palmRejection = prefs.getBool('palmRejection') ?? true;
+    touchWritingEnabled = prefs.getBool('touchWritingEnabled') ?? false;
+    doubleTapEraser = prefs.getBool('doubleTapEraser') ?? true;
+    jlpt = prefs.getString('jlpt') ?? 'N3';
+    explanationLanguage =
+        prefs.getString('explanationLanguage') ?? 'Tiếng Việt';
+    selectedModelId = prefs.getString('selectedModelId') ?? '';
+    selectedModelName = prefs.getString('selectedModelName') ?? '';
+    useAiVision = prefs.getBool('useAiVision') ?? false;
+    _loadModelAssignments(prefs);
+    try {
+      _apiKey = await _secureStorage.read(key: _keyStorageName) ?? '';
+    } catch (_) {
+      _apiKey = '';
+    }
+    aiConnected = _apiKey.isNotEmpty && _hasTextAiModel;
+    final savedWeakPoints = prefs.getString('weakPoints');
+    if (savedWeakPoints != null) {
+      try {
+        weakPoints = (jsonDecode(savedWeakPoints) as List)
+            .map((item) => WeakPoint.fromJson(item as Map<String, dynamic>))
+            .toList();
+      } catch (_) {
+        weakPoints = _seedWeakPoints();
+      }
+    } else {
+      weakPoints = _seedWeakPoints();
+    }
+    final storedStrokes = prefs.getString('strokes');
+    if (storedStrokes != null) {
+      try {
+        final decoded = jsonDecode(storedStrokes) as Map<String, dynamic>;
+        for (final entry in decoded.entries) {
+          strokes[entry.key] = (entry.value as List)
+              .map((item) => InkStroke.fromJson(item as Map<String, dynamic>))
+              .toList();
+        }
+      } catch (_) {}
+    }
+    notifyListeners();
+    debugPrint(
+      '[NoteEryk][AppState] initialized destination=$destination '
+      'openNotebook=${openNotebook?.id} hasKey=$hasApiKey '
+      'configuredModels=${modelIds.length}',
+    );
+  }
+
+  List<WeakPoint> _seedWeakPoints() => [
+    WeakPoint(
+      id: 'w1',
+      title: 'わけではない / わけがない',
+      kind: WeaknessKind.grammar,
+      content: 'Phân biệt hai mẫu phủ định dễ nhầm.',
+      reminder: 'Hay nhầm nghĩa hai mẫu này.',
+      note: 'Ôn lại ví dụ vào cuối tuần.',
+      tags: ['N3', 'dễ nhầm'],
+      notebookId: 'n3',
+      notebookTitle: 'N3 Grammar',
+      page: 12,
+      ocrText: '〜わけではない = không hẳn là / không có nghĩa là',
+      createdAt: DateTime.now().subtract(const Duration(days: 1)),
+    ),
+    WeakPoint(
+      id: 'w2',
+      title: '使役受身',
+      kind: WeaknessKind.grammar,
+      content: 'Cách chia thể sai khiến bị động.',
+      reminder: 'Hay quên cách chia động từ nhóm I.',
+      note: '',
+      tags: ['N3'],
+      notebookId: 'n3',
+      notebookTitle: 'N3 Grammar',
+      page: 18,
+      ocrText: '使役受身',
+      createdAt: DateTime.now().subtract(const Duration(days: 3)),
+    ),
+    WeakPoint(
+      id: 'w3',
+      title: '認識【にんしき】',
+      kind: WeaknessKind.vocabulary,
+      content: 'Nhận thức, nhận biết.',
+      reminder: 'Hay quên cách đọc にんしき.',
+      note: '',
+      tags: ['N2'],
+      notebookId: 'soumatome',
+      notebookTitle: 'Từ vựng Soumatome',
+      page: 34,
+      ocrText: '認識',
+      createdAt: DateTime.now().subtract(const Duration(days: 5)),
+    ),
+    WeakPoint(
+      id: 'w4',
+      title: '尊重【そんちょう】',
+      kind: WeaknessKind.vocabulary,
+      content: 'Tôn trọng, coi trọng.',
+      reminder: 'Dễ nhầm với 重視.',
+      note: '',
+      tags: ['N3'],
+      notebookId: 'shinkanzen',
+      notebookTitle: 'Shinkanzen PDF',
+      page: 12,
+      ocrText: '彼の意見を尊重しながら、もう一度検討する必要がある。',
+      createdAt: DateTime.now().subtract(const Duration(days: 8)),
+    ),
+  ];
+
+  void goTo(AppDestination value) {
+    debugPrint('[NoteEryk][Navigation] goTo $destination -> $value');
+    destination = value;
+    openNotebook = null;
+    focusSource = false;
+    notifyListeners();
+  }
+
+  void open(NotebookData notebook, {int page = 12, bool source = false}) {
+    debugPrint(
+      '[NoteEryk][Navigation] open notebook=${notebook.id} page=$page source=$source',
+    );
+    openNotebook = notebook;
+    openPage = page;
+    focusSource = source;
+    notifyListeners();
+  }
+
+  void goToPage(int page) {
+    if (openNotebook == null) return;
+    openPage = page.clamp(1, openNotebook!.pages);
+    focusSource = false;
+    debugPrint('[NoteEryk][Pages] goToPage $openPage');
+    notifyListeners();
+  }
+
+  void closeEditor() {
+    debugPrint('[NoteEryk][Navigation] closeEditor');
+    openNotebook = null;
+    focusSource = false;
+    notifyListeners();
+  }
+
+  void addNotebook(NotebookData notebook) {
+    notebooks.add(notebook);
+    notifyListeners();
+  }
+
+  void removeNotebook(String notebookId) {
+    notebooks.removeWhere((item) => item.id == notebookId);
+    strokes.remove(notebookId);
+    pinnedNotes.remove(notebookId);
+    pageImages.remove(notebookId);
+    sourceDocuments.remove(notebookId);
+    debugPrint('[NoteEryk][Library] removeNotebook $notebookId');
+    notifyListeners();
+  }
+
+  void addPage(String notebookId, {bool blank = false}) {
+    final index = notebooks.indexWhere((item) => item.id == notebookId);
+    if (index < 0) return;
+    final updated = notebooks[index].copyWith(
+      pages: notebooks[index].pages + 1,
+    );
+    notebooks[index] = updated;
+    if (openNotebook?.id == notebookId) {
+      openNotebook = updated;
+      openPage = updated.pages;
+    }
+    if (blank) blankPages.add('$notebookId:${updated.pages}');
+    debugPrint(
+      '[NoteEryk][Pages] addPage notebook=$notebookId page=${updated.pages} blank=$blank',
+    );
+    notifyListeners();
+  }
+
+  List<String> imagesForPage(String notebookId, int page) =>
+      pageImages[notebookId]?[page] ?? const [];
+
+  void attachImages(String notebookId, int page, List<String> paths) {
+    if (paths.isEmpty) return;
+    pageImages.putIfAbsent(notebookId, () => {})[page] = List.of(paths);
+    notifyListeners();
+  }
+
+  void attachSourceDocument(String notebookId, String path) {
+    sourceDocuments[notebookId] = path;
+    notifyListeners();
+  }
+
+  List<InkStroke> strokesFor(String notebookId) =>
+      strokes.putIfAbsent(notebookId, () => []);
+
+  void saveStrokes(String notebookId, List<InkStroke> value) {
+    strokes[notebookId] = List.of(value);
+    notifyListeners();
+    if (autoSave) _persistStrokes();
+  }
+
+  Future<void> _persistStrokes() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'strokes',
+      jsonEncode(
+        strokes.map(
+          (key, value) =>
+              MapEntry(key, value.map((stroke) => stroke.toJson()).toList()),
+        ),
+      ),
+    );
+  }
+
+  void pinNote(String notebookId, PinnedNote note) {
+    pinnedNotes.putIfAbsent(notebookId, () => []).add(note);
+    notifyListeners();
+  }
+
+  void addWeakPoint(WeakPoint weakPoint) {
+    weakPoints.insert(0, weakPoint);
+    notifyListeners();
+    _persistWeakPoints();
+  }
+
+  void updateWeakPoint(WeakPoint weakPoint) {
+    final index = weakPoints.indexWhere((item) => item.id == weakPoint.id);
+    if (index >= 0) weakPoints[index] = weakPoint;
+    notifyListeners();
+    _persistWeakPoints();
+  }
+
+  void deleteWeakPoint(String id) {
+    final sourcePath = weakPoints
+        .where((item) => item.id == id)
+        .map((item) => item.sourceImagePath)
+        .firstOrNull;
+    weakPoints.removeWhere((item) => item.id == id);
+    if (sourcePath != null && sourcePath.isNotEmpty) {
+      File(sourcePath).delete().catchError((_) => File(sourcePath));
+    }
+    notifyListeners();
+    _persistWeakPoints();
+  }
+
+  Future<void> _persistWeakPoints() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'weakPoints',
+      jsonEncode(weakPoints.map((item) => item.toJson()).toList()),
+    );
+  }
+
+  Future<void> saveGeneralSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('themeMode', themeMode.index);
+    await prefs.setBool('autoSave', autoSave);
+    await prefs.setBool('pressureEnabled', pressureEnabled);
+    await prefs.setBool('palmRejection', palmRejection);
+    await prefs.setBool('touchWritingEnabled', touchWritingEnabled);
+    await prefs.setBool('doubleTapEraser', doubleTapEraser);
+    notifyListeners();
+  }
+
+  Future<void> saveAiSettings({required String key}) async {
+    if (key.isNotEmpty && key != _apiKey) {
+      await _secureStorage.write(key: _keyStorageName, value: key);
+      _apiKey = key;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('jlpt', jlpt);
+    await prefs.setString('explanationLanguage', explanationLanguage);
+    await prefs.setString('selectedModelId', selectedModelId);
+    await prefs.setString('selectedModelName', selectedModelName);
+    await prefs.setBool('useAiVision', useAiVision);
+    await prefs.setString(
+      _modelIdsStorageName,
+      jsonEncode(modelIds.map((slot, value) => MapEntry(slot.name, value))),
+    );
+    await prefs.setString(
+      _modelNamesStorageName,
+      jsonEncode(modelNames.map((slot, value) => MapEntry(slot.name, value))),
+    );
+    await prefs.setString(
+      _savedModelsStorageName,
+      jsonEncode(savedModels.map((model) => model.toJson()).toList()),
+    );
+    aiConnected = _apiKey.isNotEmpty && _hasTextAiModel;
+    notifyListeners();
+  }
+
+  void _loadModelAssignments(SharedPreferences prefs) {
+    modelIds.clear();
+    modelNames.clear();
+    final ids = _decodeStringMap(prefs.getString(_modelIdsStorageName));
+    final names = _decodeStringMap(prefs.getString(_modelNamesStorageName));
+    for (final slot in AiModelSlot.values) {
+      final id = ids[slot.name] ?? '';
+      if (id.isNotEmpty) modelIds[slot] = id;
+      final name = names[slot.name] ?? '';
+      if (name.isNotEmpty) modelNames[slot] = name;
+    }
+    // Migrate the old single-model setting to every compatible slot.
+    if (modelIds.isEmpty && selectedModelId.isNotEmpty) {
+      for (final slot in AiModelSlot.values) {
+        modelIds[slot] = selectedModelId;
+        modelNames[slot] = selectedModelName;
+      }
+    }
+    final rawSaved = prefs.getString(_savedModelsStorageName);
+    if (rawSaved != null) {
+      try {
+        savedModels = (jsonDecode(rawSaved) as List)
+            .map(
+              (item) => OpenRouterModel.fromJson(item as Map<String, dynamic>),
+            )
+            .where((model) => model.id.isNotEmpty)
+            .toList();
+      } catch (_) {
+        savedModels = [];
+      }
+    }
+  }
+
+  Map<String, String> _decodeStringMap(String? raw) {
+    if (raw == null) return {};
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return decoded.map((key, value) => MapEntry(key, value.toString()));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  AiModelSlot slotForTask(AiTask task) => switch (task) {
+    AiTask.translate => AiModelSlot.translate,
+    AiTask.explain => AiModelSlot.explain,
+    AiTask.solve => AiModelSlot.solve,
+    AiTask.createWeakPoint => AiModelSlot.weakness,
+    AiTask.dictionary => AiModelSlot.dictionary,
+  };
+
+  bool get _hasTextAiModel =>
+      [
+        AiModelSlot.translate,
+        AiModelSlot.explain,
+        AiModelSlot.solve,
+        AiModelSlot.weakness,
+        AiModelSlot.dictionary,
+      ].any((slot) => (modelIds[slot] ?? '').isNotEmpty) ||
+      selectedModelId.isNotEmpty;
+
+  String modelIdFor(AiTask task) =>
+      modelIds[slotForTask(task)] ?? selectedModelId;
+
+  String modelNameFor(AiModelSlot slot) =>
+      modelNames[slot] ??
+      (slot == AiModelSlot.translate ? selectedModelName : '');
+
+  void setModelFor(AiModelSlot slot, OpenRouterModel model) {
+    modelIds[slot] = model.id;
+    modelNames[slot] = model.name;
+    if (slot == AiModelSlot.translate) {
+      selectedModelId = model.id;
+      selectedModelName = model.name;
+    }
+    if (!savedModels.any((item) => item.id == model.id)) {
+      savedModels = [model, ...savedModels].take(40).toList();
+    }
+  }
+
+  Future<void> rememberManualModel(
+    String id, {
+    String? name,
+    bool vision = false,
+  }) async {
+    final normalized = id.trim();
+    if (normalized.isEmpty) return;
+    final model = OpenRouterModel(
+      id: normalized,
+      name: name?.trim().isNotEmpty == true ? name!.trim() : normalized,
+      contextLength: 0,
+      vision: vision,
+      free: normalized.endsWith(':free'),
+    );
+    if (!savedModels.any((item) => item.id == normalized)) {
+      savedModels = [model, ...savedModels].take(40).toList();
+    }
+    await saveAiSettings(key: '');
+  }
+
+  Future<void> deleteApiKey() async {
+    await _secureStorage.delete(key: _keyStorageName);
+    _apiKey = '';
+    aiConnected = false;
+    selectedModelId = '';
+    selectedModelName = '';
+    modelIds.clear();
+    modelNames.clear();
+    availableModels = [];
+    await saveAiSettings(key: '');
+  }
+
+  void setThemeMode(ThemeMode mode) {
+    themeMode = mode;
+    saveGeneralSettings();
+  }
+}
