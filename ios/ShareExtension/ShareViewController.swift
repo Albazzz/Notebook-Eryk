@@ -179,14 +179,32 @@ final class ShareViewController: UIViewController {
 
     provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) {
       [weak self] source, _ in
-      guard let self, let source else { completion(false); return }
-      completion(self.copy(
-        source: source,
-        suggestedName: provider.suggestedName,
-        fallbackExtension: UTType(typeIdentifier)?.preferredFilenameExtension,
-        index: index,
-        into: directory
-      ))
+      guard let self else { completion(false); return }
+      if let source {
+        completion(self.copy(
+          source: source,
+          suggestedName: provider.suggestedName,
+          fallbackExtension: UTType(typeIdentifier)?.preferredFilenameExtension,
+          index: index,
+          into: directory
+        ))
+        return
+      }
+
+      // Some Files/Photos providers expose data but decline a temporary file
+      // representation. Fall back to data loading so the Share button still
+      // imports the item instead of appearing to do nothing.
+      provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) {
+        [weak self] data, _ in
+        guard let self, let data else { completion(false); return }
+        completion(self.write(
+          data: data,
+          suggestedName: provider.suggestedName,
+          fallbackExtension: UTType(typeIdentifier)?.preferredFilenameExtension,
+          index: index,
+          into: directory
+        ))
+      }
     }
   }
 
@@ -200,7 +218,51 @@ final class ShareViewController: UIViewController {
     let hasAccess = source.startAccessingSecurityScopedResource()
     defer { if hasAccess { source.stopAccessingSecurityScopedResource() } }
 
-    var name = source.lastPathComponent
+    guard let target = targetURL(
+      sourceName: source.lastPathComponent,
+      suggestedName: suggestedName,
+      fallbackExtension: fallbackExtension,
+      index: index,
+      in: directory
+    ) else { return false }
+    do {
+      try FileManager.default.copyItem(at: source, to: target)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private func write(
+    data: Data,
+    suggestedName: String?,
+    fallbackExtension: String?,
+    index: Int,
+    into directory: URL
+  ) -> Bool {
+    guard let target = targetURL(
+      sourceName: suggestedName ?? "",
+      suggestedName: suggestedName,
+      fallbackExtension: fallbackExtension,
+      index: index,
+      in: directory
+    ) else { return false }
+    do {
+      try data.write(to: target, options: .atomic)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private func targetURL(
+    sourceName: String,
+    suggestedName: String?,
+    fallbackExtension: String?,
+    index: Int,
+    in directory: URL
+  ) -> URL? {
+    var name = sourceName
     if URL(fileURLWithPath: name).pathExtension.isEmpty,
        let suggestedName,
        !suggestedName.isEmpty {
@@ -212,12 +274,12 @@ final class ShareViewController: UIViewController {
       name += ".\(fallbackExtension)"
     }
     if name.isEmpty {
-      name = "shared_\(index).\(source.pathExtension)"
+      name = "shared_\(index).\(fallbackExtension ?? "bin")"
     }
     name = name.replacingOccurrences(of: "/", with: "_")
-    guard acceptedExtensions.contains(URL(fileURLWithPath: name).pathExtension.lowercased()) else {
-      return false
-    }
+    guard acceptedExtensions.contains(
+      URL(fileURLWithPath: name).pathExtension.lowercased()
+    ) else { return nil }
 
     var target = directory.appendingPathComponent(name)
     if FileManager.default.fileExists(atPath: target.path) {
@@ -225,12 +287,7 @@ final class ShareViewController: UIViewController {
       let ext = target.pathExtension
       target = directory.appendingPathComponent("\(stem)_\(index).\(ext)")
     }
-    do {
-      try FileManager.default.copyItem(at: source, to: target)
-      return true
-    } catch {
-      return false
-    }
+    return target
   }
 
   private func finish(message: String, success: Bool) {

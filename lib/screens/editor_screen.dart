@@ -767,9 +767,18 @@ class _EditorScreenState extends State<EditorScreen> {
       builder: (context, constraints) {
         final targetHeight = math.min(constraints.maxHeight - 26, 770.0) * zoom;
         final targetWidth = targetHeight * .72;
+        // A writing gesture must never be claimed by InteractiveViewer. The
+        // Listener below handles Pencil/stylus input; allowing the ancestor
+        // viewer to pan at the same time makes the paper slide while writing.
+        final canvasNavigationEnabled =
+            !pageLocked &&
+            tool != EditorTool.image &&
+            tool != EditorTool.pen &&
+            tool != EditorTool.highlighter &&
+            tool != EditorTool.eraser;
         return InteractiveViewer(
-          panEnabled: !pageLocked && tool != EditorTool.image,
-          scaleEnabled: !pageLocked && tool != EditorTool.image,
+          panEnabled: canvasNavigationEnabled,
+          scaleEnabled: canvasNavigationEnabled,
           minScale: .7,
           maxScale: 2.5,
           child: SizedBox(
