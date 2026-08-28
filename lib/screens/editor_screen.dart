@@ -2192,16 +2192,9 @@ class _PageRail extends StatelessWidget {
                                   width: active ? 2.5 : 1,
                                 ),
                               ),
-                              child: Center(
-                                child: Text(
-                                  page % 3 == 0 ? '日本語\n文法' : '〜ながら',
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    color: Color(0xff777a80),
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ),
+                              // Keep thumbnails blank until the user writes
+                              // or imports content on that page.
+                              child: const SizedBox.shrink(),
                             ),
                             const SizedBox(height: 4),
                             Text(
