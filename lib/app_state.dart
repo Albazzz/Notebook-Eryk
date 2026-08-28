@@ -219,7 +219,10 @@ class AppState extends ChangeNotifier {
       '[NoteEryk][Navigation] open notebook=${notebook.id} page=$page source=$source',
     );
     openNotebook = notebook;
-    openPage = page;
+    // A newly created notebook has one blank page. Clamp the requested page
+    // so it can never open on a non-existent page (the old default of 12
+    // made a one-page notebook appear to start at page 12).
+    openPage = page.clamp(1, notebook.pages);
     focusSource = source;
     notifyListeners();
   }

@@ -117,6 +117,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   Future<void> _showCreateSheet(BuildContext context) async {
     final titleController = TextEditingController();
+    NotebookData? createdNotebook;
     var importPdf = false;
     var paperStyle = PaperStyle.grid;
     var cover = AppColors.primary;
@@ -305,25 +306,28 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       const SizedBox(width: 8),
                       FilledButton(
                         onPressed: () {
+                          if (importPdf) {
+                            // Create the PDF notebook only after a real file is chosen.
+                            Navigator.pop(context, true);
+                            return;
+                          }
                           final title = titleController.text.trim().isEmpty
-                              ? (importPdf ? 'Tài liệu PDF mới' : 'Vở học mới')
+                              ? 'Vở học mới'
                               : titleController.text.trim();
-                          widget.state.addNotebook(
-                            NotebookData(
-                              id: DateTime.now().millisecondsSinceEpoch
-                                  .toString(),
-                              title: title,
-                              type: importPdf ? 'PDF' : 'Vở ghi',
-                              pages: importPdf ? 24 : 1,
-                              color: cover,
-                              paperStyle: paperStyle,
-                            ),
+                          createdNotebook = NotebookData(
+                            id: DateTime.now().millisecondsSinceEpoch
+                                .toString(),
+                            title: title,
+                            type: 'Vở ghi',
+                            pages: 1,
+                            color: cover,
+                            paperStyle: paperStyle,
                           );
-                          Navigator.pop(context);
-                          showAppSnack(
-                            this.context,
-                            importPdf ? 'Đã nhập PDF' : 'Đã tạo vở mới',
-                          );
+                          widget.state.addNotebook(createdNotebook!);
+                          // Let the parent finish the dialog transition before
+                          // opening the editor; this avoids replacing the route
+                          // while the create dialog is still being dismissed.
+                          Navigator.pop(context, false);
                         },
                         child: Text(importPdf ? 'Nhập PDF' : 'Tạo vở'),
                       ),
@@ -340,7 +344,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
     // finished. Keep the controller alive until that route is fully gone.
     await Future<void>.delayed(const Duration(milliseconds: 300));
     titleController.dispose();
-    if (!mounted || openImporter != true) return;
+    if (!mounted) return;
+    if (openImporter != true) {
+      final notebook = createdNotebook;
+      if (notebook == null) return;
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      widget.state.open(notebook, page: 1);
+      showAppSnack(context, 'Đã tạo vở mới · Trang trắng');
+      return;
+    }
     await WidgetsBinding.instance.endOfFrame;
     if (mounted) await _showImportFilesDialog();
   }
