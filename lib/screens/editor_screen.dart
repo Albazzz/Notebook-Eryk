@@ -2711,14 +2711,21 @@ class _QuickDictionaryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final query = controller.text.trim();
+    final screen = MediaQuery.sizeOf(context);
+    final cardWidth = math
+        .min(width, math.max(220, screen.width - 32))
+        .toDouble();
+    final cardHeight = math
+        .min(height, math.max(260, screen.height - 32))
+        .toDouble();
     return Material(
       elevation: 12,
       color: Theme.of(context).colorScheme.surface,
       borderRadius: BorderRadius.circular(20),
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
-        width: width,
-        height: height,
+        width: cardWidth,
+        height: cardHeight,
         child: Stack(
           children: [
             Container(
@@ -2928,208 +2935,220 @@ class _ResultCard extends StatelessWidget {
   final ValueChanged<Offset> onDrag;
   final ValueChanged<Offset> onResize;
   @override
-  Widget build(BuildContext context) => Material(
-    elevation: 12,
-    borderRadius: BorderRadius.circular(20),
-    child: Stack(
-      children: [
-        Container(
-          width: width,
-          constraints: BoxConstraints(minHeight: height, maxHeight: height),
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onPanUpdate: editing
-                      ? (details) => onDrag(details.delta)
-                      : null,
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.move,
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.drag_indicator_rounded,
-                          color: Colors.grey,
-                        ),
-                        const SizedBox(width: 5),
-                        Icon(
-                          result.dictionaryEntry == null
-                              ? Icons.auto_awesome
-                              : Icons.menu_book_outlined,
-                          color: result.dictionaryEntry == null
-                              ? AppColors.explain
-                              : AppColors.dictionary,
-                        ),
-                        const SizedBox(width: 9),
-                        Expanded(
-                          child: Text(
-                            result.title,
-                            style: Theme.of(context).textTheme.titleLarge,
+  Widget build(BuildContext context) {
+    final screen = MediaQuery.sizeOf(context);
+    final cardWidth = math
+        .min(width, math.max(220, screen.width - 32))
+        .toDouble();
+    final cardHeight = math
+        .min(height, math.max(220, screen.height - 32))
+        .toDouble();
+    return Material(
+      elevation: 12,
+      borderRadius: BorderRadius.circular(20),
+      child: Stack(
+        children: [
+          Container(
+            width: cardWidth,
+            constraints: BoxConstraints(
+              minHeight: cardHeight,
+              maxHeight: cardHeight,
+            ),
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onPanUpdate: editing
+                        ? (details) => onDrag(details.delta)
+                        : null,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.move,
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.drag_indicator_rounded,
+                            color: Colors.grey,
                           ),
-                        ),
-                        if (editing) ...[
-                          IconButton(
-                            onPressed: onCancelEdit,
-                            icon: const Icon(Icons.close),
-                            tooltip: 'Hủy thay đổi vị trí/kích thước',
+                          const SizedBox(width: 5),
+                          Icon(
+                            result.dictionaryEntry == null
+                                ? Icons.auto_awesome
+                                : Icons.menu_book_outlined,
+                            color: result.dictionaryEntry == null
+                                ? AppColors.explain
+                                : AppColors.dictionary,
                           ),
-                          IconButton(
-                            onPressed: onConfirmEdit,
-                            icon: const Icon(Icons.check_rounded),
-                            tooltip: 'Xác nhận vị trí/kích thước',
-                          ),
-                        ] else ...[
-                          IconButton(
-                            onPressed: onEdit,
-                            icon: const Icon(Icons.open_with_rounded),
-                            tooltip: 'Chỉnh vị trí/kích thước',
-                          ),
-                          IconButton(
-                            onPressed: onClose,
-                            icon: const Icon(Icons.close),
-                            tooltip: 'Đóng',
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.only(left: 30, top: 2),
-                  child: Text(
-                    'Kéo thanh tiêu đề để di chuyển',
-                    style: TextStyle(fontSize: 10, color: Colors.grey),
-                  ),
-                ),
-                if (result.dictionaryEntry != null)
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: [
-                      const _TinyBadge(label: 'Từ điển ngoại tuyến'),
-                      if (result.dictionaryEntry!.level.isNotEmpty)
-                        _TinyBadge(
-                          label: 'JLPT ${result.dictionaryEntry!.level}',
-                        ),
-                    ],
-                  ),
-                const SizedBox(height: 12),
-                Text(
-                  result.source,
-                  style: TextStyle(
-                    fontSize: result.dictionaryEntry != null ? 18 : 13,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    height: 1.55,
-                  ),
-                ),
-                const Divider(height: 24),
-                Text(
-                  result.body,
-                  style: const TextStyle(fontSize: 15, height: 1.55),
-                ),
-                if (result.dictionaryEntry case final entry?
-                    when entry.similarEntries.isNotEmpty) ...[
-                  const SizedBox(height: 18),
-                  Text(
-                    'Gợi ý gần nghĩa',
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  ...entry.similarEntries.map(
-                    (similar) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.surfaceContainerLow,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    '${similar.word}【${similar.reading}】',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ),
-                                if (similar.level.isNotEmpty)
-                                  _TinyBadge(label: similar.level),
-                              ],
+                          const SizedBox(width: 9),
+                          Expanded(
+                            child: Text(
+                              result.title,
+                              style: Theme.of(context).textTheme.titleLarge,
                             ),
-                            const SizedBox(height: 3),
-                            Text(
-                              similar.meaning,
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
+                          ),
+                          if (editing) ...[
+                            IconButton(
+                              onPressed: onCancelEdit,
+                              icon: const Icon(Icons.close),
+                              tooltip: 'Hủy thay đổi vị trí/kích thước',
+                            ),
+                            IconButton(
+                              onPressed: onConfirmEdit,
+                              icon: const Icon(Icons.check_rounded),
+                              tooltip: 'Xác nhận vị trí/kích thước',
+                            ),
+                          ] else ...[
+                            IconButton(
+                              onPressed: onEdit,
+                              icon: const Icon(Icons.open_with_rounded),
+                              tooltip: 'Chỉnh vị trí/kích thước',
+                            ),
+                            IconButton(
+                              onPressed: onClose,
+                              icon: const Icon(Icons.close),
+                              tooltip: 'Đóng',
                             ),
                           ],
-                        ),
+                        ],
                       ),
                     ),
                   ),
-                ],
-                const SizedBox(height: 18),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: onPin,
-                      icon: const Icon(Icons.push_pin_outlined, size: 18),
-                      label: const Text('Ghim'),
+                  const Padding(
+                    padding: EdgeInsets.only(left: 30, top: 2),
+                    child: Text(
+                      'Kéo thanh tiêu đề để di chuyển',
+                      style: TextStyle(fontSize: 10, color: Colors.grey),
                     ),
-                    OutlinedButton.icon(
-                      onPressed: onWeakness,
-                      icon: const Icon(Icons.bookmark_add_outlined, size: 18),
-                      label: const Text('Điểm yếu'),
+                  ),
+                  if (result.dictionaryEntry != null)
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        const _TinyBadge(label: 'Từ điển ngoại tuyến'),
+                        if (result.dictionaryEntry!.level.isNotEmpty)
+                          _TinyBadge(
+                            label: 'JLPT ${result.dictionaryEntry!.level}',
+                          ),
+                      ],
                     ),
-                    TextButton(
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(text: result.body));
-                        showAppSnack(context, 'Đã sao chép');
-                      },
-                      child: const Text('Sao chép'),
+                  const SizedBox(height: 12),
+                  Text(
+                    result.source,
+                    style: TextStyle(
+                      fontSize: result.dictionaryEntry != null ? 18 : 13,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      height: 1.55,
+                    ),
+                  ),
+                  const Divider(height: 24),
+                  Text(
+                    result.body,
+                    style: const TextStyle(fontSize: 15, height: 1.55),
+                  ),
+                  if (result.dictionaryEntry case final entry?
+                      when entry.similarEntries.isNotEmpty) ...[
+                    const SizedBox(height: 18),
+                    Text(
+                      'Gợi ý gần nghĩa',
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ...entry.similarEntries.map(
+                      (similar) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.surfaceContainerLow,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      '${similar.word}【${similar.reading}】',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  if (similar.level.isNotEmpty)
+                                    _TinyBadge(label: similar.level),
+                                ],
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                similar.meaning,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
                   ],
-                ),
-              ],
+                  const SizedBox(height: 18),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: onPin,
+                        icon: const Icon(Icons.push_pin_outlined, size: 18),
+                        label: const Text('Ghim'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: onWeakness,
+                        icon: const Icon(Icons.bookmark_add_outlined, size: 18),
+                        label: const Text('Điểm yếu'),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: result.body));
+                          showAppSnack(context, 'Đã sao chép');
+                        },
+                        child: const Text('Sao chép'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-        if (editing)
-          Positioned(
-            right: 5,
-            bottom: 5,
-            child: GestureDetector(
-              onPanUpdate: (details) => onResize(details.delta),
-              child: const Icon(Icons.drag_handle_rounded, size: 22),
+          if (editing)
+            Positioned(
+              right: 5,
+              bottom: 5,
+              child: GestureDetector(
+                onPanUpdate: (details) => onResize(details.delta),
+                child: const Icon(Icons.drag_handle_rounded, size: 22),
+              ),
             ),
-          ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 }
 
 class _ProcessingChip extends StatelessWidget {
