@@ -27,40 +27,141 @@ workflows:
     scripts:
       - name: Get Flutter packages
         script: |
+          set -euo pipefail
           flutter pub get
 
       - name: Analyze and test
         script: |
+          set -euo pipefail
           flutter analyze
           flutter test --no-pub
+          python3 tool/validate_ios_ipa.py --self-test
 
       - name: Install iOS pods
         script: |
+          set -euo pipefail
           cd ios
           pod install
 
       - name: Verify Xcode targets
         script: |
+          set -euo pipefail
+          plutil -lint ios/Runner/Info.plist
+          plutil -lint ios/Runner/Runner.entitlements
+          plutil -lint ios/ShareExtension/Info.plist
+          plutil -lint ios/ShareExtension/ShareExtension.entitlements
           xcodebuild -list -project ios/Runner.xcodeproj
           test -f ios/Runner/Runner.entitlements
           test -f ios/ShareExtension/ShareExtension.entitlements
+          RUNNER_GROUP=$(/usr/libexec/PlistBuddy -c \
+            "Print :com.apple.security.application-groups:0" \
+            ios/Runner/Runner.entitlements)
+          EXTENSION_GROUP=$(/usr/libexec/PlistBuddy -c \
+            "Print :com.apple.security.application-groups:0" \
+            ios/ShareExtension/ShareExtension.entitlements)
+          test -n "$RUNNER_GROUP"
+          test "$RUNNER_GROUP" = "$EXTENSION_GROUP"
 
       - name: Build iOS app and Share Extension
         script: |
-          flutter build ios --release --no-codesign --build-number="$BUILD_NUMBER"
+          set -euo pipefail
+          rm -rf build/ios
+          flutter build ios --release --no-codesign \
+            --build-name=1.0.0 \
+            --build-number="$BUILD_NUMBER"
 
-      - name: Verify embedded Share Extension
+      - name: Normalize and verify embedded Share Extension
         script: |
-          test -d build/ios/iphoneos/Runner.app/PlugIns/ShareExtension.appex
-          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" \
-            build/ios/iphoneos/Runner.app/PlugIns/ShareExtension.appex/Info.plist
+          set -euo pipefail
+          APP_DIR=build/ios/iphoneos/Runner.app
+          EXT_DIR="$APP_DIR/PlugIns/ShareExtension.appex"
+          APP_PLIST="$APP_DIR/Info.plist"
+          EXT_PLIST="$EXT_DIR/Info.plist"
+          test -d "$EXT_DIR"
+          test -f "$EXT_PLIST"
+
+          APP_VERSION=$(/usr/libexec/PlistBuddy -c \
+            "Print :CFBundleShortVersionString" "$APP_PLIST")
+          APP_BUILD=$(/usr/libexec/PlistBuddy -c \
+            "Print :CFBundleVersion" "$APP_PLIST")
+          test -n "$APP_VERSION"
+          test -n "$APP_BUILD"
+          case "$APP_BUILD" in *[!0-9.]*) exit 1 ;; esac
+
+          # Keep every nested bundle aligned with the containing app. The
+          # Share Extension target does not inherit Flutter's xcconfig.
+          /usr/libexec/PlistBuddy -c \
+            "Set :CFBundleShortVersionString $APP_VERSION" "$EXT_PLIST"
+          /usr/libexec/PlistBuddy -c \
+            "Set :CFBundleVersion $APP_BUILD" "$EXT_PLIST"
+
+          EXT_VERSION=$(/usr/libexec/PlistBuddy -c \
+            "Print :CFBundleShortVersionString" "$EXT_PLIST")
+          EXT_BUILD=$(/usr/libexec/PlistBuddy -c \
+            "Print :CFBundleVersion" "$EXT_PLIST")
+          test "$EXT_VERSION" = "$APP_VERSION"
+          test "$EXT_BUILD" = "$APP_BUILD"
+
+          APP_ID=$(/usr/libexec/PlistBuddy -c \
+            "Print :CFBundleIdentifier" "$APP_PLIST")
+          EXT_ID=$(/usr/libexec/PlistBuddy -c \
+            "Print :CFBundleIdentifier" "$EXT_PLIST")
+          case "$EXT_ID" in "$APP_ID".*) ;; *) exit 1 ;; esac
+
+          EXT_EXECUTABLE=$(/usr/libexec/PlistBuddy -c \
+            "Print :CFBundleExecutable" "$EXT_PLIST")
+          test -f "$EXT_DIR/$EXT_EXECUTABLE"
+          file "$APP_DIR/Runner" | grep -q arm64
+          file "$EXT_DIR/$EXT_EXECUTABLE" | grep -q arm64
+          /usr/libexec/PlistBuddy -c \
+            "Print :NSExtension:NSExtensionPointIdentifier" "$EXT_PLIST" \
+            | grep -qx "com.apple.share-services"
+
+      - name: Embed entitlements for Sideloadly
+        script: |
+          set -euo pipefail
+          APP_DIR=build/ios/iphoneos/Runner.app
+          EXT_DIR="$APP_DIR/PlugIns/ShareExtension.appex"
+          APP_ENTITLEMENTS=ios/Runner/Runner.entitlements
+          EXT_ENTITLEMENTS=ios/ShareExtension/ShareExtension.entitlements
+          APP_SIGNATURE_ENTITLEMENTS=build/ios/app-signature-entitlements.plist
+          EXT_SIGNATURE_ENTITLEMENTS=build/ios/extension-signature-entitlements.plist
+
+          # An ad-hoc signature is intentionally not installable by itself.
+          # It keeps the requested capabilities inside the IPA so Sideloadly
+          # can provision and re-sign both bundles with the user's Apple ID.
+          /usr/bin/codesign --force --sign - --generate-entitlement-der \
+            --entitlements "$EXT_ENTITLEMENTS" "$EXT_DIR"
+          /usr/bin/codesign --force --sign - --generate-entitlement-der \
+            --entitlements "$APP_ENTITLEMENTS" "$APP_DIR"
+
+          /usr/bin/codesign -d --entitlements :- "$APP_DIR" \
+            > "$APP_SIGNATURE_ENTITLEMENTS"
+          /usr/bin/codesign -d --entitlements :- "$EXT_DIR" \
+            > "$EXT_SIGNATURE_ENTITLEMENTS"
+          SIGNED_APP_GROUP=$(/usr/libexec/PlistBuddy -c \
+            "Print :com.apple.security.application-groups:0" \
+            "$APP_SIGNATURE_ENTITLEMENTS")
+          SIGNED_EXTENSION_GROUP=$(/usr/libexec/PlistBuddy -c \
+            "Print :com.apple.security.application-groups:0" \
+            "$EXT_SIGNATURE_ENTITLEMENTS")
+          test -n "$SIGNED_APP_GROUP"
+          test "$SIGNED_APP_GROUP" = "$SIGNED_EXTENSION_GROUP"
 
       - name: Create unsigned IPA
         script: |
+          set -euo pipefail
+          rm -rf build/ios/ipa
           mkdir -p build/ios/ipa/Payload
           ditto build/ios/iphoneos/Runner.app build/ios/ipa/Payload/Runner.app
           cd build/ios/ipa
           ditto -c -k --sequesterRsrc --keepParent Payload Notebook-Eryk-unsigned.ipa
+          unzip -t Notebook-Eryk-unsigned.ipa
+          zipinfo -1 Notebook-Eryk-unsigned.ipa \
+            | grep -q '^Payload/Runner.app/PlugIns/ShareExtension.appex/Info.plist$'
+          cd "$CM_BUILD_DIR"
+          python3 tool/validate_ios_ipa.py \
+            build/ios/ipa/Notebook-Eryk-unsigned.ipa
 
     artifacts:
       - build/ios/ipa/*.ipa

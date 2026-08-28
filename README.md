@@ -63,3 +63,14 @@ Target `ShareExtension` làm Note Eryk xuất hiện trong Share Sheet của Fil
 4. Xóa app cũ khỏi iPad rồi cài lại. Trong Files/Photos chọn Share → More nếu cần → bật **Nhập vào Note Eryk**.
 
 iPadOS không cho Share Extension tự mở app chứa nó; tệp đã chia sẻ sẽ được app nhận ở lần mở hoặc quay lại foreground kế tiếp.
+
+### Cài IPA bằng Sideloadly
+
+Workflow Codemagic tạo `Notebook-Eryk-unsigned.ipa` để Sideloadly ký bằng Apple ID. Khi cài:
+
+1. Giữ **Remove app extensions** ở trạng thái tắt để `ShareExtension.appex` không bị xóa.
+2. Có thể dùng Automatic Bundle ID; app đọc App Group thực tế từ entitlement sau khi Sideloadly ký.
+3. Dùng lại cùng Apple ID và bundle ID khi auto-refresh để cập nhật đè lên bản cũ.
+4. Tài khoản miễn phí cần ký lại trong 7 ngày và Share Extension dùng thêm một App ID.
+
+Codemagic đồng bộ version của extension với app, nhúng entitlement App Group vào chữ ký ad-hoc rồi chạy `tool/validate_ios_ipa.py` trên chính IPA. Chữ ký ad-hoc này chỉ giữ metadata để Sideloadly cấp profile và ký lại, không dùng để cài trực tiếp. Pipeline sẽ dừng nếu thiếu `CFBundleVersion`, extension không nằm trong app, bundle ID không đúng quan hệ cha–con, executable/chữ ký metadata bị thiếu hoặc bản build không phải iPad-only.

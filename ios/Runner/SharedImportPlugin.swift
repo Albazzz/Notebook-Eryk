@@ -1,10 +1,11 @@
 import Flutter
 import Foundation
+import Security
 import UIKit
 
 final class SharedImportPlugin: NSObject, FlutterPlugin {
   private static let channelName = "com.example.noteeryk/shared_import"
-  private static let appGroup = "group.com.example.noteeryk"
+  private static let fallbackAppGroup = "group.com.example.noteeryk"
   private static let inboxName = "SharedInbox"
   private static let acceptedExtensions = Set([
     "pdf", "doc", "docx", "jpg", "jpeg", "png", "webp", "gif", "heic", "heif"
@@ -72,8 +73,26 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
 
   private static var inboxURL: URL? {
     FileManager.default
-      .containerURL(forSecurityApplicationGroupIdentifier: appGroup)?
+      .containerURL(forSecurityApplicationGroupIdentifier: resolvedAppGroup)?
       .appendingPathComponent(inboxName, isDirectory: true)
+  }
+
+  /// Sideloadly may rewrite identifiers while signing. Read the effective
+  /// App Group entitlement from the signed process instead of assuming the
+  /// identifier embedded in the unsigned project is still unchanged.
+  private static var resolvedAppGroup: String {
+    guard let task = SecTaskCreateFromSelf(nil),
+          let value = SecTaskCopyValueForEntitlement(
+            task,
+            "com.apple.security.application-groups" as CFString,
+            nil
+          ) as? [String],
+          !value.isEmpty else {
+      return fallbackAppGroup
+    }
+    return value.first {
+      $0.localizedCaseInsensitiveContains("noteeryk")
+    } ?? value[0]
   }
 
   private static func pendingFiles() -> [String] {

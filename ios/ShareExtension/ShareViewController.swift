@@ -1,8 +1,9 @@
 import UIKit
+import Security
 import UniformTypeIdentifiers
 
 final class ShareViewController: UIViewController {
-  private let appGroup = "group.com.example.noteeryk"
+  private let fallbackAppGroup = "group.com.example.noteeryk"
   private let inboxName = "SharedInbox"
   private let acceptedExtensions = Set([
     "pdf", "doc", "docx", "jpg", "jpeg", "png", "webp", "gif", "heic", "heif"
@@ -43,7 +44,7 @@ final class ShareViewController: UIViewController {
 
   private func stageAttachments() {
     guard let container = FileManager.default.containerURL(
-      forSecurityApplicationGroupIdentifier: appGroup
+      forSecurityApplicationGroupIdentifier: resolvedAppGroup
     ) else {
       finish(message: "Không truy cập được vùng chia sẻ của Note Eryk.", success: false)
       return
@@ -92,6 +93,23 @@ final class ShareViewController: UIViewController {
         )
       }
     }
+  }
+
+  /// Use the App Group actually granted by the provisioning profile. This
+  /// remains correct when Sideloadly rewrites identifiers for a free team.
+  private var resolvedAppGroup: String {
+    guard let task = SecTaskCreateFromSelf(nil),
+          let value = SecTaskCopyValueForEntitlement(
+            task,
+            "com.apple.security.application-groups" as CFString,
+            nil
+          ) as? [String],
+          !value.isEmpty else {
+      return fallbackAppGroup
+    }
+    return value.first {
+      $0.localizedCaseInsensitiveContains("noteeryk")
+    } ?? value[0]
   }
 
   private func stage(
