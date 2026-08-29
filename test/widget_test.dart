@@ -215,6 +215,82 @@ void main() {
     expect(state.openNotebook, isNull);
     expect(tester.takeException(), isNull);
   });
+  testWidgets('ngón tay kéo trang còn Pencil chỉ tạo nét', (tester) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    state.open(state.notebooks.first, page: 1);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    final controller = tester
+        .widget<InteractiveViewer>(find.byType(InteractiveViewer))
+        .transformationController!;
+    final initial = List<double>.of(controller.value.storage);
+    final finger = TestPointer(30, PointerDeviceKind.touch);
+    await tester.sendEventToBinding(finger.down(const Offset(600, 360)));
+    await tester.sendEventToBinding(finger.move(const Offset(640, 390)));
+    await tester.sendEventToBinding(finger.move(const Offset(690, 420)));
+    await tester.sendEventToBinding(finger.up());
+    await tester.pump();
+    expect(controller.value.storage, isNot(equals(initial)));
+
+    controller.value = controller.value.clone()..setIdentity();
+    final beforePencil = List<double>.of(controller.value.storage);
+    final pencil = TestPointer(31, PointerDeviceKind.stylus);
+    await tester.sendEventToBinding(pencil.down(const Offset(600, 310)));
+    await tester.sendEventToBinding(pencil.move(const Offset(650, 340)));
+    await tester.sendEventToBinding(pencil.move(const Offset(700, 320)));
+    await tester.sendEventToBinding(pencil.up());
+    await tester.pump();
+
+    expect(controller.value.storage, equals(beforePencil));
+    expect(state.strokesFor('n3', 1), hasLength(1));
+  });
+
+  testWidgets('một ngón viết tay và hai ngón điều hướng', (tester) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook()..drawWithFinger = true;
+    addTearDown(state.dispose);
+    state.open(state.notebooks.first, page: 1);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    final controller = tester
+        .widget<InteractiveViewer>(find.byType(InteractiveViewer))
+        .transformationController!;
+    final identity = List<double>.of(controller.value.storage);
+    final finger = TestPointer(40, PointerDeviceKind.touch);
+    await tester.sendEventToBinding(finger.down(const Offset(600, 310)));
+    await tester.sendEventToBinding(finger.move(const Offset(650, 340)));
+    await tester.sendEventToBinding(finger.move(const Offset(700, 320)));
+    await tester.sendEventToBinding(finger.up());
+    await tester.pump();
+    expect(state.strokesFor('n3', 1), hasLength(1));
+    expect(controller.value.storage, equals(identity));
+
+    final first = TestPointer(41, PointerDeviceKind.touch);
+    final second = TestPointer(42, PointerDeviceKind.touch);
+    await tester.sendEventToBinding(first.down(const Offset(590, 370)));
+    await tester.sendEventToBinding(second.down(const Offset(670, 370)));
+    await tester.sendEventToBinding(first.move(const Offset(540, 400)));
+    await tester.sendEventToBinding(second.move(const Offset(720, 400)));
+    await tester.sendEventToBinding(first.up());
+    await tester.sendEventToBinding(second.up());
+    await tester.pump();
+
+    expect(controller.value.storage, isNot(equals(identity)));
+    expect(controller.value.getMaxScaleOnAxis(), greaterThan(1));
+    expect(state.strokesFor('n3', 1), hasLength(1));
+  });
 }
 
 AppState _stateWithNotebook() {

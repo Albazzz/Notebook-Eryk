@@ -6,6 +6,9 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
   private static let channelName = "com.example.noteeryk/shared_import"
   private static let fallbackAppGroup = "group.com.example.noteeryk"
   private static let inboxName = "SharedInbox"
+  private static let pasteboardName = UIPasteboard.Name("com.example.noteeryk.shared-import")
+  private static let pasteboardDataType = "com.example.noteeryk.shared-import.data"
+  private static let pasteboardFilenameType = "com.example.noteeryk.shared-import.filename"
   private static let acceptedExtensions = Set([
     "pdf", "doc", "docx", "jpg", "jpeg", "png", "webp", "gif", "heic", "heif"
   ])
@@ -76,6 +79,17 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
       .appendingPathComponent(inboxName, isDirectory: true)
   }
 
+  private static var fallbackInboxURL: URL? {
+    try? FileManager.default
+      .url(
+        for: .applicationSupportDirectory,
+        in: .userDomainMask,
+        appropriateFor: nil,
+        create: true
+      )
+      .appendingPathComponent(inboxName, isDirectory: true)
+  }
+
   /// Sideloadly may rewrite identifiers while signing. Read the App Group
   /// from the signed provisioning profile instead of assuming the identifier
   /// embedded in the unsigned project is still unchanged.
@@ -120,10 +134,25 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
   }
 
   private static func pendingFiles() -> [String] {
-    guard let inboxURL else { return [] }
+    if let inboxURL {
+      let sharedFiles = files(in: inboxURL)
+      if !sharedFiles.isEmpty {
+        clearPasteboard()
+        return sharedFiles
+      }
+    }
+
+    // Personal/free provisioning can strip App Groups while still allowing
+    // the extension and app to share a named pasteboard via their Team ID.
+    _ = importPasteboardFiles()
+    guard let fallbackInboxURL else { return [] }
+    return files(in: fallbackInboxURL)
+  }
+
+  private static func files(in directory: URL) -> [String] {
     let keys: [URLResourceKey] = [.isRegularFileKey, .creationDateKey]
     guard let enumerator = FileManager.default.enumerator(
-      at: inboxURL,
+      at: directory,
       includingPropertiesForKeys: keys,
       options: [.skipsHiddenFiles]
     ) else { return [] }
@@ -142,24 +171,84 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
       .map { $0.url.path }
   }
 
+  private static func importPasteboardFiles() -> Int {
+    guard let pasteboard = UIPasteboard(name: pasteboardName, create: false),
+          !pasteboard.items.isEmpty,
+          let fallbackInboxURL else { return 0 }
+    let session = fallbackInboxURL
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    do {
+      try FileManager.default.createDirectory(
+        at: session,
+        withIntermediateDirectories: true
+      )
+    } catch {
+      return 0
+    }
+
+    var importedCount = 0
+    for (index, item) in pasteboard.items.enumerated() {
+      guard let data = item[pasteboardDataType] as? Data,
+            let filenameData = item[pasteboardFilenameType] as? Data,
+            let rawFilename = String(data: filenameData, encoding: .utf8) else {
+        continue
+      }
+      let filename = URL(fileURLWithPath: rawFilename).lastPathComponent
+      guard acceptedExtensions.contains(
+        URL(fileURLWithPath: filename).pathExtension.lowercased()
+      ) else { continue }
+      var target = session.appendingPathComponent(filename)
+      if FileManager.default.fileExists(atPath: target.path) {
+        let stem = target.deletingPathExtension().lastPathComponent
+        let ext = target.pathExtension
+        target = session.appendingPathComponent("\(stem)_\(index).\(ext)")
+      }
+      do {
+        try data.write(to: target, options: .atomic)
+        importedCount += 1
+      } catch {
+        continue
+      }
+    }
+    if importedCount > 0 {
+      pasteboard.items = []
+    } else {
+      try? FileManager.default.removeItem(at: session)
+    }
+    return importedCount
+  }
+
+  private static func clearPasteboard() {
+    guard let pasteboard = UIPasteboard(name: pasteboardName, create: false),
+          pasteboard.items.contains(where: { $0[pasteboardDataType] != nil }) else {
+      return
+    }
+    pasteboard.items = []
+  }
+
   private static func removeAcknowledgedFiles(_ paths: [String]) {
-    guard let inboxURL else { return }
-    let inboxPath = inboxURL.standardizedFileURL.path
+    let inboxes = [inboxURL, fallbackInboxURL].compactMap { $0 }
+    guard !inboxes.isEmpty else { return }
+    let inboxPaths = inboxes.map { $0.standardizedFileURL.path }
     let manager = FileManager.default
     for path in paths {
       let url = URL(fileURLWithPath: path).standardizedFileURL
-      guard url.path.hasPrefix(inboxPath + "/") else { continue }
+      guard inboxPaths.contains(where: { url.path.hasPrefix($0 + "/") }) else {
+        continue
+      }
       try? manager.removeItem(at: url)
     }
 
     // Each share is stored in its own session folder. Remove empty sessions.
-    if let children = try? manager.contentsOfDirectory(
-      at: inboxURL,
-      includingPropertiesForKeys: nil
-    ) {
-      for child in children {
-        if (try? manager.contentsOfDirectory(atPath: child.path).isEmpty) == true {
-          try? manager.removeItem(at: child)
+    for inbox in inboxes {
+      if let children = try? manager.contentsOfDirectory(
+        at: inbox,
+        includingPropertiesForKeys: nil
+      ) {
+        for child in children {
+          if (try? manager.contentsOfDirectory(atPath: child.path).isEmpty) == true {
+            try? manager.removeItem(at: child)
+          }
         }
       }
     }

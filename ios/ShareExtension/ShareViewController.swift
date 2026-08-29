@@ -4,6 +4,9 @@ import UniformTypeIdentifiers
 final class ShareViewController: UIViewController {
   private let fallbackAppGroup = "group.com.example.noteeryk"
   private let inboxName = "SharedInbox"
+  private let pasteboardName = UIPasteboard.Name("com.example.noteeryk.shared-import")
+  private let pasteboardDataType = "com.example.noteeryk.shared-import.data"
+  private let pasteboardFilenameType = "com.example.noteeryk.shared-import.filename"
   private let acceptedExtensions = Set([
     "pdf", "doc", "docx", "jpg", "jpeg", "png", "webp", "gif", "heic", "heif"
   ])
@@ -42,6 +45,12 @@ final class ShareViewController: UIViewController {
   }
 
   private func stageAttachments() {
+    if FileManager.default.containerURL(
+      forSecurityApplicationGroupIdentifier: resolvedAppGroup
+    ) == nil {
+      stageAttachmentsUsingPasteboard()
+      return
+    }
     guard let container = FileManager.default.containerURL(
       forSecurityApplicationGroupIdentifier: resolvedAppGroup
     ) else {
@@ -90,12 +99,101 @@ final class ShareViewController: UIViewController {
         try? FileManager.default.removeItem(at: session)
         self.finish(message: "Tệp này chưa được hỗ trợ. Hãy chọn PDF hoặc ảnh.", success: false)
       } else {
+        // Keep a second transfer path for free Sideloadly profiles. The main
+        // app prefers App Group files and only consumes this when needed.
+        _ = self.publishToPasteboard(filesIn: session)
         self.finish(
           message: "Đã gửi \(importedCount) tệp vào Note Eryk.",
           success: true
         )
       }
     }
+  }
+
+  private func stageAttachmentsUsingPasteboard() {
+    let session = FileManager.default.temporaryDirectory
+      .appendingPathComponent(inboxName, isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    do {
+      try FileManager.default.createDirectory(
+        at: session,
+        withIntermediateDirectories: true
+      )
+    } catch {
+      finish(message: "Không thể tạo vùng nhập tệp tạm thời.", success: false)
+      return
+    }
+
+    let providers = (extensionContext?.inputItems ?? [])
+      .compactMap { $0 as? NSExtensionItem }
+      .flatMap { $0.attachments ?? [] }
+    let group = DispatchGroup()
+    let lock = NSLock()
+    var importedCount = 0
+    for (index, provider) in providers.enumerated() {
+      group.enter()
+      stage(provider: provider, index: index, in: session) { success in
+        if success {
+          lock.lock()
+          importedCount += 1
+          lock.unlock()
+        }
+        group.leave()
+      }
+    }
+
+    group.notify(queue: .main) { [weak self] in
+      guard let self else { return }
+      let publishedCount = importedCount > 0
+        ? self.publishToPasteboard(filesIn: session)
+        : 0
+      try? FileManager.default.removeItem(at: session)
+      guard publishedCount > 0 else {
+        self.finish(
+          message: "Không thể chuyển tệp sang Note Eryk. Hãy chọn PDF hoặc ảnh rồi thử lại.",
+          success: false
+        )
+        return
+      }
+      self.finish(
+        message: "Đã gửi \(publishedCount) tệp vào Note Eryk.",
+        success: true
+      )
+    }
+  }
+
+  /// Named pasteboards can be shared by binaries signed with the same Team ID
+  /// and don't require the App Groups capability.
+  private func publishToPasteboard(filesIn directory: URL) -> Int {
+    guard let pasteboard = UIPasteboard(name: pasteboardName, create: true),
+          let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+          ) else { return 0 }
+
+    let items: [[String: Any]] = files.compactMap { file in
+      guard acceptedExtensions.contains(file.pathExtension.lowercased()),
+            let values = try? file.resourceValues(forKeys: [.isRegularFileKey]),
+            values.isRegularFile == true,
+            let data = try? Data(contentsOf: file),
+            let filename = file.lastPathComponent.data(using: .utf8) else {
+        return nil
+      }
+      return [
+        pasteboardDataType: data,
+        pasteboardFilenameType: filename,
+      ]
+    }
+    guard !items.isEmpty else { return 0 }
+    pasteboard.setItems(
+      items,
+      options: [
+        .localOnly: true,
+        .expirationDate: Date().addingTimeInterval(15 * 60),
+      ]
+    )
+    return items.count
   }
 
   /// Use the App Group actually granted by the provisioning profile. This
@@ -305,9 +403,11 @@ final class ShareViewController: UIViewController {
 
   private func finish(message: String, success: Bool) {
     spinner.stopAnimating()
-    statusLabel.text = message
+    statusLabel.text = success
+      ? "\(message)\nMở Note Eryk để hoàn tất nhập."
+      : message
     statusLabel.textColor = success ? .label : .systemRed
-    DispatchQueue.main.asyncAfter(deadline: .now() + (success ? 1.2 : 2.5)) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + (success ? 2.0 : 2.5)) {
       if success {
         self.extensionContext?.completeRequest(returningItems: nil)
       } else {

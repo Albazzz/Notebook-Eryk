@@ -264,6 +264,23 @@ class _PencilSettings extends StatelessWidget {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text(
+                'Viết bằng ngón tay',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: const Text(
+                'Bật: một ngón viết, hai ngón di chuyển/thu phóng · Tắt: ngón tay di chuyển, Pencil viết',
+              ),
+              secondary: const Icon(Icons.gesture_rounded),
+              value: state.drawWithFinger,
+              onChanged: (value) {
+                state.drawWithFinger = value;
+                state.saveGeneralSettings();
+              },
+            ),
+            const Divider(),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text(
                 'Nét theo lực bút',
                 style: TextStyle(fontWeight: FontWeight.w700),
               ),

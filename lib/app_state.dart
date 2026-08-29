@@ -27,6 +27,7 @@ class AppState extends ChangeNotifier {
   bool autoSave = true;
   bool showSnackbars = true;
   bool pressureEnabled = true;
+  bool drawWithFinger = false;
   bool palmRejection = true;
   bool doubleTapEraser = true;
   double paperLineOpacity = .09;
@@ -79,6 +80,7 @@ class AppState extends ChangeNotifier {
     showSnackbars = prefs.getBool('showSnackbars') ?? true;
     configureAppSnackbars(showSnackbars);
     pressureEnabled = prefs.getBool('pressureEnabled') ?? true;
+    drawWithFinger = prefs.getBool('drawWithFinger') ?? false;
     palmRejection = prefs.getBool('palmRejection') ?? true;
     doubleTapEraser = prefs.getBool('doubleTapEraser') ?? true;
     paperLineOpacity = (prefs.getDouble('paperLineOpacity') ?? .09).clamp(
@@ -431,6 +433,7 @@ class AppState extends ChangeNotifier {
     await prefs.setBool('autoSave', autoSave);
     await prefs.setBool('showSnackbars', showSnackbars);
     await prefs.setBool('pressureEnabled', pressureEnabled);
+    await prefs.setBool('drawWithFinger', drawWithFinger);
     await prefs.setBool('palmRejection', palmRejection);
     await prefs.setBool('doubleTapEraser', doubleTapEraser);
     await prefs.setDouble('paperLineOpacity', paperLineOpacity);

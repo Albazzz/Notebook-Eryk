@@ -96,7 +96,10 @@ class _EditorScreenState extends State<EditorScreen> {
   final TransformationController _canvasController = TransformationController();
   final TransformationController _canvasGestureStartController =
       TransformationController();
+  final Map<int, Offset> _canvasTouches = {};
   Offset _canvasGestureStartFocal = Offset.zero;
+  double _canvasGestureStartSpan = 1;
+  bool _canvasGestureReady = false;
   late int _strokesPage;
   late String _strokesNotebookId;
 
@@ -534,6 +537,27 @@ class _EditorScreenState extends State<EditorScreen> {
               pageLocked ? Icons.lock_rounded : Icons.lock_open_rounded,
             ),
           ),
+          IconButton(
+            tooltip: widget.state.drawWithFinger
+                ? 'Một ngón viết · Hai ngón di chuyển/thu phóng'
+                : 'Ngón tay di chuyển/thu phóng · Pencil để viết',
+            isSelected: widget.state.drawWithFinger,
+            style: IconButton.styleFrom(
+              backgroundColor: widget.state.drawWithFinger
+                  ? AppColors.primary.withValues(alpha: .14)
+                  : null,
+              foregroundColor: widget.state.drawWithFinger
+                  ? AppColors.primary
+                  : null,
+            ),
+            onPressed: () {
+              setState(() {
+                widget.state.drawWithFinger = !widget.state.drawWithFinger;
+              });
+              widget.state.saveGeneralSettings();
+            },
+            icon: const Icon(Icons.gesture_rounded),
+          ),
           const SizedBox(width: 8),
           _ToolButton(
             tool: EditorTool.pen,
@@ -777,17 +801,14 @@ class _EditorScreenState extends State<EditorScreen> {
       builder: (context, constraints) {
         final targetHeight = math.min(constraints.maxHeight - 26, 770.0) * zoom;
         final targetWidth = targetHeight * .72;
-        // Keep touch navigation separate from Pencil input. InteractiveViewer
-        // listens to every pointer kind, so its built-in recognizers can steal
-        // a Pencil drag. The outer scale recognizer below accepts touch only.
-        return GestureDetector(
+        // Raw touch tracking avoids Flutter's gesture arena entirely. Pencil
+        // events never enter these callbacks, so writing cannot move the page.
+        return Listener(
           behavior: HitTestBehavior.opaque,
-          supportedDevices: const {
-            PointerDeviceKind.touch,
-            PointerDeviceKind.trackpad,
-          },
-          onScaleStart: pageLocked ? null : _onCanvasScaleStart,
-          onScaleUpdate: pageLocked ? null : _onCanvasScaleUpdate,
+          onPointerDown: pageLocked ? null : _onCanvasPointerDown,
+          onPointerMove: pageLocked ? null : _onCanvasPointerMove,
+          onPointerUp: pageLocked ? null : _onCanvasPointerUp,
+          onPointerCancel: pageLocked ? null : _onCanvasPointerCancel,
           child: InteractiveViewer(
             transformationController: _canvasController,
             panEnabled: false,
@@ -987,22 +1008,96 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  void _onCanvasScaleStart(ScaleStartDetails details) {
-    _canvasGestureStartController.value = _canvasController.value;
-    _canvasGestureStartFocal = details.localFocalPoint;
+  int get _minimumCanvasTouches => widget.state.drawWithFinger ? 2 : 1;
+
+  void _onCanvasPointerDown(PointerDownEvent event) {
+    if (event.kind != PointerDeviceKind.touch) return;
+    _canvasTouches[event.pointer] = event.localPosition;
+    if (_canvasTouches.length >= _minimumCanvasTouches) {
+      _beginCanvasGesture();
+    }
   }
 
-  void _onCanvasScaleUpdate(ScaleUpdateDetails details) {
+  void _beginCanvasGesture() {
+    final positions = _canvasTouches.values.toList(growable: false);
+    if (positions.length < _minimumCanvasTouches) return;
+    _canvasGestureStartController.value = _canvasController.value;
+    _canvasGestureStartFocal = _centroid(positions);
+    _canvasGestureStartSpan = _span(positions);
+    _canvasGestureReady = true;
+  }
+
+  void _onCanvasPointerMove(PointerMoveEvent event) {
+    if (event.kind != PointerDeviceKind.touch ||
+        !_canvasTouches.containsKey(event.pointer)) {
+      return;
+    }
+    _canvasTouches[event.pointer] = event.localPosition;
+    if (_canvasTouches.length < _minimumCanvasTouches) {
+      _canvasGestureReady = false;
+      return;
+    }
+    if (!_canvasGestureReady) {
+      _beginCanvasGesture();
+      return;
+    }
+    final positions = _canvasTouches.values.toList(growable: false);
     final matrix = _canvasGestureStartController.value.clone();
     final startScale = matrix.getMaxScaleOnAxis();
-    final nextScale = (startScale * details.scale).clamp(.7, 2.5).toDouble();
-    final focal = details.localFocalPoint;
+    final relativeScale = _span(positions) / _canvasGestureStartSpan;
+    final nextScale = (startScale * relativeScale).clamp(.7, 2.5).toDouble();
+    final focal = _centroid(positions);
     final focalDelta = focal - _canvasGestureStartFocal;
     matrix.translateByDouble(focalDelta.dx, focalDelta.dy, 0, 1);
-    matrix.translateByDouble(focal.dx, focal.dy, 0, 1);
+    matrix.translateByDouble(
+      _canvasGestureStartFocal.dx,
+      _canvasGestureStartFocal.dy,
+      0,
+      1,
+    );
     matrix.scaleByDouble(nextScale / startScale, nextScale / startScale, 1, 1);
-    matrix.translateByDouble(-focal.dx, -focal.dy, 0, 1);
+    matrix.translateByDouble(
+      -_canvasGestureStartFocal.dx,
+      -_canvasGestureStartFocal.dy,
+      0,
+      1,
+    );
     _canvasController.value = matrix;
+  }
+
+  void _onCanvasPointerUp(PointerUpEvent event) {
+    _finishCanvasPointer(event);
+  }
+
+  void _onCanvasPointerCancel(PointerCancelEvent event) {
+    _finishCanvasPointer(event);
+  }
+
+  void _finishCanvasPointer(PointerEvent event) {
+    if (event.kind != PointerDeviceKind.touch) return;
+    _canvasTouches.remove(event.pointer);
+    _canvasGestureReady = false;
+    if (_canvasTouches.length >= _minimumCanvasTouches) {
+      _beginCanvasGesture();
+    }
+  }
+
+  Offset _centroid(List<Offset> positions) {
+    var sum = Offset.zero;
+    for (final position in positions) {
+      sum += position;
+    }
+    return sum / positions.length.toDouble();
+  }
+
+  double _span(List<Offset> positions) {
+    if (positions.length < 2) return 1;
+    final center = _centroid(positions);
+    var distance = 0.0;
+    for (final position in positions) {
+      distance += (position - center).distance;
+    }
+    return math.max(distance / positions.length, .001);
   }
 
   bool _acceptPointer(PointerEvent event) {
@@ -1011,7 +1106,14 @@ class _EditorScreenState extends State<EditorScreen> {
         event.kind == PointerDeviceKind.mouse) {
       return true;
     }
-    return false;
+    return event.kind == PointerDeviceKind.touch &&
+        widget.state.drawWithFinger &&
+        _touchStarts.length == 1;
+  }
+
+  bool _isStylus(PointerEvent event) {
+    return event.kind == PointerDeviceKind.stylus ||
+        event.kind == PointerDeviceKind.invertedStylus;
   }
 
   double _pressure(PointerEvent event) {
@@ -1025,10 +1127,13 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _onPointerDown(PointerDownEvent event) {
+    if (_isStylus(event)) {
+      _canvasGestureReady = false;
+    }
     if (tool == EditorTool.image) return;
     if (event.kind == PointerDeviceKind.touch) {
       _trackTouchDown(event);
-      return;
+      if (!widget.state.drawWithFinger || _touchStarts.length != 1) return;
     }
     if (!_acceptPointer(event)) return;
     _cancelPendingAi();
@@ -1069,7 +1174,7 @@ class _EditorScreenState extends State<EditorScreen> {
       if (start != null && (event.localPosition - start).distance > 14) {
         _twoFingerCandidate = false;
       }
-      return;
+      if (!widget.state.drawWithFinger || _touchStarts.length != 1) return;
     }
     if (!_acceptPointer(event)) return;
     if (tool == EditorTool.eraser) {
@@ -1091,10 +1196,17 @@ class _EditorScreenState extends State<EditorScreen> {
   void _onPointerUp(PointerUpEvent event) {
     if (tool == EditorTool.image) return;
     if (event.kind == PointerDeviceKind.touch) {
+      if (widget.state.drawWithFinger && _touchStarts.length == 1) {
+        _finishPointerInteraction();
+      }
       _trackTouchUp(event);
       return;
     }
     if (!_acceptPointer(event)) return;
+    _finishPointerInteraction();
+  }
+
+  void _finishPointerInteraction() {
     if (activePoints != null && activePoints!.length > 1) {
       final drawingTool = tool;
       var points = List<StrokePoint>.of(activePoints!);
