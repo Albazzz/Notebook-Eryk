@@ -146,6 +146,7 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
     if let inboxURL {
       let sharedFiles = files(in: inboxURL)
       if !sharedFiles.isEmpty {
+        persistDiagnostics(from: UIPasteboard.general)
         clearPasteboard()
         return sharedFiles
       }
