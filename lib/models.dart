@@ -41,6 +41,31 @@ class PageImagePlacement {
         rotation: rotation ?? this.rotation,
         isBackground: isBackground,
       );
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'path': path,
+    'left': rect.left,
+    'top': rect.top,
+    'width': rect.width,
+    'height': rect.height,
+    'rotation': rotation,
+    'isBackground': isBackground,
+  };
+
+  factory PageImagePlacement.fromJson(Map<String, dynamic> json) =>
+      PageImagePlacement(
+        id: json['id'] as String,
+        path: json['path'] as String,
+        rect: Rect.fromLTWH(
+          (json['left'] as num?)?.toDouble() ?? 0,
+          (json['top'] as num?)?.toDouble() ?? 0,
+          (json['width'] as num?)?.toDouble() ?? 1,
+          (json['height'] as num?)?.toDouble() ?? 1,
+        ),
+        rotation: (json['rotation'] as num?)?.toDouble() ?? 0,
+        isBackground: json['isBackground'] as bool? ?? false,
+      );
 }
 
 enum WeaknessKind { grammar, vocabulary, kanji, reading, other }
@@ -101,6 +126,31 @@ class NotebookData {
   final String lastOpened;
 
   bool get isPdf => type == 'PDF';
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'title': title,
+    'type': type,
+    'pages': pages,
+    'color': color.toARGB32(),
+    'paperStyle': paperStyle.name,
+    'paperLineOpacity': paperLineOpacity,
+    'lastOpened': lastOpened,
+  };
+
+  factory NotebookData.fromJson(Map<String, dynamic> json) => NotebookData(
+    id: json['id'] as String,
+    title: json['title'] as String? ?? 'Notebook',
+    type: json['type'] as String? ?? 'Notebook',
+    pages: ((json['pages'] as num?)?.toInt() ?? 1).clamp(1, 10000).toInt(),
+    color: Color((json['color'] as num?)?.toInt() ?? 0xffdce1ff),
+    paperStyle: PaperStyle.values.firstWhere(
+      (value) => value.name == json['paperStyle'],
+      orElse: () => PaperStyle.grid,
+    ),
+    paperLineOpacity: (json['paperLineOpacity'] as num?)?.toDouble() ?? .09,
+    lastOpened: json['lastOpened'] as String? ?? 'Vừa xong',
+  );
 
   NotebookData copyWith({
     String? title,
@@ -185,6 +235,18 @@ class PinnedNote {
   final String title;
   final String body;
   final Color color;
+
+  Map<String, Object?> toJson() => {
+    'title': title,
+    'body': body,
+    'color': color.toARGB32(),
+  };
+
+  factory PinnedNote.fromJson(Map<String, dynamic> json) => PinnedNote(
+    title: json['title'] as String? ?? '',
+    body: json['body'] as String? ?? '',
+    color: Color((json['color'] as num?)?.toInt() ?? 0xfffff1b8),
+  );
 }
 
 class WeakPoint {

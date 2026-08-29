@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'app_state.dart';
@@ -44,7 +46,15 @@ class _NihongoNotebookAppState extends State<NihongoNotebookApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _checkSharedFiles();
+    if (state == AppLifecycleState.resumed) {
+      _checkSharedFiles();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      // iPadOS may terminate a suspended app without a final callback. The
+      // debounced autosave handles normal edits; this also creates a portable
+      // session snapshot while the process is still alive.
+      unawaited(widget.state.flushPersistence(snapshot: true));
+    }
   }
 
   Future<void> _checkSharedFiles() async {

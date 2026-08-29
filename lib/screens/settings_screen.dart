@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 
 import '../app_state.dart';
 import '../models.dart';
@@ -68,7 +69,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _SettingsSection.general => _GeneralSettings(state: widget.state),
     _SettingsSection.pencil => _PencilSettings(state: widget.state),
     _SettingsSection.ai => _AiSettings(state: widget.state),
-    _SettingsSection.privacy => const _PrivacySettings(),
+    _SettingsSection.privacy => _PrivacySettings(state: widget.state),
     _SettingsSection.about => const _AboutSettings(),
   };
 }
@@ -1300,7 +1301,31 @@ class _FieldLabel extends StatelessWidget {
 }
 
 class _PrivacySettings extends StatelessWidget {
-  const _PrivacySettings();
+  const _PrivacySettings({required this.state});
+  final AppState state;
+
+  Future<void> _export(BuildContext context) async {
+    final file = await state.exportBackupSnapshot();
+    if (context.mounted) {
+      showAppSnack(context, 'Đã tạo backup: ${file.parent.path.split('/').last}');
+    }
+  }
+
+  Future<void> _import(BuildContext context) async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+    );
+    final path = result.isEmpty ? null : result.single.path;
+    if (path == null) return;
+    final restored = await state.importBackupFile(path);
+    if (!context.mounted) return;
+    showAppSnack(
+      context,
+      restored ? 'Đã khôi phục dữ liệu Note Eryk' : 'File backup không hợp lệ',
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1310,7 +1335,7 @@ class _PrivacySettings extends StatelessWidget {
         style: Theme.of(context).textTheme.headlineMedium,
       ),
       const SizedBox(height: 18),
-      const SectionCard(
+      SectionCard(
         child: Column(
           children: [
             _SettingRow(
@@ -1332,6 +1357,33 @@ class _PrivacySettings extends StatelessWidget {
               title: 'Tra từ',
               subtitle: 'Database ngoại tuyến, không gọi AI',
               trailing: Icon(Icons.check_circle, color: AppColors.dictionary),
+            ),
+            const Divider(),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.backup_outlined),
+              title: const Text(
+                'Sao lưu tự động',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+              subtitle: const Text(
+                'Tự lưu thay đổi và tạo bản backup khi app chuyển nền',
+              ),
+              trailing: Wrap(
+                spacing: 4,
+                children: [
+                  IconButton(
+                    tooltip: 'Tạo backup ngay',
+                    icon: const Icon(Icons.download_outlined),
+                    onPressed: () => _export(context),
+                  ),
+                  IconButton(
+                    tooltip: 'Khôi phục backup',
+                    icon: const Icon(Icons.upload_file_outlined),
+                    onPressed: () => _import(context),
+                  ),
+                ],
+              ),
             ),
           ],
         ),

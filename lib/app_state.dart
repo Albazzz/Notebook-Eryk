@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
@@ -14,6 +16,8 @@ class AppState extends ChangeNotifier {
   static const _modelIdsStorageName = 'ai_model_ids';
   static const _modelNamesStorageName = 'ai_model_names';
   static const _savedModelsStorageName = 'ai_saved_models';
+  static const _libraryStorageName = 'notebook_library_v2';
+  static const _backupDirectoryName = 'Backups';
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   final OpenRouterService aiService = OpenRouterService();
   final DictionaryRepository dictionary = LocalDictionaryRepository();
@@ -69,6 +73,9 @@ class AppState extends ChangeNotifier {
   final Set<String> blankPages = {};
   final Map<String, String> sourceDocuments = {};
   List<WeakPoint> weakPoints = [];
+  Future<void>? _persistenceInFlight;
+  bool _persistenceScheduled = false;
+  bool _storageReady = false;
 
   bool get hasApiKey => _apiKey.isNotEmpty;
   String get apiKey => _apiKey;
@@ -127,12 +134,346 @@ class AppState extends ChangeNotifier {
         }
       } catch (_) {}
     }
+    await _loadLibrary(prefs);
+    _storageReady = true;
     notifyListeners();
     debugPrint(
       '[NoteEryk][AppState] initialized destination=$destination '
       'openNotebook=${openNotebook?.id} hasKey=$hasApiKey '
       'configuredModels=${modelIds.length}',
     );
+  }
+
+  Future<void> _loadLibrary(SharedPreferences prefs) async {
+    String? raw;
+    try {
+      final directory = await getApplicationSupportDirectory();
+      final file = File('${directory.path}/notebook_library_v2.json');
+      if (await file.exists()) raw = await file.readAsString();
+    } catch (_) {}
+    raw ??= prefs.getString(_libraryStorageName);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      final rawNotebooks = data['notebooks'] as List?;
+      if (rawNotebooks != null) {
+        notebooks
+          ..clear()
+          ..addAll(
+            rawNotebooks.map(
+              (item) => NotebookData.fromJson(item as Map<String, dynamic>),
+            ),
+          );
+      }
+      final rawPinned = data['pinnedNotes'] as Map<String, dynamic>?;
+      if (rawPinned != null) {
+        pinnedNotes
+          ..clear()
+          ..addAll(
+            rawPinned.map(
+              (key, value) => MapEntry(
+                key,
+                (value as List)
+                    .map(
+                      (item) => PinnedNote.fromJson(
+                        item as Map<String, dynamic>,
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          );
+      }
+      final rawImages = data['pageImages'] as Map<String, dynamic>?;
+      if (rawImages != null) {
+        pageImages
+          ..clear()
+          ..addAll(
+            rawImages.map(
+              (notebookId, pages) => MapEntry(
+                notebookId,
+                (pages as Map<String, dynamic>).map(
+                  (page, paths) => MapEntry(
+                    int.parse(page),
+                    List<String>.from(paths as List),
+                  ),
+                ),
+              ),
+            ),
+          );
+      }
+      final rawPlacements = data['imagePlacements'] as Map<String, dynamic>?;
+      if (rawPlacements != null) {
+        imagePlacements
+          ..clear()
+          ..addAll(
+            rawPlacements.map(
+              (key, value) => MapEntry(
+                key,
+                PageImagePlacement.fromJson(value as Map<String, dynamic>),
+              ),
+            ),
+          );
+      }
+      blankPages
+        ..clear()
+        ..addAll(List<String>.from(data['blankPages'] as List? ?? const []));
+      sourceDocuments
+        ..clear()
+        ..addAll(Map<String, String>.from(data['sourceDocuments'] as Map? ?? {}));
+      final rawWeakPoints = data['weakPoints'] as List?;
+      if (rawWeakPoints != null) {
+        weakPoints = rawWeakPoints
+            .map((item) => WeakPoint.fromJson(item as Map<String, dynamic>))
+            .toList();
+      }
+      final rawLibraryStrokes = data['strokes'] as Map<String, dynamic>?;
+      if (rawLibraryStrokes != null) {
+        strokes
+          ..clear()
+          ..addAll(
+            rawLibraryStrokes.map(
+              (key, value) => MapEntry(
+                key,
+                (value as List)
+                    .map(
+                      (item) => InkStroke.fromJson(
+                        item as Map<String, dynamic>,
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          );
+      }
+    } catch (error) {
+      debugPrint('[NoteEryk][Storage] library load failed: $error');
+    }
+  }
+
+  Map<String, Object?> _librarySnapshot() => {
+    'version': 2,
+    'updatedAt': DateTime.now().toIso8601String(),
+    'notebooks': notebooks.map((item) => item.toJson()).toList(),
+    'strokes': strokes.map(
+      (key, value) => MapEntry(
+        key,
+        value.map((stroke) => stroke.toJson()).toList(),
+      ),
+    ),
+    'pinnedNotes': pinnedNotes.map(
+      (key, value) => MapEntry(
+        key,
+        value.map((note) => note.toJson()).toList(),
+      ),
+    ),
+    'pageImages': pageImages.map(
+      (notebookId, pages) => MapEntry(
+        notebookId,
+        pages.map((page, paths) => MapEntry(page.toString(), paths)),
+      ),
+    ),
+    'imagePlacements': imagePlacements.map(
+      (key, value) => MapEntry(key, value.toJson()),
+    ),
+    'blankPages': blankPages.toList(),
+    'sourceDocuments': sourceDocuments,
+    'weakPoints': weakPoints.map((item) => item.toJson()).toList(),
+  };
+
+  void schedulePersistence() {
+    if (!autoSave || !_storageReady) return;
+    if (_persistenceScheduled) return;
+    _persistenceScheduled = true;
+    scheduleMicrotask(() {
+      _persistenceScheduled = false;
+      unawaited(flushPersistence());
+    });
+  }
+
+  Future<void> flushPersistence({bool snapshot = false}) async {
+    if (!_storageReady) return;
+    final running = _persistenceInFlight;
+    if (running != null) await running;
+    final operation = _persistLibrary();
+    _persistenceInFlight = operation;
+    try {
+      await operation;
+      if (snapshot) await exportBackupSnapshot();
+    } finally {
+      if (identical(_persistenceInFlight, operation)) {
+        _persistenceInFlight = null;
+      }
+      if (_persistenceScheduled) schedulePersistence();
+    }
+  }
+
+  Future<void> _persistLibrary() async {
+    final encoded = jsonEncode(_librarySnapshot());
+    final directory = await getApplicationSupportDirectory();
+    final target = File('${directory.path}/notebook_library_v2.json');
+    final temporary = File('${target.path}.tmp');
+    await temporary.writeAsString(encoded, flush: true);
+    if (await target.exists()) await target.delete();
+    await temporary.rename(target.path);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_libraryStorageName, encoded);
+    } catch (error) {
+      debugPrint('[NoteEryk][Storage] preferences mirror failed: $error');
+    }
+  }
+
+  Future<File> exportBackupSnapshot() async {
+    final documents = await getApplicationDocumentsDirectory();
+    final backups = Directory('${documents.path}/$_backupDirectoryName');
+    await backups.create(recursive: true);
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .replaceAll('.', '-');
+    final snapshotDirectory = Directory(
+      '${backups.path}/NoteEryk-$stamp.noteeryk',
+    );
+    final attachmentsDirectory = Directory(
+      '${snapshotDirectory.path}/Files',
+    );
+    await attachmentsDirectory.create(recursive: true);
+    final snapshot = _librarySnapshot();
+    final attachments = <String, String>{};
+    var attachmentIndex = 0;
+    for (final sourcePath in _attachmentPaths().toSet()) {
+      final source = File(sourcePath);
+      if (!await source.exists()) continue;
+      final filename = source.uri.pathSegments.last;
+      final targetName = '${attachmentIndex++}_$filename';
+      await source.copy(
+        '${attachmentsDirectory.path}/$targetName',
+      );
+      attachments[sourcePath] = 'Files/$targetName';
+    }
+    snapshot['attachments'] = attachments;
+    final target = File('${snapshotDirectory.path}/manifest.json');
+    final temporary = File('${target.path}.tmp');
+    await temporary.writeAsString(
+      jsonEncode({
+        'format': 'note-eryk-backup',
+        'version': 1,
+        'createdAt': DateTime.now().toIso8601String(),
+        ...snapshot,
+      }),
+      flush: true,
+    );
+    await temporary.rename(target.path);
+    final snapshots = backups
+        .listSync()
+        .whereType<Directory>()
+        .where((directory) => directory.path.endsWith('.noteeryk'))
+        .toList()
+      ..sort(
+        (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+      );
+    for (final old in snapshots.skip(5)) {
+      await old.delete();
+    }
+    return target;
+  }
+
+  Iterable<String> _attachmentPaths() sync* {
+    for (final pages in pageImages.values) {
+      for (final paths in pages.values) {
+        yield* paths;
+      }
+    }
+    yield* sourceDocuments.values;
+    for (final point in weakPoints) {
+      final path = point.sourceImagePath;
+      if (path != null && path.isNotEmpty) yield path;
+    }
+  }
+
+  Future<bool> importBackupFile(String path) async {
+    try {
+      final data = jsonDecode(await File(path).readAsString())
+          as Map<String, dynamic>;
+      if (data['format'] != 'note-eryk-backup' || data['version'] != 1) {
+        return false;
+      }
+      final prefs = await SharedPreferences.getInstance();
+      final library = Map<String, dynamic>.from(data)
+        ..remove('format')
+        ..remove('createdAt')
+        ..remove('attachments');
+      final attachments = Map<String, dynamic>.from(
+        data['attachments'] as Map? ?? const {},
+      );
+      if (attachments.isNotEmpty) {
+        final restoreDirectory = Directory(
+          '${(await getApplicationSupportDirectory()).path}/imports/restored_${DateTime.now().microsecondsSinceEpoch}',
+        );
+        await restoreDirectory.create(recursive: true);
+        final restoredPaths = <String, String>{};
+        for (final entry in attachments.entries) {
+          final source = File('${File(path).parent.path}/${entry.value}');
+          if (!await source.exists()) continue;
+          final destination = await source.copy(
+            '${restoreDirectory.path}/${source.uri.pathSegments.last}',
+          );
+          restoredPaths[entry.key] = destination.path;
+        }
+        _replaceBackupPaths(library, restoredPaths);
+      }
+      await prefs.setString(_libraryStorageName, jsonEncode(library));
+      try {
+        final directory = await getApplicationSupportDirectory();
+        final existing = File('${directory.path}/notebook_library_v2.json');
+        if (await existing.exists()) await existing.delete();
+      } catch (_) {}
+      await _loadLibrary(prefs);
+      await flushPersistence();
+      notifyListeners();
+      return true;
+    } catch (error) {
+      debugPrint('[NoteEryk][Storage] backup import failed: $error');
+      return false;
+    }
+  }
+
+  void _replaceBackupPaths(
+    Map<String, dynamic> library,
+    Map<String, String> replacements,
+  ) {
+    final images = library['pageImages'] as Map<String, dynamic>?;
+    images?.forEach((_, pages) {
+      (pages as Map<String, dynamic>).forEach((_, paths) {
+        final list = paths as List;
+        for (var index = 0; index < list.length; index++) {
+          list[index] = replacements[list[index]] ?? list[index];
+        }
+      });
+    });
+    final placements = library['imagePlacements'] as Map<String, dynamic>?;
+    placements?.forEach((_, value) {
+      final placement = value as Map<String, dynamic>;
+      final path = placement['path'];
+      if (path is String && replacements.containsKey(path)) {
+        placement['path'] = replacements[path];
+      }
+    });
+    final documents = library['sourceDocuments'] as Map<String, dynamic>?;
+    documents?.forEach((key, value) {
+      if (value is String && replacements.containsKey(value)) {
+        documents[key] = replacements[value];
+      }
+    });
+    final points = library['weakPoints'] as List?;
+    points?.forEach((item) {
+      final point = item as Map<String, dynamic>;
+      final path = point['sourceImagePath'];
+      if (path is String && replacements.containsKey(path)) {
+        point['sourceImagePath'] = replacements[path];
+      }
+    });
   }
 
   List<WeakPoint> _seedWeakPoints() => [
@@ -233,6 +574,7 @@ class AppState extends ChangeNotifier {
   void addNotebook(NotebookData notebook) {
     notebooks.add(notebook);
     notifyListeners();
+    schedulePersistence();
   }
 
   void updateNotebook(NotebookData notebook) {
@@ -241,6 +583,7 @@ class AppState extends ChangeNotifier {
     notebooks[index] = notebook;
     if (openNotebook?.id == notebook.id) openNotebook = notebook;
     notifyListeners();
+    schedulePersistence();
   }
 
   void removeNotebook(String notebookId) {
@@ -256,6 +599,7 @@ class AppState extends ChangeNotifier {
     sourceDocuments.remove(notebookId);
     debugPrint('[NoteEryk][Library] removeNotebook $notebookId');
     notifyListeners();
+    schedulePersistence();
   }
 
   void addPage(String notebookId, {bool blank = false}) {
@@ -274,6 +618,7 @@ class AppState extends ChangeNotifier {
       '[NoteEryk][Pages] addPage notebook=$notebookId page=${updated.pages} blank=$blank',
     );
     notifyListeners();
+    schedulePersistence();
   }
 
   List<String> imagesForPage(String notebookId, int page) =>
@@ -309,7 +654,7 @@ class AppState extends ChangeNotifier {
               .68,
               .46,
             );
-      imagePlacements[id] = PageImagePlacement(
+    imagePlacements[id] = PageImagePlacement(
         id: id,
         path: path,
         rect: rect,
@@ -317,6 +662,7 @@ class AppState extends ChangeNotifier {
       );
     }
     notifyListeners();
+    schedulePersistence();
   }
 
   List<PageImagePlacement> imagePlacementsForPage(String notebookId, int page) {
@@ -331,6 +677,7 @@ class AppState extends ChangeNotifier {
     if (!imagePlacements.containsKey(placement.id)) return;
     imagePlacements[placement.id] = placement;
     notifyListeners();
+    schedulePersistence();
   }
 
   void replacePageImage(
@@ -345,6 +692,7 @@ class AppState extends ChangeNotifier {
     if (pathIndex >= 0) paths[pathIndex] = newPath;
     imagePlacements[placement.id] = placement.copyWith(path: newPath);
     notifyListeners();
+    schedulePersistence();
   }
 
   void removePageImage(String notebookId, int page, String placementId) {
@@ -352,11 +700,13 @@ class AppState extends ChangeNotifier {
     if (placement == null) return;
     pageImages[notebookId]?[page]?.remove(placement.path);
     notifyListeners();
+    schedulePersistence();
   }
 
   void attachSourceDocument(String notebookId, String path) {
     sourceDocuments[notebookId] = path;
     notifyListeners();
+    schedulePersistence();
   }
 
   String _strokeKey(String notebookId, int page) => '$notebookId:$page';
@@ -372,7 +722,10 @@ class AppState extends ChangeNotifier {
         page ?? (openNotebook?.id == notebookId ? openPage : 1);
     strokes[_strokeKey(notebookId, resolvedPage)] = List.of(value);
     notifyListeners();
-    if (autoSave) _persistStrokes();
+    if (autoSave) {
+      _persistStrokes();
+      schedulePersistence();
+    }
   }
 
   Future<void> _persistStrokes() async {
@@ -391,12 +744,14 @@ class AppState extends ChangeNotifier {
   void pinNote(String notebookId, PinnedNote note) {
     pinnedNotes.putIfAbsent(notebookId, () => []).add(note);
     notifyListeners();
+    schedulePersistence();
   }
 
   void addWeakPoint(WeakPoint weakPoint) {
     weakPoints.insert(0, weakPoint);
     notifyListeners();
     _persistWeakPoints();
+    schedulePersistence();
   }
 
   void updateWeakPoint(WeakPoint weakPoint) {
@@ -404,6 +759,7 @@ class AppState extends ChangeNotifier {
     if (index >= 0) weakPoints[index] = weakPoint;
     notifyListeners();
     _persistWeakPoints();
+    schedulePersistence();
   }
 
   void deleteWeakPoint(String id) {
@@ -417,6 +773,7 @@ class AppState extends ChangeNotifier {
     }
     notifyListeners();
     _persistWeakPoints();
+    schedulePersistence();
   }
 
   Future<void> _persistWeakPoints() async {
