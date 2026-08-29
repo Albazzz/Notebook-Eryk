@@ -197,6 +197,11 @@ final class ShareViewController: UIViewController {
         try? FileManager.default.removeItem(at: session)
         self.finish(message: "Tệp này chưa được hỗ trợ. Hãy chọn PDF hoặc ảnh.", success: false)
       } else {
+        // Keep a second transport even when the extension can see an App
+        // Group. Sideloadly may provision the extension and containing app
+        // with different entitlements; the app can then recover this backup.
+        let backupCount = self.publishToPasteboard(filesIn: session)
+        self.recordDiagnostic("System pasteboard backup · files=\(backupCount)")
         self.finish(
           message: "Đã gửi \(importedCount) tệp vào Note Eryk.",
           success: true

@@ -147,8 +147,8 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
       let sharedFiles = files(in: inboxURL)
       if !sharedFiles.isEmpty {
         clearPasteboard()
+        return sharedFiles
       }
-      return sharedFiles
     }
 
     // Personal/free provisioning can strip App Groups. The extension then
