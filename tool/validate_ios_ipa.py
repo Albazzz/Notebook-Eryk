@@ -81,6 +81,13 @@ def validate_archive(archive: zipfile.ZipFile) -> dict[str, str]:
     )
     if extension_point != "com.apple.share-services":
         raise ValidationError("ShareExtension has the wrong extension point")
+    principal_class = extension.get("NSExtension", {}).get(
+        "NSExtensionPrincipalClass"
+    )
+    if principal_class != "ShareExtension.ShareViewController":
+        raise ValidationError(
+            "ShareExtension has the wrong NSExtensionPrincipalClass"
+        )
 
     for data, bundle, root in (
         (app, "Runner.app", "Payload/Runner.app"),
@@ -140,7 +147,8 @@ def _plist(
     }
     if extension:
         data["NSExtension"] = {
-            "NSExtensionPointIdentifier": "com.apple.share-services"
+            "NSExtensionPointIdentifier": "com.apple.share-services",
+            "NSExtensionPrincipalClass": "ShareExtension.ShareViewController",
         }
     return plistlib.dumps(data)
 
