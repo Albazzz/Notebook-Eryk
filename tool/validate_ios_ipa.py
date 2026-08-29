@@ -14,8 +14,6 @@ from pathlib import Path
 APP_PLIST = "Payload/Runner.app/Info.plist"
 EXTENSION_ROOT = "Payload/Runner.app/PlugIns/ShareExtension.appex"
 EXTENSION_PLIST = f"{EXTENSION_ROOT}/Info.plist"
-APP_SIGNATURE = "Payload/Runner.app/_CodeSignature/CodeResources"
-EXTENSION_SIGNATURE = f"{EXTENSION_ROOT}/_CodeSignature/CodeResources"
 BUILD_VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+){0,2}$")
 RELEASE_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
@@ -102,12 +100,15 @@ def validate_archive(archive: zipfile.ZipFile) -> dict[str, str]:
         if data.get("UIDeviceFamily") != [2]:
             raise ValidationError(f"{bundle} is not configured as iPad-only")
 
-    # These are ad-hoc signatures, not device-installable signatures. Their
-    # purpose is to carry the requested entitlements into the IPA so a signing
-    # tool can provision and replace them with the user's development profile.
-    for signature in (APP_SIGNATURE, EXTENSION_SIGNATURE):
-        if signature not in names or archive.getinfo(signature).file_size == 0:
-            raise ValidationError(f"IPA is missing signing metadata {signature}")
+    # Keep this artifact genuinely unsigned. Sideloadly must sign the app and
+    # every nested executable with one identity; carrying an ad-hoc signature
+    # here can leave the extension with an invalid code-signing page.
+    for signature in (
+        "Payload/Runner.app/_CodeSignature/CodeResources",
+        f"{EXTENSION_ROOT}/_CodeSignature/CodeResources",
+    ):
+        if signature in names:
+            raise ValidationError(f"IPA must be unsigned: found {signature}")
 
     return {
         "app_id": app_id,
@@ -171,8 +172,6 @@ def self_test() -> None:
             ),
         )
         archive.writestr(f"{EXTENSION_ROOT}/ShareExtension", b"extension")
-        archive.writestr(APP_SIGNATURE, b"app-signature-metadata")
-        archive.writestr(EXTENSION_SIGNATURE, b"extension-signature-metadata")
     payload.seek(0)
     with zipfile.ZipFile(payload) as archive:
         validate_archive(archive)

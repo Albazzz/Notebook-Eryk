@@ -117,37 +117,6 @@ workflows:
             "Print :NSExtension:NSExtensionPointIdentifier" "$EXT_PLIST" \
             | grep -qx "com.apple.share-services"
 
-      - name: Embed entitlements for Sideloadly
-        script: |
-          set -euo pipefail
-          APP_DIR=build/ios/iphoneos/Runner.app
-          EXT_DIR="$APP_DIR/PlugIns/ShareExtension.appex"
-          APP_ENTITLEMENTS=ios/Runner/Runner.entitlements
-          EXT_ENTITLEMENTS=ios/ShareExtension/ShareExtension.entitlements
-          APP_SIGNATURE_ENTITLEMENTS=build/ios/app-signature-entitlements.plist
-          EXT_SIGNATURE_ENTITLEMENTS=build/ios/extension-signature-entitlements.plist
-
-          # An ad-hoc signature is intentionally not installable by itself.
-          # It keeps the requested capabilities inside the IPA so Sideloadly
-          # can provision and re-sign both bundles with the user's Apple ID.
-          /usr/bin/codesign --force --sign - --generate-entitlement-der \
-            --entitlements "$EXT_ENTITLEMENTS" "$EXT_DIR"
-          /usr/bin/codesign --force --sign - --generate-entitlement-der \
-            --entitlements "$APP_ENTITLEMENTS" "$APP_DIR"
-
-          /usr/bin/codesign -d --entitlements :- "$APP_DIR" \
-            > "$APP_SIGNATURE_ENTITLEMENTS"
-          /usr/bin/codesign -d --entitlements :- "$EXT_DIR" \
-            > "$EXT_SIGNATURE_ENTITLEMENTS"
-          SIGNED_APP_GROUP=$(/usr/libexec/PlistBuddy -c \
-            "Print :com.apple.security.application-groups:0" \
-            "$APP_SIGNATURE_ENTITLEMENTS")
-          SIGNED_EXTENSION_GROUP=$(/usr/libexec/PlistBuddy -c \
-            "Print :com.apple.security.application-groups:0" \
-            "$EXT_SIGNATURE_ENTITLEMENTS")
-          test -n "$SIGNED_APP_GROUP"
-          test "$SIGNED_APP_GROUP" = "$SIGNED_EXTENSION_GROUP"
-
       - name: Create unsigned IPA
         script: |
           set -euo pipefail
