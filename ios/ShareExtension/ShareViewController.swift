@@ -13,6 +13,9 @@ final class ShareViewController: UIViewController {
   private var didStart = false
   private let statusLabel = UILabel()
   private let spinner = UIActivityIndicatorView(style: .medium)
+  private let finishButton = UIButton(type: .system)
+  private var finishSucceeded = false
+  private var finishMessage = ""
 
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -22,8 +25,17 @@ final class ShareViewController: UIViewController {
     statusLabel.textAlignment = .center
     statusLabel.numberOfLines = 0
 
+    finishButton.configuration = .filled()
+    finishButton.configuration?.cornerStyle = .large
+    finishButton.isHidden = true
+    finishButton.addTarget(
+      self,
+      action: #selector(closeExtension),
+      for: .touchUpInside
+    )
+
     spinner.startAnimating()
-    let stack = UIStackView(arrangedSubviews: [spinner, statusLabel])
+    let stack = UIStackView(arrangedSubviews: [spinner, statusLabel, finishButton])
     stack.axis = .vertical
     stack.alignment = .center
     stack.spacing = 14
@@ -42,6 +54,20 @@ final class ShareViewController: UIViewController {
     guard !didStart else { return }
     didStart = true
     stageAttachments()
+  }
+
+  @objc private func closeExtension() {
+    if finishSucceeded {
+      extensionContext?.completeRequest(returningItems: nil)
+    } else {
+      extensionContext?.cancelRequest(
+        withError: NSError(
+          domain: "NoteErykShareExtension",
+          code: 1,
+          userInfo: [NSLocalizedDescriptionKey: finishMessage]
+        )
+      )
+    }
   }
 
   private func stageAttachments() {
@@ -244,73 +270,203 @@ final class ShareViewController: UIViewController {
     in directory: URL,
     completion: @escaping (Bool) -> Void
   ) {
-    let typeIdentifier: String?
+    var candidates = provider.registeredTypeIdentifiers.filter {
+      isSupportedTypeIdentifier($0)
+    }
+    let suggestedExtension = provider.suggestedName
+      .map { URL(fileURLWithPath: $0).pathExtension.lowercased() }
+    if candidates.isEmpty,
+       let suggestedExtension,
+       acceptedExtensions.contains(suggestedExtension) {
+      // Some Files providers advertise only public.data even though the
+      // suggested filename clearly identifies a PDF, Word file, or image.
+      candidates = provider.registeredTypeIdentifiers
+    }
+    if provider.hasItemConformingToTypeIdentifier(UTType.pdf.identifier) {
+      candidates.append(UTType.pdf.identifier)
+    }
+    if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+      candidates.append(UTType.image.identifier)
+    }
+    if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+      candidates.append(UTType.url.identifier)
+    }
     if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-      typeIdentifier = UTType.fileURL.identifier
-    } else if provider.hasItemConformingToTypeIdentifier(UTType.pdf.identifier) {
-      typeIdentifier = UTType.pdf.identifier
-    } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
-      typeIdentifier = provider.registeredTypeIdentifiers.first {
-        UTType($0)?.conforms(to: .image) == true
-      } ?? UTType.image.identifier
-    } else {
-      typeIdentifier = nil
+      // A concrete data/file representation is more reliable than file-url.
+      candidates.append(UTType.fileURL.identifier)
     }
 
-    guard let typeIdentifier else {
+    var seen = Set<String>()
+    candidates = candidates.filter { seen.insert($0).inserted }
+    candidates.sort { representationPriority($0) < representationPriority($1) }
+    tryRepresentation(
+      provider: provider,
+      candidates: candidates,
+      position: 0,
+      index: index,
+      in: directory,
+      completion: completion
+    )
+  }
+
+  private func representationPriority(_ identifier: String) -> Int {
+    if identifier == UTType.fileURL.identifier { return 3 }
+    if identifier == UTType.url.identifier { return 2 }
+    return 1
+  }
+
+  private func isSupportedTypeIdentifier(_ identifier: String) -> Bool {
+    if identifier == UTType.fileURL.identifier || identifier == UTType.url.identifier {
+      return true
+    }
+    guard let type = UTType(identifier) else { return false }
+    if type.conforms(to: .pdf) || type.conforms(to: .image) { return true }
+    guard let ext = type.preferredFilenameExtension?.lowercased() else {
+      return false
+    }
+    return acceptedExtensions.contains(ext)
+  }
+
+  private func tryRepresentation(
+    provider: NSItemProvider,
+    candidates: [String],
+    position: Int,
+    index: Int,
+    in directory: URL,
+    completion: @escaping (Bool) -> Void
+  ) {
+    guard position < candidates.count else {
       completion(false)
       return
     }
+    let identifier = candidates[position]
+    let tryNext = { [weak self] in
+      guard let self else { completion(false); return }
+      self.tryRepresentation(
+        provider: provider,
+        candidates: candidates,
+        position: position + 1,
+        index: index,
+        in: directory,
+        completion: completion
+      )
+    }
 
-    if typeIdentifier == UTType.fileURL.identifier {
-      provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) {
+    if identifier == UTType.fileURL.identifier || identifier == UTType.url.identifier {
+      provider.loadItem(forTypeIdentifier: identifier, options: nil) {
         [weak self] item, _ in
         guard let self else { completion(false); return }
-        let source = (item as? URL) ?? (item as? NSURL).map { $0 as URL }
-        guard let source else { completion(false); return }
-        completion(self.copy(
+        let source = (item as? URL)
+          ?? (item as? NSURL).map { $0 as URL }
+          ?? (item as? String).flatMap(URL.init(string:))
+        guard let source else {
+          tryNext()
+          return
+        }
+        if source.isFileURL {
+          guard self.copy(
+            source: source,
+            suggestedName: provider.suggestedName,
+            fallbackExtension: nil,
+            index: index,
+            into: directory
+          ) else {
+            tryNext()
+            return
+          }
+          completion(true)
+          return
+        }
+        guard source.scheme == "https" || source.scheme == "http" else {
+          tryNext()
+          return
+        }
+        self.download(
           source: source,
           suggestedName: provider.suggestedName,
-          fallbackExtension: nil,
           index: index,
           into: directory
-        ))
+        ) { success in
+          if success {
+            completion(true)
+          } else {
+            tryNext()
+          }
+        }
       }
       return
     }
 
-    provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) {
+    let fallbackExtension = UTType(identifier)?.preferredFilenameExtension
+    provider.loadFileRepresentation(forTypeIdentifier: identifier) {
       [weak self] source, _ in
       guard let self else { completion(false); return }
-      if let source {
-        let copied = self.copy(
-          source: source,
-          suggestedName: provider.suggestedName,
-          fallbackExtension: UTType(typeIdentifier)?.preferredFilenameExtension,
-          index: index,
-          into: directory
-        )
-        if copied {
-          completion(true)
-          return
-        }
+      if let source,
+         self.copy(
+           source: source,
+           suggestedName: provider.suggestedName,
+           fallbackExtension: fallbackExtension,
+           index: index,
+           into: directory
+         ) {
+        completion(true)
+        return
       }
 
-      // Some Files/Photos providers expose data but decline a temporary file
-      // representation. Fall back to data loading so the Share button still
-      // imports the item instead of appearing to do nothing.
-      provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) {
+      provider.loadDataRepresentation(forTypeIdentifier: identifier) {
         [weak self] data, _ in
-        guard let self, let data else { completion(false); return }
-        completion(self.write(
-          data: data,
-          suggestedName: provider.suggestedName,
-          fallbackExtension: UTType(typeIdentifier)?.preferredFilenameExtension,
-          index: index,
-          into: directory
-        ))
+        guard let self else { completion(false); return }
+        guard let data,
+              self.write(
+                data: data,
+                suggestedName: provider.suggestedName,
+                fallbackExtension: fallbackExtension,
+                index: index,
+                into: directory
+              ) else {
+          tryNext()
+          return
+        }
+        completion(true)
       }
     }
+  }
+
+  private func download(
+    source: URL,
+    suggestedName: String?,
+    index: Int,
+    into directory: URL,
+    completion: @escaping (Bool) -> Void
+  ) {
+    var request = URLRequest(url: source)
+    request.timeoutInterval = 30
+    URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+      guard let self, error == nil, let data, !data.isEmpty else {
+        completion(false)
+        return
+      }
+      if let http = response as? HTTPURLResponse,
+         !(200...299).contains(http.statusCode) {
+        completion(false)
+        return
+      }
+      let responseName = response?.suggestedFilename
+      let urlName = source.lastPathComponent.removingPercentEncoding
+      let name = responseName?.isEmpty == false
+        ? responseName
+        : (suggestedName?.isEmpty == false ? suggestedName : urlName)
+      let mimeExtension = (response as? HTTPURLResponse)
+        .flatMap { $0.mimeType }
+        .flatMap { UTType(mimeType: $0)?.preferredFilenameExtension }
+      completion(self.write(
+        data: data,
+        suggestedName: name,
+        fallbackExtension: mimeExtension,
+        index: index,
+        into: directory
+      ))
+    }.resume()
   }
 
   private func copy(
@@ -403,22 +559,13 @@ final class ShareViewController: UIViewController {
 
   private func finish(message: String, success: Bool) {
     spinner.stopAnimating()
+    finishSucceeded = success
+    finishMessage = message
     statusLabel.text = success
       ? "\(message)\nMở Note Eryk để hoàn tất nhập."
       : message
     statusLabel.textColor = success ? .label : .systemRed
-    DispatchQueue.main.asyncAfter(deadline: .now() + (success ? 2.0 : 2.5)) {
-      if success {
-        self.extensionContext?.completeRequest(returningItems: nil)
-      } else {
-        self.extensionContext?.cancelRequest(
-          withError: NSError(
-            domain: "NoteErykShareExtension",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: message]
-          )
-        )
-      }
-    }
+    finishButton.configuration?.title = success ? "Xong" : "Đóng"
+    finishButton.isHidden = false
   }
 }
