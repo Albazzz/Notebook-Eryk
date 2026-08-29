@@ -274,6 +274,7 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
     \(extensionLog)
 
     --- MAIN APP CHECK ---
+    transport=system-pasteboard-v3
     appGroup=\(resolvedAppGroup)
     groupInbox=\(groupPath)
     groupFiles=\(groupCount)

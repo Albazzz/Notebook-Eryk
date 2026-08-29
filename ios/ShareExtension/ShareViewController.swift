@@ -25,6 +25,16 @@ final class ShareViewController: UIViewController {
   private var usesPasteboardFallback = false
   private var didPublishTransfer = false
 
+  override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
+    super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
+    recordDiagnostic("extension init")
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+    recordDiagnostic("extension init(coder)")
+  }
+
   override func viewDidLoad() {
     super.viewDidLoad()
     let bundleID = Bundle.main.bundleIdentifier ?? "<nil>"
@@ -93,6 +103,7 @@ final class ShareViewController: UIViewController {
     NSLog("[NoteErykShare] %@", line)
 
     diagnosticsLock.lock()
+    let isFirstDiagnostic = diagnostics.isEmpty
     diagnostics.append(line)
     if diagnostics.count > 120 {
       diagnostics.removeFirst(diagnostics.count - 120)
@@ -107,7 +118,7 @@ final class ShareViewController: UIViewController {
       if let pasteboard = UIPasteboard(name: pasteboardName, create: true) {
         pasteboard.setData(data, forPasteboardType: pasteboardType)
       }
-      if self.usesPasteboardFallback && !self.didPublishTransfer {
+      if (self.usesPasteboardFallback || isFirstDiagnostic) && !self.didPublishTransfer {
         UIPasteboard.general.setItems(
           [[pasteboardType: data]],
           options: [
