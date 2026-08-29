@@ -9,6 +9,10 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
   private static let pasteboardName = UIPasteboard.Name("com.example.noteeryk.shared-import")
   private static let pasteboardDataType = "com.example.noteeryk.shared-import.data"
   private static let pasteboardFilenameType = "com.example.noteeryk.shared-import.filename"
+  private static let diagnosticsPasteboardName = UIPasteboard.Name(
+    "com.example.noteeryk.share-diagnostics"
+  )
+  private static let diagnosticsType = "com.example.noteeryk.share-diagnostics.text"
   private static let acceptedExtensions = Set([
     "pdf", "doc", "docx", "jpg", "jpeg", "png", "webp", "gif", "heic", "heif"
   ])
@@ -36,6 +40,11 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
         return
       }
       Self.removeAcknowledgedFiles(paths)
+      result(nil)
+    case "shareDiagnostics":
+      result(Self.shareDiagnostics())
+    case "clearShareDiagnostics":
+      Self.clearShareDiagnostics()
       result(nil)
     case "cropImage":
       guard let arguments = call.arguments as? [String: Any],
@@ -223,6 +232,47 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
           pasteboard.items.contains(where: { $0[pasteboardDataType] != nil }) else {
       return
     }
+    pasteboard.items = []
+  }
+
+  private static func shareDiagnostics() -> String {
+    let extensionLog: String
+    if let pasteboard = UIPasteboard(
+      name: diagnosticsPasteboardName,
+      create: false
+    ),
+    let data = pasteboard.data(forPasteboardType: diagnosticsType),
+    let text = String(data: data, encoding: .utf8) {
+      extensionLog = text
+    } else {
+      extensionLog = "<no extension log>"
+    }
+    let groupPath = inboxURL?.path ?? "<unavailable>"
+    let groupCount = inboxURL.map { files(in: $0).count } ?? 0
+    let fallbackPath = fallbackInboxURL?.path ?? "<unavailable>"
+    let fallbackCount = fallbackInboxURL.map { files(in: $0).count } ?? 0
+    let transferItems = UIPasteboard(
+      name: pasteboardName,
+      create: false
+    )?.numberOfItems ?? 0
+    return """
+    \(extensionLog)
+
+    --- MAIN APP CHECK ---
+    appGroup=\(resolvedAppGroup)
+    groupInbox=\(groupPath)
+    groupFiles=\(groupCount)
+    fallbackInbox=\(fallbackPath)
+    fallbackFiles=\(fallbackCount)
+    transferPasteboardItems=\(transferItems)
+    """
+  }
+
+  private static func clearShareDiagnostics() {
+    guard let pasteboard = UIPasteboard(
+      name: diagnosticsPasteboardName,
+      create: false
+    ) else { return }
     pasteboard.items = []
   }
 

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import '../models.dart';
+import '../shared_import_service.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
@@ -1371,6 +1373,67 @@ class _AboutSettings extends StatelessWidget {
           ],
         ),
       ),
+      const SizedBox(height: 18),
+      SectionCard(
+        child: ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.bug_report_outlined),
+          title: const Text(
+            'Nhật ký Share Extension',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: const Text(
+            'Xem bước cuối cùng trước khi popup Share bị đóng hoặc crash.',
+          ),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: () => _showShareDiagnostics(context),
+        ),
+      ),
     ],
+  );
+}
+
+Future<void> _showShareDiagnostics(BuildContext context) async {
+  final service = SharedImportService();
+  final diagnostics = await service.diagnostics();
+  if (!context.mounted) return;
+  await showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Nhật ký Share Extension'),
+      content: SizedBox(
+        width: 720,
+        child: SingleChildScrollView(
+          child: SelectableText(
+            diagnostics.trim().isEmpty
+                ? 'Chưa có nhật ký. Hãy thử Share một PDF/ảnh rồi mở lại mục này.'
+                : diagnostics,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: diagnostics.trim().isEmpty
+              ? null
+              : () async {
+                  await Clipboard.setData(ClipboardData(text: diagnostics));
+                  if (dialogContext.mounted) Navigator.pop(dialogContext);
+                },
+          child: const Text('Sao chép log'),
+        ),
+        TextButton(
+          onPressed: () async {
+            await service.clearDiagnostics();
+            if (dialogContext.mounted) Navigator.pop(dialogContext);
+          },
+          child: const Text('Xóa log'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('Đóng'),
+        ),
+      ],
+    ),
   );
 }

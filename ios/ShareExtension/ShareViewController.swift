@@ -7,6 +7,10 @@ final class ShareViewController: UIViewController {
   private let pasteboardName = UIPasteboard.Name("com.example.noteeryk.shared-import")
   private let pasteboardDataType = "com.example.noteeryk.shared-import.data"
   private let pasteboardFilenameType = "com.example.noteeryk.shared-import.filename"
+  private let diagnosticsPasteboardName = UIPasteboard.Name(
+    "com.example.noteeryk.share-diagnostics"
+  )
+  private let diagnosticsType = "com.example.noteeryk.share-diagnostics.text"
   private let acceptedExtensions = Set([
     "pdf", "doc", "docx", "jpg", "jpeg", "png", "webp", "gif", "heic", "heif"
   ])
@@ -16,9 +20,19 @@ final class ShareViewController: UIViewController {
   private let finishButton = UIButton(type: .system)
   private var finishSucceeded = false
   private var finishMessage = ""
+  private let diagnosticsLock = NSLock()
+  private var diagnostics: [String] = []
+  private let diagnosticsSession = UUID().uuidString.prefix(8)
 
   override func viewDidLoad() {
     super.viewDidLoad()
+    let bundleID = Bundle.main.bundleIdentifier ?? "<nil>"
+    let bundleVersion = Bundle.main.object(
+      forInfoDictionaryKey: "CFBundleVersion"
+    ) as? String ?? "<nil>"
+    recordDiagnostic(
+      "viewDidLoad · bundle=\(bundleID) · version=\(bundleVersion)"
+    )
     view.backgroundColor = .systemBackground
 
     statusLabel.text = "Đang nhập vào Note Eryk…"
@@ -51,12 +65,14 @@ final class ShareViewController: UIViewController {
 
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
+    recordDiagnostic("viewDidAppear")
     guard !didStart else { return }
     didStart = true
     stageAttachments()
   }
 
   @objc private func closeExtension() {
+    recordDiagnostic("User closed extension · success=\(finishSucceeded)")
     if finishSucceeded {
       extensionContext?.completeRequest(returningItems: nil)
     } else {
@@ -70,16 +86,59 @@ final class ShareViewController: UIViewController {
     }
   }
 
+  private func recordDiagnostic(_ message: String) {
+    let timestamp = ISO8601DateFormatter().string(from: Date())
+    let line = "[\(timestamp)] [\(diagnosticsSession)] \(message)"
+    NSLog("[NoteErykShare] %@", line)
+
+    diagnosticsLock.lock()
+    diagnostics.append(line)
+    if diagnostics.count > 120 {
+      diagnostics.removeFirst(diagnostics.count - 120)
+    }
+    let payload = diagnostics.joined(separator: "\n")
+    diagnosticsLock.unlock()
+
+    let pasteboardName = diagnosticsPasteboardName
+    let pasteboardType = diagnosticsType
+    let persist = {
+      guard let pasteboard = UIPasteboard(
+        name: pasteboardName,
+        create: true
+      ),
+      let data = payload.data(using: .utf8) else { return }
+      pasteboard.setData(data, forPasteboardType: pasteboardType)
+    }
+    if Thread.isMainThread {
+      persist()
+    } else {
+      DispatchQueue.main.sync(execute: persist)
+    }
+  }
+
+  private func recordProviders(_ providers: [NSItemProvider]) {
+    recordDiagnostic("Providers · count=\(providers.count)")
+    for (index, provider) in providers.enumerated() {
+      let name = provider.suggestedName ?? "<nil>"
+      let types = provider.registeredTypeIdentifiers.joined(separator: ",")
+      recordDiagnostic("Provider[\(index)] · name=\(name) · types=\(types)")
+    }
+  }
+
   private func stageAttachments() {
-    if FileManager.default.containerURL(
-      forSecurityApplicationGroupIdentifier: resolvedAppGroup
-    ) == nil {
+    let appGroup = resolvedAppGroup
+    let sharedContainer = FileManager.default.containerURL(
+      forSecurityApplicationGroupIdentifier: appGroup
+    )
+    recordDiagnostic(
+      "App Group · id=\(appGroup) · available=\(sharedContainer != nil)"
+    )
+    if sharedContainer == nil {
+      recordDiagnostic("Using named-pasteboard fallback")
       stageAttachmentsUsingPasteboard()
       return
     }
-    guard let container = FileManager.default.containerURL(
-      forSecurityApplicationGroupIdentifier: resolvedAppGroup
-    ) else {
+    guard let container = sharedContainer else {
       finish(message: "Không truy cập được vùng chia sẻ của Note Eryk.", success: false)
       return
     }
@@ -92,7 +151,9 @@ final class ShareViewController: UIViewController {
         at: session,
         withIntermediateDirectories: true
       )
+      recordDiagnostic("Created shared session · \(session.lastPathComponent)")
     } catch {
+      recordDiagnostic("Create shared session failed · \(error.localizedDescription)")
       finish(message: "Không thể tạo thư mục nhập tệp.", success: false)
       return
     }
@@ -103,6 +164,7 @@ final class ShareViewController: UIViewController {
     let providers = (extensionContext?.inputItems ?? [])
       .compactMap { $0 as? NSExtensionItem }
       .flatMap { $0.attachments ?? [] }
+    recordProviders(providers)
     let group = DispatchGroup()
     let lock = NSLock()
     var importedCount = 0
@@ -121,13 +183,11 @@ final class ShareViewController: UIViewController {
 
     group.notify(queue: .main) { [weak self] in
       guard let self else { return }
+      self.recordDiagnostic("Shared staging finished · imported=\(importedCount)")
       if importedCount == 0 {
         try? FileManager.default.removeItem(at: session)
         self.finish(message: "Tệp này chưa được hỗ trợ. Hãy chọn PDF hoặc ảnh.", success: false)
       } else {
-        // Keep a second transfer path for free Sideloadly profiles. The main
-        // app prefers App Group files and only consumes this when needed.
-        _ = self.publishToPasteboard(filesIn: session)
         self.finish(
           message: "Đã gửi \(importedCount) tệp vào Note Eryk.",
           success: true
@@ -145,7 +205,9 @@ final class ShareViewController: UIViewController {
         at: session,
         withIntermediateDirectories: true
       )
+      recordDiagnostic("Created temporary session · \(session.lastPathComponent)")
     } catch {
+      recordDiagnostic("Create temporary session failed · \(error.localizedDescription)")
       finish(message: "Không thể tạo vùng nhập tệp tạm thời.", success: false)
       return
     }
@@ -153,6 +215,7 @@ final class ShareViewController: UIViewController {
     let providers = (extensionContext?.inputItems ?? [])
       .compactMap { $0 as? NSExtensionItem }
       .flatMap { $0.attachments ?? [] }
+    recordProviders(providers)
     let group = DispatchGroup()
     let lock = NSLock()
     var importedCount = 0
@@ -170,6 +233,7 @@ final class ShareViewController: UIViewController {
 
     group.notify(queue: .main) { [weak self] in
       guard let self else { return }
+      self.recordDiagnostic("Temporary staging finished · imported=\(importedCount)")
       let publishedCount = importedCount > 0
         ? self.publishToPasteboard(filesIn: session)
         : 0
@@ -194,24 +258,51 @@ final class ShareViewController: UIViewController {
     guard let pasteboard = UIPasteboard(name: pasteboardName, create: true),
           let files = try? FileManager.default.contentsOfDirectory(
             at: directory,
-            includingPropertiesForKeys: [.isRegularFileKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
-          ) else { return 0 }
+          ) else {
+      recordDiagnostic("Pasteboard unavailable or session cannot be listed")
+      return 0
+    }
 
-    let items: [[String: Any]] = files.compactMap { file in
+    let maximumPasteboardBytes = 32 * 1024 * 1024
+    var totalBytes = 0
+    var items: [[String: Any]] = []
+    for file in files {
       guard acceptedExtensions.contains(file.pathExtension.lowercased()),
-            let values = try? file.resourceValues(forKeys: [.isRegularFileKey]),
-            values.isRegularFile == true,
-            let data = try? Data(contentsOf: file),
-            let filename = file.lastPathComponent.data(using: .utf8) else {
-        return nil
+            let values = try? file.resourceValues(
+              forKeys: [.isRegularFileKey, .fileSizeKey]
+            ),
+            values.isRegularFile == true else {
+        continue
       }
-      return [
+      let fileBytes = values.fileSize ?? 0
+      recordDiagnostic(
+        "Pasteboard candidate · name=\(file.lastPathComponent) · bytes=\(fileBytes)"
+      )
+      guard fileBytes > 0,
+            totalBytes + fileBytes <= maximumPasteboardBytes else {
+        recordDiagnostic(
+          "Pasteboard limit exceeded · max=\(maximumPasteboardBytes)"
+        )
+        return 0
+      }
+      guard let data = try? Data(contentsOf: file, options: .mappedIfSafe),
+            let filename = file.lastPathComponent.data(using: .utf8) else {
+        recordDiagnostic("Read for pasteboard failed · \(file.lastPathComponent)")
+        return 0
+      }
+      items.append([
         pasteboardDataType: data,
         pasteboardFilenameType: filename,
-      ]
+      ])
+      totalBytes += fileBytes
     }
-    guard !items.isEmpty else { return 0 }
+    guard !items.isEmpty else {
+      recordDiagnostic("No valid files to publish to pasteboard")
+      return 0
+    }
+    recordDiagnostic("Publishing pasteboard · files=\(items.count) · bytes=\(totalBytes)")
     pasteboard.setItems(
       items,
       options: [
@@ -219,6 +310,7 @@ final class ShareViewController: UIViewController {
         .expirationDate: Date().addingTimeInterval(15 * 60),
       ]
     )
+    recordDiagnostic("Pasteboard publish completed")
     return items.count
   }
 
@@ -299,6 +391,9 @@ final class ShareViewController: UIViewController {
     var seen = Set<String>()
     candidates = candidates.filter { seen.insert($0).inserted }
     candidates.sort { representationPriority($0) < representationPriority($1) }
+    recordDiagnostic(
+      "Stage[\(index)] candidates · \(candidates.joined(separator: ","))"
+    )
     tryRepresentation(
       provider: provider,
       candidates: candidates,
@@ -340,6 +435,9 @@ final class ShareViewController: UIViewController {
       return
     }
     let identifier = candidates[position]
+    recordDiagnostic(
+      "Stage[\(index)] attempt \(position + 1)/\(candidates.count) · \(identifier)"
+    )
     let tryNext = { [weak self] in
       guard let self else { completion(false); return }
       self.tryRepresentation(
@@ -354,12 +452,15 @@ final class ShareViewController: UIViewController {
 
     if identifier == UTType.fileURL.identifier || identifier == UTType.url.identifier {
       provider.loadItem(forTypeIdentifier: identifier, options: nil) {
-        [weak self] item, _ in
+        [weak self] item, error in
         guard let self else { completion(false); return }
         let source = (item as? URL)
           ?? (item as? NSURL).map { $0 as URL }
           ?? (item as? String).flatMap(URL.init(string:))
         guard let source else {
+          self.recordDiagnostic(
+            "Stage[\(index)] URL load failed · \(error?.localizedDescription ?? "no URL")"
+          )
           tryNext()
           return
         }
@@ -371,9 +472,11 @@ final class ShareViewController: UIViewController {
             index: index,
             into: directory
           ) else {
+            self.recordDiagnostic("Stage[\(index)] file URL copy failed")
             tryNext()
             return
           }
+          self.recordDiagnostic("Stage[\(index)] file URL copied")
           completion(true)
           return
         }
@@ -399,7 +502,7 @@ final class ShareViewController: UIViewController {
 
     let fallbackExtension = UTType(identifier)?.preferredFilenameExtension
     provider.loadFileRepresentation(forTypeIdentifier: identifier) {
-      [weak self] source, _ in
+      [weak self] source, fileError in
       guard let self else { completion(false); return }
       if let source,
          self.copy(
@@ -409,12 +512,16 @@ final class ShareViewController: UIViewController {
            index: index,
            into: directory
          ) {
+        self.recordDiagnostic("Stage[\(index)] file representation copied")
         completion(true)
         return
       }
 
+      self.recordDiagnostic(
+        "Stage[\(index)] file representation failed · \(fileError?.localizedDescription ?? "nil source")"
+      )
       provider.loadDataRepresentation(forTypeIdentifier: identifier) {
-        [weak self] data, _ in
+        [weak self] data, dataError in
         guard let self else { completion(false); return }
         guard let data,
               self.write(
@@ -424,9 +531,13 @@ final class ShareViewController: UIViewController {
                 index: index,
                 into: directory
               ) else {
+          self.recordDiagnostic(
+            "Stage[\(index)] data representation failed · \(dataError?.localizedDescription ?? "nil data/write failed")"
+          )
           tryNext()
           return
         }
+        self.recordDiagnostic("Stage[\(index)] data representation written")
         completion(true)
       }
     }
@@ -439,15 +550,24 @@ final class ShareViewController: UIViewController {
     into directory: URL,
     completion: @escaping (Bool) -> Void
   ) {
+    recordDiagnostic("Download started · \(source.absoluteString)")
     var request = URLRequest(url: source)
     request.timeoutInterval = 30
     URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-      guard let self, error == nil, let data, !data.isEmpty else {
+      guard let self else {
+        completion(false)
+        return
+      }
+      guard error == nil, let data, !data.isEmpty else {
+        self.recordDiagnostic(
+          "Download failed · \(error?.localizedDescription ?? "empty response")"
+        )
         completion(false)
         return
       }
       if let http = response as? HTTPURLResponse,
          !(200...299).contains(http.statusCode) {
+        self.recordDiagnostic("Download HTTP status · \(http.statusCode)")
         completion(false)
         return
       }
@@ -459,13 +579,17 @@ final class ShareViewController: UIViewController {
       let mimeExtension = (response as? HTTPURLResponse)
         .flatMap { $0.mimeType }
         .flatMap { UTType(mimeType: $0)?.preferredFilenameExtension }
-      completion(self.write(
+      let written = self.write(
         data: data,
         suggestedName: name,
         fallbackExtension: mimeExtension,
         index: index,
         into: directory
-      ))
+      )
+      self.recordDiagnostic(
+        "Download completed · bytes=\(data.count) · written=\(written)"
+      )
+      completion(written)
     }.resume()
   }
 
@@ -490,6 +614,9 @@ final class ShareViewController: UIViewController {
       try FileManager.default.copyItem(at: source, to: target)
       return true
     } catch {
+      recordDiagnostic(
+        "Copy failed · source=\(source.lastPathComponent) · \(error.localizedDescription)"
+      )
       return false
     }
   }
@@ -512,6 +639,9 @@ final class ShareViewController: UIViewController {
       try data.write(to: target, options: .atomic)
       return true
     } catch {
+      recordDiagnostic(
+        "Write failed · target=\(target.lastPathComponent) · \(error.localizedDescription)"
+      )
       return false
     }
   }
@@ -558,6 +688,7 @@ final class ShareViewController: UIViewController {
   }
 
   private func finish(message: String, success: Bool) {
+    recordDiagnostic("Finish · success=\(success) · \(message)")
     spinner.stopAnimating()
     finishSucceeded = success
     finishMessage = message

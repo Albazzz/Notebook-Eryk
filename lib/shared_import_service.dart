@@ -29,4 +29,24 @@ class SharedImportService {
       // on the next foreground pass if native cleanup did not happen.
     }
   }
+
+  Future<String> diagnostics() async {
+    try {
+      return await _channel.invokeMethod<String>('shareDiagnostics') ?? '';
+    } on MissingPluginException {
+      return '';
+    } on PlatformException catch (error) {
+      return 'Không đọc được nhật ký native: ${error.message ?? error.code}';
+    }
+  }
+
+  Future<void> clearDiagnostics() async {
+    try {
+      await _channel.invokeMethod<void>('clearShareDiagnostics');
+    } on MissingPluginException {
+      // Diagnostics are only available in the iOS build.
+    } on PlatformException {
+      // Keep diagnostics UI non-fatal.
+    }
+  }
 }
