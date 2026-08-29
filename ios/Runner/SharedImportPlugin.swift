@@ -6,13 +6,13 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
   private static let channelName = "com.example.noteeryk/shared_import"
   private static let fallbackAppGroup = "group.com.example.noteeryk"
   private static let inboxName = "SharedInbox"
-  private static let pasteboardName = UIPasteboard.Name("com.example.noteeryk.shared-import")
   private static let pasteboardDataType = "com.example.noteeryk.shared-import.data"
   private static let pasteboardFilenameType = "com.example.noteeryk.shared-import.filename"
   private static let diagnosticsPasteboardName = UIPasteboard.Name(
     "com.example.noteeryk.share-diagnostics"
   )
   private static let diagnosticsType = "com.example.noteeryk.share-diagnostics.text"
+  private static let diagnosticsDefaultsKey = "noteeryk.share-extension.diagnostics"
   private static let acceptedExtensions = Set([
     "pdf", "doc", "docx", "jpg", "jpeg", "png", "webp", "gif", "heic", "heif"
   ])
@@ -147,12 +147,13 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
       let sharedFiles = files(in: inboxURL)
       if !sharedFiles.isEmpty {
         clearPasteboard()
-        return sharedFiles
       }
+      return sharedFiles
     }
 
-    // Personal/free provisioning can strip App Groups while still allowing
-    // the extension and app to share a named pasteboard via their Team ID.
+    // Personal/free provisioning can strip App Groups. The extension then
+    // publishes custom file items on the system pasteboard, which survives
+    // after the short-lived extension process exits.
     _ = importPasteboardFiles()
     guard let fallbackInboxURL else { return [] }
     return files(in: fallbackInboxURL)
@@ -181,9 +182,10 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
   }
 
   private static func importPasteboardFiles() -> Int {
-    guard let pasteboard = UIPasteboard(name: pasteboardName, create: false),
-          !pasteboard.items.isEmpty,
+    let pasteboard = UIPasteboard.general
+    guard pasteboard.contains(pasteboardTypes: [pasteboardDataType]),
           let fallbackInboxURL else { return 0 }
+    persistDiagnostics(from: pasteboard)
     let session = fallbackInboxURL
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
     do {
@@ -228,16 +230,29 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
   }
 
   private static func clearPasteboard() {
-    guard let pasteboard = UIPasteboard(name: pasteboardName, create: false),
-          pasteboard.items.contains(where: { $0[pasteboardDataType] != nil }) else {
+    let pasteboard = UIPasteboard.general
+    guard pasteboard.items.contains(where: { $0[pasteboardDataType] != nil }) else {
       return
     }
     pasteboard.items = []
   }
 
+  private static func persistDiagnostics(from pasteboard: UIPasteboard) {
+    guard pasteboard.contains(pasteboardTypes: [diagnosticsType]),
+          let data = pasteboard.data(forPasteboardType: diagnosticsType),
+          let text = String(data: data, encoding: .utf8),
+          !text.isEmpty else { return }
+    UserDefaults.standard.set(text, forKey: diagnosticsDefaultsKey)
+  }
+
   private static func shareDiagnostics() -> String {
+    persistDiagnostics(from: UIPasteboard.general)
     let extensionLog: String
-    if let pasteboard = UIPasteboard(
+    if let persisted = UserDefaults.standard.string(
+      forKey: diagnosticsDefaultsKey
+    ), !persisted.isEmpty {
+      extensionLog = persisted
+    } else if let pasteboard = UIPasteboard(
       name: diagnosticsPasteboardName,
       create: false
     ),
@@ -251,10 +266,9 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
     let groupCount = inboxURL.map { files(in: $0).count } ?? 0
     let fallbackPath = fallbackInboxURL?.path ?? "<unavailable>"
     let fallbackCount = fallbackInboxURL.map { files(in: $0).count } ?? 0
-    let transferItems = UIPasteboard(
-      name: pasteboardName,
-      create: false
-    )?.numberOfItems ?? 0
+    let transferItems = UIPasteboard.general.items.filter {
+      $0[pasteboardDataType] != nil
+    }.count
     return """
     \(extensionLog)
 
@@ -269,6 +283,13 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
   }
 
   private static func clearShareDiagnostics() {
+    UserDefaults.standard.removeObject(forKey: diagnosticsDefaultsKey)
+    let systemPasteboard = UIPasteboard.general
+    if systemPasteboard.items.contains(where: {
+      $0[diagnosticsType] != nil && $0[pasteboardDataType] == nil
+    }) {
+      systemPasteboard.items = []
+    }
     guard let pasteboard = UIPasteboard(
       name: diagnosticsPasteboardName,
       create: false

@@ -4,7 +4,6 @@ import UniformTypeIdentifiers
 final class ShareViewController: UIViewController {
   private let fallbackAppGroup = "group.com.example.noteeryk"
   private let inboxName = "SharedInbox"
-  private let pasteboardName = UIPasteboard.Name("com.example.noteeryk.shared-import")
   private let pasteboardDataType = "com.example.noteeryk.shared-import.data"
   private let pasteboardFilenameType = "com.example.noteeryk.shared-import.filename"
   private let diagnosticsPasteboardName = UIPasteboard.Name(
@@ -23,6 +22,8 @@ final class ShareViewController: UIViewController {
   private let diagnosticsLock = NSLock()
   private var diagnostics: [String] = []
   private let diagnosticsSession = UUID().uuidString.prefix(8)
+  private var usesPasteboardFallback = false
+  private var didPublishTransfer = false
 
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -102,12 +103,19 @@ final class ShareViewController: UIViewController {
     let pasteboardName = diagnosticsPasteboardName
     let pasteboardType = diagnosticsType
     let persist = {
-      guard let pasteboard = UIPasteboard(
-        name: pasteboardName,
-        create: true
-      ),
-      let data = payload.data(using: .utf8) else { return }
-      pasteboard.setData(data, forPasteboardType: pasteboardType)
+      guard let data = payload.data(using: .utf8) else { return }
+      if let pasteboard = UIPasteboard(name: pasteboardName, create: true) {
+        pasteboard.setData(data, forPasteboardType: pasteboardType)
+      }
+      if self.usesPasteboardFallback && !self.didPublishTransfer {
+        UIPasteboard.general.setItems(
+          [[pasteboardType: data]],
+          options: [
+            .localOnly: true,
+            .expirationDate: Date().addingTimeInterval(15 * 60),
+          ]
+        )
+      }
     }
     if Thread.isMainThread {
       persist()
@@ -134,7 +142,8 @@ final class ShareViewController: UIViewController {
       "App Group · id=\(appGroup) · available=\(sharedContainer != nil)"
     )
     if sharedContainer == nil {
-      recordDiagnostic("Using named-pasteboard fallback")
+      usesPasteboardFallback = true
+      recordDiagnostic("Using system-pasteboard fallback")
       stageAttachmentsUsingPasteboard()
       return
     }
@@ -252,11 +261,11 @@ final class ShareViewController: UIViewController {
     }
   }
 
-  /// Named pasteboards can be shared by binaries signed with the same Team ID
-  /// and don't require the App Groups capability.
+  /// The system pasteboard survives after the extension process exits. The
+  /// custom item types distinguish this package from normal copied content and
+  /// let free-provisioned builds work when App Groups have been stripped.
   private func publishToPasteboard(filesIn directory: URL) -> Int {
-    guard let pasteboard = UIPasteboard(name: pasteboardName, create: true),
-          let files = try? FileManager.default.contentsOfDirectory(
+    guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
@@ -303,7 +312,14 @@ final class ShareViewController: UIViewController {
       return 0
     }
     recordDiagnostic("Publishing pasteboard · files=\(items.count) · bytes=\(totalBytes)")
-    pasteboard.setItems(
+    diagnosticsLock.lock()
+    let diagnosticText = diagnostics.joined(separator: "\n")
+    diagnosticsLock.unlock()
+    if let diagnosticData = diagnosticText.data(using: .utf8) {
+      items[0][diagnosticsType] = diagnosticData
+    }
+    didPublishTransfer = true
+    UIPasteboard.general.setItems(
       items,
       options: [
         .localOnly: true,
