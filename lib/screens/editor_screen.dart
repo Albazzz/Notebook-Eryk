@@ -132,6 +132,7 @@ class _EditorScreenState extends State<EditorScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _deleteTemporaryCropIfUnused(_latestCropPath);
     _quickDictionaryDebounce?.cancel();
     _quickDictionaryController.dispose();
     _quickDictionaryFocus.dispose();
@@ -332,12 +333,13 @@ class _EditorScreenState extends State<EditorScreen>
                               Positioned.fill(
                                 child: GestureDetector(
                                   behavior: HitTestBehavior.translucent,
+                                  // Finger swipes change pages even while the
+                                  // Pencil is selected. Pencil events are not
+                                  // part of this gesture recognizer, and
+                                  // drawWithFinger users still have the
+                                  // explicit two-finger canvas navigation.
                                   onHorizontalDragEnd:
-                                      pageLocked ||
-                                          tool == EditorTool.image ||
-                                          tool == EditorTool.pen ||
-                                          tool == EditorTool.highlighter ||
-                                          tool == EditorTool.eraser
+                                      pageLocked || widget.state.drawWithFinger
                                       ? null
                                       : _onPageSwipe,
                                   child: _buildWorkspace(),
@@ -387,6 +389,7 @@ class _EditorScreenState extends State<EditorScreen>
                                         setState(() => result = null),
                                     onPin: _pinResult,
                                     onWeakness: _openWeaknessDraft,
+                                    onAskMore: _askMoreAboutResult,
                                     onEdit: _beginResultEdit,
                                     onCancelEdit: _cancelResultEdit,
                                     onConfirmEdit: _confirmResultEdit,
@@ -595,69 +598,100 @@ class _EditorScreenState extends State<EditorScreen>
             icon: const Icon(Icons.gesture_rounded),
           ),
           const SizedBox(width: 8),
-          _ToolButton(
-            tool: EditorTool.pen,
-            selected: tool == EditorTool.pen,
-            onTap: () => _selectTool(EditorTool.pen),
-          ),
-          _ToolButton(
-            tool: EditorTool.highlighter,
-            selected: tool == EditorTool.highlighter,
-            onTap: () => _selectTool(EditorTool.highlighter),
-          ),
-          _ToolButton(
-            tool: EditorTool.eraser,
-            selected: tool == EditorTool.eraser,
-            onTap: () => _selectTool(EditorTool.eraser),
-          ),
-          _ToolButton(
-            tool: EditorTool.ruler,
-            selected: rulerVisible,
-            onTap: _toggleRuler,
-          ),
-          _ToolButton(
-            tool: EditorTool.image,
-            selected: tool == EditorTool.image,
-            onTap: _activateImageTool,
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 8),
-            child: VerticalDivider(indent: 8, endIndent: 8),
-          ),
-          _ToolButton(
-            tool: EditorTool.dictionary,
-            selected: tool == EditorTool.dictionary,
-            onTap: () => _selectTool(EditorTool.dictionary),
-          ),
-          _ToolButton(
-            tool: EditorTool.quickDictionary,
-            selected: _quickDictionaryOpen,
-            onTap: _toggleQuickDictionary,
-          ),
-          _ToolButton(
-            tool: EditorTool.aiDictionary,
-            selected: tool == EditorTool.aiDictionary,
-            onTap: () => _selectTool(EditorTool.aiDictionary),
-          ),
-          _ToolButton(
-            tool: EditorTool.translate,
-            selected: tool == EditorTool.translate,
-            onTap: () => _selectTool(EditorTool.translate),
-          ),
-          _ToolButton(
-            tool: EditorTool.explain,
-            selected: tool == EditorTool.explain,
-            onTap: () => _selectTool(EditorTool.explain),
-          ),
-          _ToolButton(
-            tool: EditorTool.weakness,
-            selected: tool == EditorTool.weakness,
-            onTap: () => _selectTool(EditorTool.weakness),
+          ...widget.state.toolbarTools.map(_toolbarButton),
+          const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Tùy chỉnh công cụ',
+            onPressed: _showToolbarCustomization,
+            icon: const Icon(Icons.tune_rounded),
           ),
         ],
       ),
     );
   }
+
+  Widget _toolbarButton(EditorTool value) {
+    final VoidCallback callback = switch (value) {
+      EditorTool.ruler => _toggleRuler,
+      EditorTool.image => () => unawaited(_activateImageTool()),
+      EditorTool.quickDictionary => _toggleQuickDictionary,
+      _ => () => _selectTool(value),
+    };
+    final selected = switch (value) {
+      EditorTool.ruler => rulerVisible,
+      EditorTool.quickDictionary => _quickDictionaryOpen,
+      _ => tool == value,
+    };
+    return _ToolButton(tool: value, selected: selected, onTap: callback);
+  }
+
+  Future<void> _showToolbarCustomization() async {
+    final selected = widget.state.toolbarTools.toSet();
+    final result = await showDialog<Set<EditorTool>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Tùy chỉnh thanh công cụ'),
+          content: SizedBox(
+            width: 420,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: EditorTool.values
+                    .map(
+                      (value) => CheckboxListTile(
+                        dense: true,
+                        value: selected.contains(value),
+                        title: Text(_toolLabel(value)),
+                        subtitle: value == EditorTool.pen
+                            ? const Text(
+                                'Luôn giữ lại để tránh mất công cụ viết',
+                              )
+                            : null,
+                        onChanged: value == EditorTool.pen
+                            ? null
+                            : (enabled) => setDialogState(() {
+                                if (enabled == true) {
+                                  selected.add(value);
+                                } else {
+                                  selected.remove(value);
+                                }
+                              }),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, selected),
+              child: const Text('Lưu'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result != null) widget.state.setToolbarTools(result);
+  }
+
+  String _toolLabel(EditorTool value) => switch (value) {
+    EditorTool.pen => 'Bút',
+    EditorTool.highlighter => 'Highlight',
+    EditorTool.eraser => 'Tẩy',
+    EditorTool.ruler => 'Thước',
+    EditorTool.image => 'Ảnh',
+    EditorTool.dictionary => 'Tra từ ngoại tuyến',
+    EditorTool.quickDictionary => 'Tra từ nhanh',
+    EditorTool.aiDictionary => 'AI Tra từ',
+    EditorTool.translate => 'AI Dịch',
+    EditorTool.explain => 'AI Giải thích',
+    EditorTool.weakness => 'Điểm yếu',
+  };
 
   void _onPageSwipe(DragEndDetails details) {
     final velocity = details.primaryVelocity ?? 0;
@@ -1453,9 +1487,11 @@ class _EditorScreenState extends State<EditorScreen>
     try {
       final crop = await _captureSelection();
       if (!mounted || requestSerial != _aiRequestSerial) return;
+      final previousCrop = _latestCropPath;
       var recognized = await _recognizeSelectionText(crop.path);
       if (!mounted || requestSerial != _aiRequestSerial) return;
       _latestCropPath = crop.path;
+      _deleteTemporaryCropIfUnused(previousCrop, except: crop.path);
       _latestOcrText = recognized;
       if (tool == EditorTool.dictionary) {
         var entry = await widget.state.dictionary.lookupNormalized(recognized);
@@ -1531,9 +1567,86 @@ class _EditorScreenState extends State<EditorScreen>
     }
   }
 
+  void _deleteTemporaryCropIfUnused(String? path, {String? except}) {
+    if (path == null || path.isEmpty || path == except) return;
+    final usedByWeakPoint = widget.state.weakPoints.any(
+      (item) => item.sourceImagePath == path,
+    );
+    if (!usedByWeakPoint) {
+      unawaited(File(path).delete().catchError((_) => File(path)));
+    }
+  }
+
   void _cancelPendingAi() {
     _aiRequestSerial++;
     if (processing) processing = false;
+  }
+
+  Future<void> _askMoreAboutResult() async {
+    final current = result;
+    if (current == null || current.dictionaryEntry != null) return;
+    final controller = TextEditingController();
+    final question = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Hỏi thêm về phần giải thích'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 2,
+          maxLines: 5,
+          decoration: const InputDecoration(
+            hintText: 'Ví dụ: Vì sao đáp án B sai? Cho thêm ví dụ dễ hơn.',
+          ),
+          onSubmitted: (_) => Navigator.pop(dialogContext, controller.text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: const Text('Hỏi AI'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    final cleanQuestion = question?.trim() ?? '';
+    if (!mounted || cleanQuestion.isEmpty) return;
+    final serial = ++_aiRequestSerial;
+    setState(() {
+      processing = true;
+      error = null;
+    });
+    try {
+      final response = await widget.state.aiService.complete(
+        apiKey: widget.state.apiKey,
+        modelId: widget.state.modelIdFor(AiTask.explain),
+        task: AiTask.explain,
+        text:
+            'Nội dung đang xem:\n${current.source}\n\nGiải thích hiện tại:\n${current.body}\n\nCâu hỏi bổ sung của người học:\n$cleanQuestion',
+        jlpt: widget.state.jlpt,
+        language: widget.state.explanationLanguage,
+      );
+      if (!mounted || serial != _aiRequestSerial) return;
+      setState(
+        () => result = _SmartResult.ai(
+          tool: EditorTool.explain,
+          source: current.source,
+          body: response,
+        ),
+      );
+    } catch (exception) {
+      if (mounted && serial == _aiRequestSerial) {
+        setState(() => error = _friendlyError(exception));
+      }
+    } finally {
+      if (mounted && serial == _aiRequestSerial) {
+        setState(() => processing = false);
+      }
+    }
   }
 
   bool get _canUseAiVision {
@@ -2556,62 +2669,106 @@ class _EditorScreenState extends State<EditorScreen>
     return draft.substring(contentStart, end < 0 ? draft.length : end).trim();
   }
 
-  Future<WeaknessKind?> _chooseWeaknessKind(WeaknessKind initial) {
-    var selected = initial;
-    return showDialog<WeaknessKind>(
+  String _weaknessKindDescription(WeaknessKind kind) {
+    switch (kind) {
+      case WeaknessKind.grammar:
+        return 'AI sẽ tạo nghĩa, cách chia/cấu trúc và ví dụ.';
+      case WeaknessKind.vocabulary:
+        return 'AI sẽ tạo cách đọc, nghĩa và ví dụ.';
+      case WeaknessKind.kanji:
+        return 'AI sẽ tạo cách đọc, nghĩa và Hán Việt.';
+      case WeaknessKind.reading:
+        return 'AI sẽ tạo ý chính, từ khóa và cách suy luận.';
+      case WeaknessKind.other:
+        return 'Bạn có thể ghi nội dung tự do.';
+    }
+  }
+
+  Future<Set<WeaknessKind>?> _chooseWeaknessKinds(WeaknessKind initial) {
+    var primary = initial;
+    final selectedKinds = <WeaknessKind>{initial};
+    return showDialog<Set<WeaknessKind>>(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Bạn muốn ghi điểm yếu loại nào?'),
-          content: SizedBox(
-            width: 480,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                DropdownButtonFormField<WeaknessKind>(
-                  initialValue: selected,
-                  decoration: const InputDecoration(labelText: 'Loại điểm yếu'),
-                  items: WeaknessKind.values
-                      .map(
-                        (kind) => DropdownMenuItem(
-                          value: kind,
-                          child: Text(kind.label),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) {
-                    if (value != null) setDialogState(() => selected = value);
-                  },
+        builder: (context, setDialogState) {
+          final kindTiles = WeaknessKind.values
+              .map<Widget>(
+                (kind) => CheckboxListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  value: selectedKinds.contains(kind),
+                  title: Text(kind.label),
+                  onChanged: (value) => setDialogState(() {
+                    if (value == true) {
+                      selectedKinds.add(kind);
+                    } else {
+                      selectedKinds.remove(kind);
+                    }
+                  }),
                 ),
-                const SizedBox(height: 12),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(switch (selected) {
-                    WeaknessKind.grammar =>
-                      'AI sẽ tạo nghĩa, cách chia/cấu trúc và ví dụ.',
-                    WeaknessKind.vocabulary =>
-                      'AI sẽ tạo cách đọc, nghĩa và ví dụ.',
-                    WeaknessKind.kanji =>
-                      'AI sẽ tạo cách đọc, nghĩa và Hán Việt.',
-                    WeaknessKind.reading =>
-                      'AI sẽ tạo ý chính, từ khóa và cách suy luận.',
-                    WeaknessKind.other => 'Bạn có thể ghi nội dung tự do.',
-                  }, style: const TextStyle(color: Colors.black54)),
-                ),
-              ],
+              )
+              .toList();
+          return AlertDialog(
+            title: const Text('Bạn muốn ghi điểm yếu loại nào?'),
+            content: SizedBox(
+              width: 480,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<WeaknessKind>(
+                    initialValue: primary,
+                    decoration: const InputDecoration(
+                      labelText: 'Loại điểm yếu',
+                    ),
+                    items: WeaknessKind.values
+                        .map(
+                          (kind) => DropdownMenuItem(
+                            value: kind,
+                            child: Text(kind.label),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setDialogState(() {
+                          primary = value;
+                          selectedKinds.add(value);
+                        });
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _weaknessKindDescription(primary),
+                      style: const TextStyle(color: Colors.black54),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Chọn thêm loại để tạo nhiều điểm yếu cho cùng một câu.',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  ...kindTiles,
+                ],
+              ),
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Hủy'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, selected),
-              child: const Text('Tiếp tục'),
-            ),
-          ],
-        ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Hủy'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, Set.of(selectedKinds)),
+                child: const Text('Tiếp tục'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -2629,12 +2786,15 @@ class _EditorScreenState extends State<EditorScreen>
     var kind = result?.dictionaryEntry != null
         ? WeaknessKind.vocabulary
         : WeaknessKind.grammar;
-    final chosenKind = await _chooseWeaknessKind(kind);
-    if (!mounted || chosenKind == null || activeSerial != _aiRequestSerial) {
+    final chosenKinds = await _chooseWeaknessKinds(kind);
+    if (!mounted ||
+        chosenKinds == null ||
+        chosenKinds.isEmpty ||
+        activeSerial != _aiRequestSerial) {
       await _finishProcessingAfterOverlay();
       return;
     }
-    kind = chosenKind;
+    kind = chosenKinds.first;
     String? aiDraft;
     final weaknessModel = widget.state.modelIdFor(AiTask.createWeakPoint);
     if (widget.state.hasApiKey && weaknessModel.isNotEmpty) {
@@ -2794,10 +2954,12 @@ class _EditorScreenState extends State<EditorScreen>
                         setSheetState(() => kind = value ?? kind),
                   ),
                   const SizedBox(height: 12),
-                  if ({
-                    WeaknessKind.vocabulary,
-                    WeaknessKind.kanji,
-                  }.contains(kind)) ...[
+                  if (chosenKinds.any(
+                    (value) => {
+                      WeaknessKind.vocabulary,
+                      WeaknessKind.kanji,
+                    }.contains(value),
+                  )) ...[
                     TextField(
                       controller: readingController,
                       decoration: const InputDecoration(
@@ -2806,10 +2968,12 @@ class _EditorScreenState extends State<EditorScreen>
                     ),
                     const SizedBox(height: 12),
                   ],
-                  if ({
-                    WeaknessKind.vocabulary,
-                    WeaknessKind.kanji,
-                  }.contains(kind)) ...[
+                  if (chosenKinds.any(
+                    (value) => {
+                      WeaknessKind.vocabulary,
+                      WeaknessKind.kanji,
+                    }.contains(value),
+                  )) ...[
                     TextField(
                       controller: hanVietController,
                       decoration: const InputDecoration(labelText: 'Hán Việt'),
@@ -2827,7 +2991,7 @@ class _EditorScreenState extends State<EditorScreen>
                     ),
                   ),
                   const SizedBox(height: 12),
-                  if (kind == WeaknessKind.grammar) ...[
+                  if (chosenKinds.contains(WeaknessKind.grammar)) ...[
                     TextField(
                       controller: conjugationController,
                       minLines: 2,
@@ -2839,11 +3003,13 @@ class _EditorScreenState extends State<EditorScreen>
                     ),
                     const SizedBox(height: 12),
                   ],
-                  if ({
-                    WeaknessKind.grammar,
-                    WeaknessKind.vocabulary,
-                    WeaknessKind.kanji,
-                  }.contains(kind)) ...[
+                  if (chosenKinds.any(
+                    (value) => {
+                      WeaknessKind.grammar,
+                      WeaknessKind.vocabulary,
+                      WeaknessKind.kanji,
+                    }.contains(value),
+                  )) ...[
                     TextField(
                       controller: examplesController,
                       minLines: 2,
@@ -2891,32 +3057,35 @@ class _EditorScreenState extends State<EditorScreen>
                       const SizedBox(width: 8),
                       FilledButton.icon(
                         onPressed: () {
-                          widget.state.addWeakPoint(
-                            WeakPoint(
-                              id: DateTime.now().millisecondsSinceEpoch
-                                  .toString(),
-                              title: titleController.text.trim(),
-                              kind: kind,
-                              content: contentController.text.trim(),
-                              reminder: reminderController.text.trim(),
-                              note: noteController.text.trim(),
-                              reading: readingController.text.trim(),
-                              hanViet: hanVietController.text.trim(),
-                              conjugation: conjugationController.text.trim(),
-                              examples: examplesController.text
-                                  .split('\n')
-                                  .map((line) => line.trim())
-                                  .where((line) => line.isNotEmpty)
-                                  .toList(),
-                              tags: ['N3', 'dễ nhầm'],
-                              notebookId: widget.notebook.id,
-                              notebookTitle: widget.notebook.title,
-                              page: widget.state.openPage,
-                              ocrText: resolvedOcr,
-                              sourceImagePath: resolvedImage,
-                              createdAt: DateTime.now(),
-                            ),
-                          );
+                          for (final savedKind in chosenKinds) {
+                            widget.state.addWeakPoint(
+                              WeakPoint(
+                                id: '${DateTime.now().microsecondsSinceEpoch}_${savedKind.name}',
+                                title: chosenKinds.length > 1
+                                    ? '${titleController.text.trim()} · ${savedKind.label}'
+                                    : titleController.text.trim(),
+                                kind: savedKind,
+                                content: contentController.text.trim(),
+                                reminder: reminderController.text.trim(),
+                                note: noteController.text.trim(),
+                                reading: readingController.text.trim(),
+                                hanViet: hanVietController.text.trim(),
+                                conjugation: conjugationController.text.trim(),
+                                examples: examplesController.text
+                                    .split('\n')
+                                    .map((line) => line.trim())
+                                    .where((line) => line.isNotEmpty)
+                                    .toList(),
+                                tags: ['N3', 'dễ nhầm'],
+                                notebookId: widget.notebook.id,
+                                notebookTitle: widget.notebook.title,
+                                page: widget.state.openPage,
+                                ocrText: resolvedOcr,
+                                sourceImagePath: resolvedImage,
+                                createdAt: DateTime.now(),
+                              ),
+                            );
+                          }
                           Navigator.pop(context, true);
                         },
                         icon: const Icon(Icons.bookmark_add_outlined),
@@ -3090,7 +3259,7 @@ Color _toolColor(EditorTool tool) => switch (tool) {
   _ => AppColors.primary,
 };
 
-class _PageRail extends StatelessWidget {
+class _PageRail extends StatefulWidget {
   const _PageRail({
     required this.currentPage,
     required this.pageCount,
@@ -3105,6 +3274,55 @@ class _PageRail extends StatelessWidget {
   final VoidCallback onAddPage;
   final VoidCallback onClose;
   final String? Function(int page) thumbnailPathForPage;
+
+  @override
+  State<_PageRail> createState() => _PageRailState();
+}
+
+class _PageRailState extends State<_PageRail> {
+  final Map<int, GlobalKey> _pageKeys = {};
+
+  int get currentPage => widget.currentPage;
+  int get pageCount => widget.pageCount;
+  ValueChanged<int> get onPageSelected => widget.onPageSelected;
+  VoidCallback get onAddPage => widget.onAddPage;
+  VoidCallback get onClose => widget.onClose;
+  String? Function(int page) get thumbnailPathForPage =>
+      widget.thumbnailPathForPage;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleRevealCurrentPage();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PageRail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentPage != widget.currentPage ||
+        oldWidget.pageCount != widget.pageCount) {
+      _scheduleRevealCurrentPage();
+    }
+  }
+
+  void _scheduleRevealCurrentPage() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final target = _pageKeys[currentPage]?.currentContext;
+      if (target != null) {
+        Scrollable.ensureVisible(
+          target,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          alignment: .35,
+        );
+      }
+    });
+  }
+
+  GlobalKey _keyForPage(int page) =>
+      _pageKeys.putIfAbsent(page, () => GlobalKey());
+
   @override
   Widget build(BuildContext context) => Container(
     width: 150,
@@ -3140,6 +3358,7 @@ class _PageRail extends StatelessWidget {
               final page = index + 1;
               final active = page == currentPage;
               return Padding(
+                key: _keyForPage(page),
                 padding: const EdgeInsets.fromLTRB(14, 5, 14, 7),
                 child: Material(
                   color: Colors.transparent,
@@ -3948,6 +4167,7 @@ class _ResultCard extends StatelessWidget {
     required this.onClose,
     required this.onPin,
     required this.onWeakness,
+    required this.onAskMore,
     required this.onEdit,
     required this.onCancelEdit,
     required this.onConfirmEdit,
@@ -3961,6 +4181,7 @@ class _ResultCard extends StatelessWidget {
   final VoidCallback onClose;
   final VoidCallback onPin;
   final VoidCallback onWeakness;
+  final VoidCallback onAskMore;
   final VoidCallback onEdit;
   final VoidCallback onCancelEdit;
   final VoidCallback onConfirmEdit;
@@ -4156,6 +4377,15 @@ class _ResultCard extends StatelessWidget {
                         icon: const Icon(Icons.bookmark_add_outlined, size: 18),
                         label: const Text('Điểm yếu'),
                       ),
+                      if (result.dictionaryEntry == null)
+                        OutlinedButton.icon(
+                          onPressed: onAskMore,
+                          icon: const Icon(
+                            Icons.question_answer_outlined,
+                            size: 18,
+                          ),
+                          label: const Text('Hỏi thêm'),
+                        ),
                       TextButton(
                         onPressed: () {
                           Clipboard.setData(ClipboardData(text: result.body));

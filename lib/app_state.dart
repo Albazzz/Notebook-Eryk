@@ -13,6 +13,19 @@ import 'services.dart';
 import 'widgets/common.dart';
 
 class AppState extends ChangeNotifier {
+  static const defaultToolbarTools = <EditorTool>[
+    EditorTool.pen,
+    EditorTool.highlighter,
+    EditorTool.eraser,
+    EditorTool.ruler,
+    EditorTool.image,
+    EditorTool.dictionary,
+    EditorTool.quickDictionary,
+    EditorTool.aiDictionary,
+    EditorTool.translate,
+    EditorTool.explain,
+    EditorTool.weakness,
+  ];
   static const _keyStorageName = 'openrouter_api_key';
   static const _modelIdsStorageName = 'ai_model_ids';
   static const _modelNamesStorageName = 'ai_model_names';
@@ -49,6 +62,7 @@ class AppState extends ChangeNotifier {
   bool useAiVision = false;
   bool aiConnected = false;
   List<OpenRouterModel> availableModels = [];
+  List<EditorTool> toolbarTools = List.of(defaultToolbarTools);
   String _apiKey = '';
 
   AppState() {
@@ -107,6 +121,22 @@ class AppState extends ChangeNotifier {
     selectedModelId = prefs.getString('selectedModelId') ?? '';
     selectedModelName = prefs.getString('selectedModelName') ?? '';
     useAiVision = prefs.getBool('useAiVision') ?? false;
+    final savedToolbarTools = prefs.getStringList('editorToolbarTools');
+    if (savedToolbarTools != null) {
+      toolbarTools = savedToolbarTools
+          .map((name) => EditorTool.values.where((tool) => tool.name == name))
+          .expand((matches) => matches)
+          .toSet()
+          .toList();
+      if (!toolbarTools.contains(EditorTool.pen)) {
+        toolbarTools.insert(0, EditorTool.pen);
+      }
+      toolbarTools.sort(
+        (a, b) => defaultToolbarTools
+            .indexOf(a)
+            .compareTo(defaultToolbarTools.indexOf(b)),
+      );
+    }
     _loadModelAssignments(prefs);
     try {
       _apiKey = await _secureStorage.read(key: _keyStorageName) ?? '';
@@ -1171,12 +1201,25 @@ class AppState extends ChangeNotifier {
     await prefs.setBool('palmRejection', palmRejection);
     await prefs.setBool('doubleTapEraser', doubleTapEraser);
     await prefs.setDouble('paperLineOpacity', paperLineOpacity);
+    await prefs.setStringList(
+      'editorToolbarTools',
+      toolbarTools.map((tool) => tool.name).toList(),
+    );
     await prefs.setString(
       'studentName',
       studentName.trim().isEmpty ? 'Eryk' : studentName.trim(),
     );
     await prefs.setString('jlpt', jlpt);
     notifyListeners();
+  }
+
+  void setToolbarTools(Set<EditorTool> tools) {
+    final selected = Set<EditorTool>.of(tools)..add(EditorTool.pen);
+    toolbarTools = defaultToolbarTools
+        .where(selected.contains)
+        .toList(growable: false);
+    notifyListeners();
+    unawaited(saveGeneralSettings());
   }
 
   Future<void> saveAiSettings({required String key}) async {
