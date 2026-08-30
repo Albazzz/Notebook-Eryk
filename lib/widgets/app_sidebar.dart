@@ -3,10 +3,20 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../models.dart';
 import '../theme.dart';
+import 'common.dart';
 
-IconData _folderIcon(int codePoint) =>
-    // ignore: non_const_argument_for_const_parameter
-    IconData(codePoint, fontFamily: 'MaterialIcons');
+/// Maps persisted icon values back to compile-time IconData constants.
+///
+/// Constructing IconData from a runtime code point prevents Flutter from
+/// tree-shaking the Material icon font and makes release builds fail.
+IconData _folderIcon(int codePoint) {
+  if (codePoint == Icons.bookmark.codePoint) return Icons.bookmark;
+  if (codePoint == Icons.school.codePoint) return Icons.school;
+  if (codePoint == Icons.workspaces.codePoint) return Icons.workspaces;
+  if (codePoint == Icons.star.codePoint) return Icons.star;
+  if (codePoint == Icons.archive.codePoint) return Icons.archive;
+  return Icons.folder;
+}
 
 class AppSidebar extends StatelessWidget {
   const AppSidebar({super.key, required this.state, this.compact = false});
@@ -182,6 +192,7 @@ class _FolderTree extends StatelessWidget {
               onAccept: (data) {
                 if (_moveData(data, null)) _showUndo(context);
               },
+              canAccept: (data) => _canMoveData(data, null),
             ),
             _SmartSectionRow(
               icon: Icons.star_outline_rounded,
@@ -248,16 +259,28 @@ class _FolderTree extends StatelessWidget {
     return false;
   }
 
+  bool _canMoveData(String data, String? folderId) {
+    if (data.startsWith('folder:')) {
+      final source = state.folderById(data.substring(7));
+      return source != null && source.parentId != folderId;
+    }
+    final ids = data.startsWith('notes:')
+        ? data.substring(6).split(',').toSet()
+        : data.startsWith('note:')
+        ? {data.substring(5)}
+        : const <String>{};
+    return state.notebooks.any(
+      (note) =>
+          ids.contains(note.id) && !note.isTrashed && note.folderId != folderId,
+    );
+  }
+
   void _showUndo(BuildContext context) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('Đã di chuyển'),
-        duration: const Duration(seconds: 3),
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: state.undoFolderAction,
-        ),
-      ),
+    showAppSnack(
+      context,
+      'Đã di chuyển',
+      actionLabel: 'Undo',
+      onAction: state.undoFolderAction,
     );
   }
 
@@ -300,6 +323,7 @@ class _SmartSectionRow extends StatelessWidget {
     required this.active,
     required this.onTap,
     this.onAccept,
+    this.canAccept,
   });
   final IconData icon;
   final String label;
@@ -307,9 +331,13 @@ class _SmartSectionRow extends StatelessWidget {
   final bool active;
   final VoidCallback onTap;
   final ValueChanged<String>? onAccept;
+  final bool Function(String data)? canAccept;
 
   @override
   Widget build(BuildContext context) => DragTarget<String>(
+    onWillAcceptWithDetails: onAccept == null
+        ? null
+        : (details) => canAccept?.call(details.data) ?? true,
     onAcceptWithDetails: onAccept == null
         ? null
         : (details) => onAccept!(details.data),
@@ -388,6 +416,7 @@ class _FolderRowState extends State<_FolderRow> {
             ),
           ),
           child: DragTarget<String>(
+            onWillAcceptWithDetails: (details) => _canAccept(details.data),
             onAcceptWithDetails: (details) {
               final data = details.data;
               var moved = false;
@@ -405,15 +434,11 @@ class _FolderRowState extends State<_FolderRow> {
                 moved = widget.state.moveFolder(data.substring(7), folder.id);
               }
               if (moved && context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: const Text('Đã di chuyển'),
-                    duration: const Duration(seconds: 3),
-                    action: SnackBarAction(
-                      label: 'Undo',
-                      onPressed: widget.state.undoFolderAction,
-                    ),
-                  ),
+                showAppSnack(
+                  context,
+                  'Đã di chuyển',
+                  actionLabel: 'Undo',
+                  onAction: widget.state.undoFolderAction,
                 );
               }
             },
@@ -515,6 +540,35 @@ class _FolderRowState extends State<_FolderRow> {
     );
   }
 
+  bool _canAccept(String data) {
+    final targetId = widget.folder.id;
+    if (data.startsWith('folder:')) {
+      final sourceId = data.substring(7);
+      final source = widget.state.folderById(sourceId);
+      return source != null &&
+          source.id != targetId &&
+          source.parentId != targetId &&
+          !widget.state.folderTreeIds(sourceId).contains(targetId);
+    }
+    if (data.startsWith('note:')) {
+      final sourceId = data.substring(5);
+      return widget.state.notebooks.any(
+        (note) =>
+            note.id == sourceId && !note.isTrashed && note.folderId != targetId,
+      );
+    }
+    if (data.startsWith('notes:')) {
+      final sourceIds = data.substring(6).split(',').toSet();
+      return widget.state.notebooks.any(
+        (note) =>
+            sourceIds.contains(note.id) &&
+            !note.isTrashed &&
+            note.folderId != targetId,
+      );
+    }
+    return false;
+  }
+
   Future<void> _handleMenu(BuildContext context, String action) async {
     final folder = widget.folder;
     if (action == 'new') {
@@ -603,15 +657,11 @@ class _FolderRowState extends State<_FolderRow> {
           result != 'cancel' &&
           widget.state.canUndoFolderAction &&
           context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Đã thay đổi folder'),
-            duration: Duration(seconds: 3),
-            action: SnackBarAction(
-              label: 'Undo',
-              onPressed: widget.state.undoFolderAction,
-            ),
-          ),
+        showAppSnack(
+          context,
+          'Đã thay đổi folder',
+          actionLabel: 'Undo',
+          onAction: widget.state.undoFolderAction,
         );
       }
     } else if (action == 'move') {
@@ -650,15 +700,11 @@ class _FolderRowState extends State<_FolderRow> {
         moved = widget.state.moveFolder(folder.id, target);
       }
       if (moved && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Folder đã di chuyển'),
-            duration: const Duration(seconds: 3),
-            action: SnackBarAction(
-              label: 'Undo',
-              onPressed: widget.state.undoFolderAction,
-            ),
-          ),
+        showAppSnack(
+          context,
+          'Folder đã di chuyển',
+          actionLabel: 'Undo',
+          onAction: widget.state.undoFolderAction,
         );
       }
     } else if (action == 'appearance') {

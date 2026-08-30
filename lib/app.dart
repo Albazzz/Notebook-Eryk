@@ -53,22 +53,37 @@ class _NihongoNotebookAppState extends State<NihongoNotebookApp>
       // iPadOS may terminate a suspended app without a final callback. The
       // debounced autosave handles normal edits; this also creates a portable
       // session snapshot while the process is still alive.
-      unawaited(widget.state.flushPersistence(snapshot: true));
+      unawaited(_persistSessionSnapshot());
+    }
+  }
+
+  Future<void> _persistSessionSnapshot() async {
+    try {
+      await widget.state.flushPersistence(snapshot: true);
+    } catch (error, stackTrace) {
+      debugPrint('[NoteEryk][Storage] session snapshot failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
     }
   }
 
   Future<void> _checkSharedFiles() async {
     if (_checkingSharedFiles || _pendingSharedFiles.isNotEmpty) return;
     _checkingSharedFiles = true;
-    var paths = await _sharedImport.pendingFiles();
-    // The Share Extension writes into the App Group immediately before it
-    // closes. On iPadOS the containing app can receive `resumed` a fraction
-    // earlier, so give the filesystem a short chance to publish the files.
-    for (var attempt = 0; paths.isEmpty && attempt < 3; attempt++) {
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+    var paths = const <String>[];
+    try {
       paths = await _sharedImport.pendingFiles();
+      // The Share Extension writes into the App Group immediately before it
+      // closes. On iPadOS the containing app can receive `resumed` a fraction
+      // earlier, so give the filesystem a short chance to publish the files.
+      for (var attempt = 0; paths.isEmpty && attempt < 3; attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        paths = await _sharedImport.pendingFiles();
+      }
+    } catch (error) {
+      debugPrint('[NoteEryk][Share] pending file check failed: $error');
+    } finally {
+      _checkingSharedFiles = false;
     }
-    _checkingSharedFiles = false;
     if (!mounted || paths.isEmpty) return;
     widget.state.goTo(AppDestination.library);
     setState(() => _pendingSharedFiles = paths);
@@ -77,6 +92,11 @@ class _NihongoNotebookAppState extends State<NihongoNotebookApp>
   Future<void> _finishSharedImport(List<String> paths) async {
     await _sharedImport.acknowledge(paths);
     if (!mounted) return;
+    setState(() => _pendingSharedFiles = const []);
+  }
+
+  void _deferSharedImport() {
+    if (!mounted || _pendingSharedFiles.isEmpty) return;
     setState(() => _pendingSharedFiles = const []);
   }
 
@@ -105,6 +125,7 @@ class _NihongoNotebookAppState extends State<NihongoNotebookApp>
                 state: widget.state,
                 sharedFiles: _pendingSharedFiles,
                 onSharedFilesHandled: _finishSharedImport,
+                onSharedFilesDeferred: _deferSharedImport,
               ),
       ),
     );
@@ -116,10 +137,12 @@ class _AppShell extends StatelessWidget {
     required this.state,
     required this.sharedFiles,
     required this.onSharedFilesHandled,
+    required this.onSharedFilesDeferred,
   });
   final AppState state;
   final List<String> sharedFiles;
   final ValueChanged<List<String>> onSharedFilesHandled;
+  final VoidCallback onSharedFilesDeferred;
 
   @override
   Widget build(BuildContext context) {
@@ -138,6 +161,7 @@ class _AppShell extends StatelessWidget {
               state: state,
               sharedFiles: sharedFiles,
               onSharedFilesHandled: onSharedFilesHandled,
+              onSharedFilesDeferred: onSharedFilesDeferred,
             ),
             WeaknessesScreen(state: state),
             DictionaryScreen(state: state),

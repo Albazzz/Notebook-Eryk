@@ -36,6 +36,12 @@ workflows:
           flutter analyze
           flutter test --no-pub
           python3 tool/validate_ios_ipa.py --self-test
+          # Flutter release builds reject runtime-created IconData because the
+          # icon font cannot be tree-shaken. Keep that failure out of Xcode.
+          if grep -R --include='*.dart' -nE 'IconData[[:space:]]*\(' lib; then
+            echo "Runtime IconData constructor found; use an Icons.* constant"
+            exit 1
+          fi
 
       - name: Install iOS pods
         script: |
@@ -126,6 +132,14 @@ workflows:
           EXT_EXECUTABLE=$(/usr/libexec/PlistBuddy -c \
             "Print :CFBundleExecutable" "$EXT_PLIST")
           test -f "$EXT_DIR/$EXT_EXECUTABLE"
+          if codesign --verify "$APP_DIR" >/dev/null 2>&1; then
+            echo "Runner.app was unexpectedly signed before Sideloadly"
+            exit 1
+          fi
+          if codesign --verify "$EXT_DIR" >/dev/null 2>&1; then
+            echo "ShareExtension.appex was unexpectedly signed before Sideloadly"
+            exit 1
+          fi
           file "$APP_DIR/Runner" | grep -q arm64
           file "$EXT_DIR/$EXT_EXECUTABLE" | grep -q arm64
           /usr/libexec/PlistBuddy -c \

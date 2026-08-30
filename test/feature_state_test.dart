@@ -165,6 +165,66 @@ void main() {
     expect(state.notebooks.single.isTrashed, isFalse);
   });
 
+  test('deleting a root folder moves notes to the library root', () {
+    final state = AppState();
+    addTearDown(state.dispose);
+    state.autoSave = false;
+    state.addNotebook(
+      const NotebookData(
+        id: 'book',
+        title: 'Book',
+        type: 'Notebook',
+        pages: 1,
+        color: Color(0xff000000),
+      ),
+    );
+    state.createFolder('JLPT');
+    final folder = state.folders.single;
+    expect(state.moveNotebookToFolder('book', folder.id), isTrue);
+
+    state.deleteFolder(folder.id, moveToTrash: false);
+
+    expect(state.folders, isEmpty);
+    expect(state.notebooks.single.folderId, isNull);
+    expect(state.notebooks.single.isTrashed, isFalse);
+  });
+
+  test('moving to the current folder is a no-op', () {
+    final state = AppState();
+    addTearDown(state.dispose);
+    state.autoSave = false;
+    state.addNotebook(
+      const NotebookData(
+        id: 'book',
+        title: 'Book',
+        type: 'Notebook',
+        pages: 1,
+        color: Color(0xff000000),
+      ),
+    );
+    state.createFolder('JLPT');
+    final folder = state.folders.single;
+    expect(state.moveNotebookToFolder('book', folder.id), isTrue);
+    expect(state.moveNotebookToFolder('book', folder.id), isFalse);
+    expect(state.moveFolder(folder.id, null), isFalse);
+  });
+
+  test('pinned folders are sorted before normal folders', () {
+    final state = AppState();
+    addTearDown(state.dispose);
+    state.autoSave = false;
+    state.createFolder('Alpha');
+    state.createFolder('Zulu');
+    expect(state.folders.map((folder) => folder.id).toSet(), hasLength(2));
+    final zulu = state.folders.singleWhere((folder) => folder.name == 'Zulu');
+    state.pinFolder(zulu.id);
+
+    expect(state.childFolders(null).map((folder) => folder.name), [
+      'Zulu',
+      'Alpha',
+    ]);
+  });
+
   test('tags remain independent from a notebook folder', () {
     final state = AppState();
     addTearDown(state.dispose);

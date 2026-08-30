@@ -21,5 +21,14 @@ void main() {
   };
   final state = AppState();
   runApp(NihongoNotebookApp(state: state));
-  unawaited(state.initialize());
+  unawaited(_initializeState(state));
+}
+
+Future<void> _initializeState(AppState state) async {
+  try {
+    await state.initialize();
+  } catch (error, stackTrace) {
+    debugPrint('[NoteEryk][Startup] initialization failed: $error');
+    debugPrintStack(stackTrace: stackTrace);
+  }
 }

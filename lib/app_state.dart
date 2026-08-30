@@ -151,119 +151,120 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _loadLibrary(SharedPreferences prefs) async {
-    String? raw;
+    String? fileRaw;
     try {
       final directory = await getApplicationSupportDirectory();
       final file = File('${directory.path}/notebook_library_v2.json');
-      if (await file.exists()) raw = await file.readAsString();
-    } catch (_) {}
-    raw ??= prefs.getString(_libraryStorageName);
-    if (raw == null || raw.isEmpty) return;
-    try {
-      final data = jsonDecode(raw) as Map<String, dynamic>;
-      final rawNotebooks = data['notebooks'] as List?;
-      if (rawNotebooks != null) {
-        notebooks
-          ..clear()
-          ..addAll(
-            rawNotebooks.map(
-              (item) => NotebookData.fromJson(item as Map<String, dynamic>),
-            ),
-          );
-      }
-      final rawFolders = data['folders'] as List?;
-      if (rawFolders != null) {
-        folders
-          ..clear()
-          ..addAll(
-            rawFolders.map(
-              (item) => FolderData.fromJson(item as Map<String, dynamic>),
-            ),
-          );
-      }
-      final rawPinned = data['pinnedNotes'] as Map<String, dynamic>?;
-      if (rawPinned != null) {
-        pinnedNotes
-          ..clear()
-          ..addAll(
-            rawPinned.map(
-              (key, value) => MapEntry(
-                key,
-                (value as List)
-                    .map(
-                      (item) =>
-                          PinnedNote.fromJson(item as Map<String, dynamic>),
-                    )
-                    .toList(),
-              ),
-            ),
-          );
-      }
-      final rawImages = data['pageImages'] as Map<String, dynamic>?;
-      if (rawImages != null) {
-        pageImages
-          ..clear()
-          ..addAll(
-            rawImages.map(
-              (notebookId, pages) => MapEntry(
-                notebookId,
-                (pages as Map<String, dynamic>).map(
-                  (page, paths) => MapEntry(
-                    int.parse(page),
-                    List<String>.from(paths as List),
-                  ),
-                ),
-              ),
-            ),
-          );
-      }
-      final rawPlacements = data['imagePlacements'] as Map<String, dynamic>?;
-      if (rawPlacements != null) {
-        imagePlacements
-          ..clear()
-          ..addAll(
-            rawPlacements.map(
-              (key, value) => MapEntry(
-                key,
-                PageImagePlacement.fromJson(value as Map<String, dynamic>),
-              ),
-            ),
-          );
-      }
-      blankPages
-        ..clear()
-        ..addAll(List<String>.from(data['blankPages'] as List? ?? const []));
-      sourceDocuments
-        ..clear()
-        ..addAll(
-          Map<String, String>.from(data['sourceDocuments'] as Map? ?? {}),
-        );
-      final rawWeakPoints = data['weakPoints'] as List?;
-      if (rawWeakPoints != null) {
-        weakPoints = rawWeakPoints
-            .map((item) => WeakPoint.fromJson(item as Map<String, dynamic>))
-            .toList();
-      }
-      final rawLibraryStrokes = data['strokes'] as Map<String, dynamic>?;
-      if (rawLibraryStrokes != null) {
-        strokes
-          ..clear()
-          ..addAll(
-            rawLibraryStrokes.map(
-              (key, value) => MapEntry(
-                key,
-                (value as List)
-                    .map(
-                      (item) =>
-                          InkStroke.fromJson(item as Map<String, dynamic>),
-                    )
-                    .toList(),
-              ),
-            ),
-          );
-      }
+      if (await file.exists()) fileRaw = await file.readAsString();
     } catch (error) {
-      debugPrint('[NoteEryk][Storage] library load failed: $error');
+      debugPrint('[NoteEryk][Storage] library file read failed: $error');
+    }
+    final preferenceRaw = prefs.getString(_libraryStorageName);
+    final candidates = <(String, String?)>[
+      ('file', fileRaw),
+      if (preferenceRaw != fileRaw) ('preferences', preferenceRaw),
+    ];
+    for (final (source, raw) in candidates) {
+      if (raw == null || raw.isEmpty) continue;
+      try {
+        _applyLibrarySnapshot(jsonDecode(raw) as Map<String, dynamic>);
+        return;
+      } catch (error) {
+        debugPrint('[NoteEryk][Storage] $source library load failed: $error');
+      }
+    }
+  }
+
+  void _applyLibrarySnapshot(Map<String, dynamic> data) {
+    // Decode into temporary values first. A corrupt attachment/page entry must
+    // not leave half of the in-memory library replaced before we try the
+    // SharedPreferences mirror.
+    final parsedNotebooks = (data['notebooks'] as List?)
+        ?.map((item) => NotebookData.fromJson(item as Map<String, dynamic>))
+        .toList();
+    final parsedFolders = (data['folders'] as List?)
+        ?.map((item) => FolderData.fromJson(item as Map<String, dynamic>))
+        .toList();
+    final parsedPinned = (data['pinnedNotes'] as Map<String, dynamic>?)?.map(
+      (key, value) => MapEntry(
+        key,
+        (value as List)
+            .map((item) => PinnedNote.fromJson(item as Map<String, dynamic>))
+            .toList(),
+      ),
+    );
+    final parsedImages = (data['pageImages'] as Map<String, dynamic>?)?.map(
+      (notebookId, pages) => MapEntry(
+        notebookId,
+        (pages as Map<String, dynamic>).map(
+          (page, paths) =>
+              MapEntry(int.parse(page), List<String>.from(paths as List)),
+        ),
+      ),
+    );
+    final parsedPlacements = (data['imagePlacements'] as Map<String, dynamic>?)
+        ?.map(
+          (key, value) => MapEntry(
+            key,
+            PageImagePlacement.fromJson(value as Map<String, dynamic>),
+          ),
+        );
+    final parsedBlankPages = List<String>.from(
+      data['blankPages'] as List? ?? const [],
+    );
+    final parsedDocuments = Map<String, String>.from(
+      data['sourceDocuments'] as Map? ?? {},
+    );
+    final parsedWeakPoints = (data['weakPoints'] as List?)
+        ?.map((item) => WeakPoint.fromJson(item as Map<String, dynamic>))
+        .toList();
+    final parsedStrokes = (data['strokes'] as Map<String, dynamic>?)?.map(
+      (key, value) => MapEntry(
+        key,
+        (value as List)
+            .map((item) => InkStroke.fromJson(item as Map<String, dynamic>))
+            .toList(),
+      ),
+    );
+
+    if (parsedNotebooks != null) {
+      notebooks
+        ..clear()
+        ..addAll(parsedNotebooks);
+    }
+    if (parsedFolders != null) {
+      folders
+        ..clear()
+        ..addAll(parsedFolders);
+    }
+    if (parsedPinned != null) {
+      pinnedNotes
+        ..clear()
+        ..addAll(parsedPinned);
+    }
+    if (parsedImages != null) {
+      pageImages
+        ..clear()
+        ..addAll(parsedImages);
+    }
+    if (parsedPlacements != null) {
+      imagePlacements
+        ..clear()
+        ..addAll(parsedPlacements);
+    }
+    blankPages
+      ..clear()
+      ..addAll(parsedBlankPages);
+    sourceDocuments
+      ..clear()
+      ..addAll(parsedDocuments);
+    if (parsedWeakPoints != null) {
+      weakPoints = parsedWeakPoints;
+    }
+    if (parsedStrokes != null) {
+      strokes
+        ..clear()
+        ..addAll(parsedStrokes);
     }
   }
 
@@ -300,14 +301,30 @@ class AppState extends ChangeNotifier {
     _persistenceScheduled = true;
     scheduleMicrotask(() {
       _persistenceScheduled = false;
-      unawaited(flushPersistence());
+      unawaited(_flushScheduledPersistence());
     });
+  }
+
+  Future<void> _flushScheduledPersistence() async {
+    try {
+      await flushPersistence();
+    } catch (error, stackTrace) {
+      debugPrint('[NoteEryk][Storage] autosave failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
   }
 
   Future<void> flushPersistence({bool snapshot = false}) async {
     if (!_storageReady) return;
     final running = _persistenceInFlight;
-    if (running != null) await running;
+    if (running != null) {
+      try {
+        await running;
+      } catch (_) {
+        // Retry below with the newest in-memory snapshot. The earlier caller
+        // already reports its own failure.
+      }
+    }
     final operation = _persistLibrary();
     _persistenceInFlight = operation;
     try {
@@ -649,9 +666,16 @@ class AppState extends ChangeNotifier {
             .where((folder) => folder.id == id && !folder.isTrashed)
             .firstOrNull;
 
-  List<FolderData> childFolders(String? parentId) => folders
-      .where((folder) => folder.parentId == parentId && !folder.isTrashed)
-      .toList();
+  List<FolderData> childFolders(String? parentId) {
+    final children = folders
+        .where((folder) => folder.parentId == parentId && !folder.isTrashed)
+        .toList();
+    children.sort((a, b) {
+      if (a.isPinned != b.isPinned) return a.isPinned ? -1 : 1;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+    return children;
+  }
 
   Set<String> folderTreeIds(String folderId) {
     final ids = <String>{folderId};
@@ -736,14 +760,20 @@ class AppState extends ChangeNotifier {
     }
     _captureFolderUndo();
     folders.add(
-      FolderData(
-        id: 'folder_${DateTime.now().microsecondsSinceEpoch}',
-        name: clean,
-        parentId: parentId,
-      ),
+      FolderData(id: _nextFolderId(), name: clean, parentId: parentId),
     );
     notifyListeners();
     schedulePersistence();
+  }
+
+  String _nextFolderId() {
+    final base = 'folder_${DateTime.now().microsecondsSinceEpoch}';
+    var candidate = base;
+    var suffix = 1;
+    while (folders.any((folder) => folder.id == candidate)) {
+      candidate = '${base}_${suffix++}';
+    }
+    return candidate;
   }
 
   void renameFolder(String id, String name) {
@@ -792,7 +822,10 @@ class AppState extends ChangeNotifier {
   bool moveFolder(String id, String? parentId) {
     final index = folders.indexWhere((folder) => folder.id == id);
     if (index < 0 || id == parentId) return false;
-    if (parentId != null && !folders.any((folder) => folder.id == parentId)) {
+    if (folders[index].isTrashed || folders[index].parentId == parentId) {
+      return false;
+    }
+    if (parentId != null && folderById(parentId) == null) {
       return false;
     }
     if (parentId != null && folderTreeIds(id).contains(parentId)) return false;
@@ -810,10 +843,14 @@ class AppState extends ChangeNotifier {
     if (index < 0 || (folderId != null && folderById(folderId) == null)) {
       return false;
     }
+    if (notebooks[index].isTrashed || notebooks[index].folderId == folderId) {
+      return false;
+    }
     _captureFolderUndo();
     notebooks[index] = folderId == null
         ? notebooks[index].copyWith(clearFolder: true)
         : notebooks[index].copyWith(folderId: folderId);
+    if (openNotebook?.id == notebookId) openNotebook = notebooks[index];
     notifyListeners();
     schedulePersistence();
     return true;
@@ -823,15 +860,28 @@ class AppState extends ChangeNotifier {
     final ids = notebookIds.toSet();
     if (ids.isEmpty ||
         (folderId != null && folderById(folderId) == null) ||
-        !notebooks.any((note) => ids.contains(note.id))) {
+        !notebooks.any(
+          (note) =>
+              ids.contains(note.id) &&
+              !note.isTrashed &&
+              note.folderId != folderId,
+        )) {
       return false;
     }
     _captureFolderUndo();
     for (var index = 0; index < notebooks.length; index++) {
-      if (!ids.contains(notebooks[index].id)) continue;
+      if (!ids.contains(notebooks[index].id) ||
+          notebooks[index].isTrashed ||
+          notebooks[index].folderId == folderId) {
+        continue;
+      }
       notebooks[index] = folderId == null
           ? notebooks[index].copyWith(clearFolder: true)
           : notebooks[index].copyWith(folderId: folderId);
+    }
+    final openId = openNotebook?.id;
+    if (openId != null && ids.contains(openId)) {
+      openNotebook = notebooks.where((note) => note.id == openId).firstOrNull;
     }
     notifyListeners();
     schedulePersistence();
@@ -845,6 +895,7 @@ class AppState extends ChangeNotifier {
     notebooks[index] = notebooks[index].copyWith(
       isPinned: !notebooks[index].isPinned,
     );
+    if (openNotebook?.id == notebookId) openNotebook = notebooks[index];
     notifyListeners();
     schedulePersistence();
   }
@@ -885,13 +936,19 @@ class AppState extends ChangeNotifier {
       final parentId = folder.parentId;
       for (var index = 0; index < notebooks.length; index++) {
         if (ids.contains(notebooks[index].folderId)) {
-          notebooks[index] = notebooks[index].copyWith(folderId: parentId);
+          notebooks[index] = parentId == null
+              ? notebooks[index].copyWith(clearFolder: true)
+              : notebooks[index].copyWith(folderId: parentId);
         }
       }
       folders.removeWhere((item) => ids.contains(item.id));
     }
     if (selectedFolderId != null && ids.contains(selectedFolderId)) {
       selectedFolderId = folder.parentId;
+    }
+    final openId = openNotebook?.id;
+    if (openId != null) {
+      openNotebook = notebooks.where((note) => note.id == openId).firstOrNull;
     }
     notifyListeners();
     schedulePersistence();

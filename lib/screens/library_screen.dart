@@ -19,10 +19,12 @@ class LibraryScreen extends StatefulWidget {
     required this.state,
     this.sharedFiles = const [],
     this.onSharedFilesHandled,
+    this.onSharedFilesDeferred,
   });
   final AppState state;
   final List<String> sharedFiles;
   final ValueChanged<List<String>>? onSharedFilesHandled;
+  final VoidCallback? onSharedFilesDeferred;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -121,7 +123,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
       // Keep staged files until a notebook is actually created. Previously a
       // dismissed preview or a failed PDF render acknowledged (and deleted)
       // the files, making the share action look like it did nothing.
-      if (imported) widget.onSharedFilesHandled?.call(paths);
+      if (imported) {
+        widget.onSharedFilesHandled?.call(paths);
+      } else {
+        // Release the in-memory guard without deleting staged files. The app
+        // can discover and offer them again on the next foreground pass.
+        widget.onSharedFilesDeferred?.call();
+      }
     }
   }
 
