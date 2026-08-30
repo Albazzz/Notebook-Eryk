@@ -511,18 +511,14 @@ class OpenRouterService {
             as Map<String, dynamic>;
     final raw = message['content'] as String? ?? '';
     try {
-      var jsonText = raw.trim();
-      if (jsonText.startsWith('```')) {
-        jsonText = jsonText.replaceFirst(RegExp(r'^```(?:json)?\s*'), '');
-        jsonText = jsonText.replaceFirst(RegExp(r'\s*```$'), '');
-      }
-      final data = jsonDecode(jsonText) as Map<String, dynamic>;
+      final data = _decodeJsonObject(raw);
+      if (data == null) throw const FormatException('OCR không đúng JSON');
       final text = (data['text'] as String? ?? '').trim();
       if (text.isEmpty) throw const FormatException('OCR trống');
       final warning = (data['warning'] as String? ?? '').trim();
       return warning.isEmpty ? text : '$text\n\nLưu ý OCR: $warning';
     } catch (_) {
-      return raw.trim();
+      return _cleanAiText(raw);
     }
   }
 
@@ -568,13 +564,9 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
   }
 
   String _formatStructuredResult(AiTask task, String raw) {
+    final data = _decodeJsonObject(raw);
+    if (data == null) return _cleanAiText(raw);
     try {
-      var jsonText = raw.trim();
-      if (jsonText.startsWith('```')) {
-        jsonText = jsonText.replaceFirst(RegExp(r'^```(?:json)?\s*'), '');
-        jsonText = jsonText.replaceFirst(RegExp(r'\s*```$'), '');
-      }
-      final data = jsonDecode(jsonText) as Map<String, dynamic>;
       final warning = (data['warning'] as String? ?? '').trim();
       final suffix = warning.isEmpty ? '' : '\n\nLưu ý OCR: $warning';
       return switch (task) {
@@ -589,8 +581,71 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
       };
     } catch (_) {
       // Keep the result useful when a selected model ignores the JSON contract.
-      return raw.trim();
+      return _cleanAiText(raw);
     }
+  }
+
+  /// Models occasionally wrap the required object in prose or a markdown
+  /// code fence. Find and decode the first balanced JSON object so the user
+  /// never sees the transport/schema payload in the result card.
+  Map<String, dynamic>? _decodeJsonObject(String raw) {
+    final source = raw.trim();
+    try {
+      final decoded = jsonDecode(source);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+
+    for (var start = 0; start < source.length; start++) {
+      if (source.codeUnitAt(start) != 0x7b) continue; // {
+      var depth = 0;
+      var quoted = false;
+      var escaped = false;
+      for (var index = start; index < source.length; index++) {
+        final code = source.codeUnitAt(index);
+        if (quoted) {
+          if (escaped) {
+            escaped = false;
+          } else if (code == 0x5c) {
+            escaped = true;
+          } else if (code == 0x22) {
+            quoted = false;
+          }
+          continue;
+        }
+        if (code == 0x22) {
+          quoted = true;
+        } else if (code == 0x7b) {
+          depth++;
+        } else if (code == 0x7d) {
+          depth--;
+          if (depth == 0) {
+            try {
+              final decoded = jsonDecode(source.substring(start, index + 1));
+              if (decoded is Map) return Map<String, dynamic>.from(decoded);
+            } catch (_) {}
+            break;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  String _cleanAiText(String raw) {
+    var text = raw.trim();
+    text = text.replaceFirst(
+      RegExp(r'^```(?:json|text)?\s*', caseSensitive: false),
+      '',
+    );
+    text = text.replaceFirst(RegExp(r'\s*```$'), '');
+    final data = _decodeJsonObject(text);
+    if (data == null) return text;
+    final readable = data.values
+        .whereType<String>()
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .join('\n\n');
+    return readable.isEmpty ? text : readable;
   }
 
   String _formatExplanation(Map<String, dynamic> data) {
