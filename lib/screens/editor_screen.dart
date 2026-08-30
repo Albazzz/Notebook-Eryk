@@ -921,6 +921,25 @@ class _EditorScreenState extends State<EditorScreen>
     }
   }
 
+  Future<void> _precachePageImagesForExport(int page) async {
+    if (!mounted) return;
+    final paths = widget.state
+        .imagePlacementsForPage(widget.notebook.id, page)
+        .map((placement) => placement.path)
+        .toSet();
+    await Future.wait(
+      paths.map((path) async {
+        final file = File(path);
+        if (!await file.exists() || !mounted) return;
+        try {
+          await precacheImage(FileImage(file), context);
+        } catch (error) {
+          debugPrint('[NoteEryk][Export] image preload failed: $error');
+        }
+      }),
+    );
+  }
+
   Future<void> _exportNotebookPdf({bool showMessage = true}) async {
     final originalPage = widget.state.openPage;
     try {
@@ -987,7 +1006,12 @@ class _EditorScreenState extends State<EditorScreen>
       final document = pw.Document();
       for (var page = 1; page <= widget.notebook.pages; page++) {
         if (!mounted) return;
+        // Image.file resolves asynchronously. Without preloading, rapid
+        // page-by-page capture can paint the synchronous ink strokes before
+        // the imported PDF background has decoded, producing white backups.
+        await _precachePageImagesForExport(page);
         widget.state.goToPage(page);
+        await WidgetsBinding.instance.endOfFrame;
         await WidgetsBinding.instance.endOfFrame;
         final boundary =
             _pageBoundaryKey.currentContext?.findRenderObject()

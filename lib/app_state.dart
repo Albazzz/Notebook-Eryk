@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:archive/archive_io.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:pdfx/pdfx.dart' as pdfx;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
@@ -171,7 +172,10 @@ class AppState extends ChangeNotifier {
       } catch (_) {}
     }
     await _loadLibrary(prefs);
+    final repairedAttachments = _ensureLegacyImagePlacements();
+    final regeneratedPdfPages = await _repairMissingPdfBackgrounds();
     _storageReady = true;
+    if (repairedAttachments || regeneratedPdfPages) schedulePersistence();
     notifyListeners();
     debugPrint(
       '[NoteEryk][AppState] initialized destination=$destination '
@@ -298,6 +302,130 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Older snapshots can contain page image paths without the placement
+  /// records introduced later. In that case the files are present after a
+  /// restore, but the editor has nothing to paint and the PDF looks white.
+  bool _ensureLegacyImagePlacements() {
+    var changed = false;
+    pageImages.forEach((notebookId, pages) {
+      pages.forEach((page, paths) {
+        for (var index = 0; index < paths.length; index++) {
+          final imagePath = paths[index];
+          final prefix = '$notebookId:$page:';
+          final alreadyPlaced = imagePlacements.values.any(
+            (placement) =>
+                placement.id.startsWith(prefix) && placement.path == imagePath,
+          );
+          if (alreadyPlaced) continue;
+          final rect = paths.length == 1
+              ? const Rect.fromLTWH(0, 0, 1, 1)
+              : Rect.fromLTWH(
+                  .02,
+                  index / paths.length + .01,
+                  .96,
+                  1 / paths.length - .02,
+                );
+          final id =
+              '$notebookId:$page:restored:${DateTime.now().microsecondsSinceEpoch}:${_imagePlacementSequence++}:$index';
+          imagePlacements[id] = PageImagePlacement(
+            id: id,
+            path: imagePath,
+            rect: rect,
+            isBackground: true,
+          );
+          changed = true;
+        }
+      });
+    });
+    return changed;
+  }
+
+  /// Rebuild missing raster page backgrounds from the original PDF. The
+  /// source PDF is part of modern .noteeryk backups, so this also repairs
+  /// snapshots made by builds that forgot to include rendered page images.
+  Future<bool> _repairMissingPdfBackgrounds() async {
+    var changed = false;
+    for (final notebook in notebooks.where((item) => item.isPdf)) {
+      final sourcePath = sourceDocuments[notebook.id];
+      if (sourcePath == null || !await File(sourcePath).exists()) continue;
+      final pagesNeedingRepair = <int>[];
+      for (var pageNumber = 1; pageNumber <= notebook.pages; pageNumber++) {
+        if (blankPages.contains('${notebook.id}:$pageNumber')) continue;
+        final prefix = '${notebook.id}:$pageNumber:';
+        final hasUsableBackground = imagePlacements.values.any(
+          (placement) =>
+              placement.id.startsWith(prefix) &&
+              placement.isBackground &&
+              File(placement.path).existsSync(),
+        );
+        if (!hasUsableBackground) pagesNeedingRepair.add(pageNumber);
+      }
+      if (pagesNeedingRepair.isEmpty) continue;
+      pdfx.PdfDocument? document;
+      try {
+        document = await pdfx.PdfDocument.openFile(sourcePath);
+        final repairDirectory = Directory(
+          '${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}pdf_backgrounds${Platform.pathSeparator}${notebook.id}',
+        );
+        await repairDirectory.create(recursive: true);
+        for (final pageNumber in pagesNeedingRepair) {
+          if (pageNumber > document.pagesCount) continue;
+          final prefix = '${notebook.id}:$pageNumber:';
+          final pagePaths = pageImages
+              .putIfAbsent(notebook.id, () => {})
+              .putIfAbsent(pageNumber, () => []);
+
+          final page = await document.getPage(pageNumber);
+          try {
+            const width = 1200.0;
+            final rendered = await page.render(
+              width: width,
+              height: width * page.height / page.width,
+              format: pdfx.PdfPageImageFormat.jpeg,
+              quality: 90,
+              backgroundColor: '#FFFFFF',
+            );
+            if (rendered == null) continue;
+            final target = File(
+              '${repairDirectory.path}${Platform.pathSeparator}page_${pageNumber.toString().padLeft(4, '0')}.jpg',
+            );
+            await target.writeAsBytes(rendered.bytes, flush: true);
+            final missingPaths = pagePaths
+                .where((path) => !File(path).existsSync())
+                .toSet();
+            pagePaths.removeWhere(missingPaths.contains);
+            imagePlacements.removeWhere(
+              (_, placement) =>
+                  placement.id.startsWith(prefix) &&
+                  missingPaths.contains(placement.path),
+            );
+            if (!pagePaths.contains(target.path)) {
+              pagePaths.insert(0, target.path);
+            }
+            final id =
+                '${prefix}repaired:${DateTime.now().microsecondsSinceEpoch}:${_imagePlacementSequence++}';
+            imagePlacements[id] = PageImagePlacement(
+              id: id,
+              path: target.path,
+              rect: const Rect.fromLTWH(0, 0, 1, 1),
+              isBackground: true,
+            );
+            changed = true;
+          } finally {
+            await page.close();
+          }
+        }
+      } catch (error) {
+        debugPrint(
+          '[NoteEryk][Storage] PDF background repair failed for ${notebook.id}: $error',
+        );
+      } finally {
+        await document?.close();
+      }
+    }
+    return changed;
+  }
+
   Map<String, Object?> _librarySnapshot() => {
     'version': 2,
     'updatedAt': DateTime.now().toIso8601String(),
@@ -385,6 +513,8 @@ class AppState extends ChangeNotifier {
   }
 
   Future<File> exportBackupSnapshot() async {
+    _ensureLegacyImagePlacements();
+    await _repairMissingPdfBackgrounds();
     final documents = await getApplicationDocumentsDirectory();
     final backups = Directory('${documents.path}/$_backupDirectoryName');
     await backups.create(recursive: true);
@@ -448,6 +578,12 @@ class AppState extends ChangeNotifier {
       for (final paths in pages.values) {
         yield* paths;
       }
+    }
+    // A placement can survive a legacy migration even when its pageImages
+    // index was incomplete. Package it independently so no visible layer is
+    // silently omitted from the backup.
+    for (final placement in imagePlacements.values) {
+      yield placement.path;
     }
     yield* sourceDocuments.values;
     for (final point in weakPoints) {
@@ -518,6 +654,8 @@ class AppState extends ChangeNotifier {
         if (await existing.exists()) await existing.delete();
       } catch (_) {}
       await _loadLibrary(prefs);
+      _ensureLegacyImagePlacements();
+      await _repairMissingPdfBackgrounds();
       await flushPersistence();
       notifyListeners();
       return true;
