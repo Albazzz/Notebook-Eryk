@@ -10,6 +10,8 @@ import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
+import 'package:pdf/pdf.dart' as pdf;
+import 'package:pdf/widgets.dart' as pw;
 
 import '../app_state.dart';
 import '../models.dart';
@@ -487,7 +489,7 @@ class _EditorScreenState extends State<EditorScreen> {
                     setState(() => pageRotation = (pageRotation + 1) % 4);
                     showAppSnack(context, 'Đã xoay trang');
                   case 'export':
-                    _exportCurrentPage();
+                    _exportNotebookPdf();
                   case 'paper':
                     unawaited(_showNotebookPaperSettings());
                 }
@@ -506,7 +508,7 @@ class _EditorScreenState extends State<EditorScreen> {
                 ),
                 PopupMenuItem(
                   value: 'export',
-                  child: Text('Xuất PDF có ghi chú'),
+                  child: Text('Xuất toàn bộ vở thành PDF'),
                 ),
               ],
             ),
@@ -766,6 +768,22 @@ class _EditorScreenState extends State<EditorScreen> {
                 _exportCurrentPage();
               },
             ),
+            ListTile(
+              leading: const Icon(Icons.picture_as_pdf_outlined),
+              title: const Text('Xuất PDF trang hiện tại'),
+              onTap: () {
+                Navigator.pop(context);
+                _exportCurrentPagePdf();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.library_books_outlined),
+              title: const Text('Xuất toàn bộ vở thành PDF'),
+              onTap: () {
+                Navigator.pop(context);
+                _exportNotebookPdf();
+              },
+            ),
           ],
         ),
       ),
@@ -793,6 +811,99 @@ class _EditorScreenState extends State<EditorScreen> {
       if (mounted) showAppSnack(context, 'Đã xuất ảnh trang hiện tại');
     } catch (exception) {
       if (mounted) showAppSnack(context, _friendlyError(exception));
+    }
+  }
+
+  Future<void> _exportCurrentPagePdf() async {
+    try {
+      final boundary =
+          _pageBoundaryKey.currentContext?.findRenderObject()
+              as RenderRepaintBoundary?;
+      if (boundary == null) {
+        throw const FormatException('Không thể chụp trang');
+      }
+      final image = await boundary.toImage(pixelRatio: 2);
+      final bytes = await image.toByteData(format: ImageByteFormat.png);
+      final width = image.width.toDouble();
+      final height = image.height.toDouble();
+      image.dispose();
+      if (bytes == null) throw const FormatException('Không thể tạo ảnh');
+      final document = pw.Document();
+      document.addPage(
+        pw.Page(
+          pageFormat: pdf.PdfPageFormat(width, height),
+          margin: pw.EdgeInsets.zero,
+          build: (_) => pw.Image(
+            pw.MemoryImage(bytes.buffer.asUint8List()),
+            fit: pw.BoxFit.fill,
+          ),
+        ),
+      );
+      final directory = await getApplicationDocumentsDirectory();
+      final exportDirectory = Directory(
+        '${directory.path}${Platform.pathSeparator}exports',
+      );
+      await exportDirectory.create(recursive: true);
+      final path =
+          '${exportDirectory.path}${Platform.pathSeparator}${widget.notebook.id}_page_${widget.state.openPage}.pdf';
+      await File(path).writeAsBytes(await document.save(), flush: true);
+      if (mounted) showAppSnack(context, 'Đã xuất PDF trang hiện tại');
+    } catch (exception) {
+      if (mounted) showAppSnack(context, _friendlyError(exception));
+    }
+  }
+
+  Future<void> _exportNotebookPdf() async {
+    final originalPage = widget.state.openPage;
+    try {
+      final document = pw.Document();
+      for (var page = 1; page <= widget.notebook.pages; page++) {
+        if (!mounted) return;
+        widget.state.goToPage(page);
+        await WidgetsBinding.instance.endOfFrame;
+        final boundary =
+            _pageBoundaryKey.currentContext?.findRenderObject()
+                as RenderRepaintBoundary?;
+        if (boundary == null) {
+          throw FormatException('Không thể chụp trang $page');
+        }
+        final image = await boundary.toImage(pixelRatio: 2);
+        final bytes = await image.toByteData(format: ImageByteFormat.png);
+        final width = image.width.toDouble();
+        final height = image.height.toDouble();
+        image.dispose();
+        if (bytes == null) throw FormatException('Không thể tạo trang $page');
+        document.addPage(
+          pw.Page(
+            pageFormat: pdf.PdfPageFormat(width, height),
+            margin: pw.EdgeInsets.zero,
+            build: (_) => pw.Image(
+              pw.MemoryImage(bytes.buffer.asUint8List()),
+              fit: pw.BoxFit.fill,
+            ),
+          ),
+        );
+      }
+      final directory = await getApplicationDocumentsDirectory();
+      final exportDirectory = Directory(
+        '${directory.path}${Platform.pathSeparator}exports',
+      );
+      await exportDirectory.create(recursive: true);
+      final path =
+          '${exportDirectory.path}${Platform.pathSeparator}${widget.notebook.id}_annotated.pdf';
+      await File(path).writeAsBytes(await document.save(), flush: true);
+      if (mounted) {
+        showAppSnack(
+          context,
+          'Đã xuất ${widget.notebook.pages} trang PDF có ghi chú',
+        );
+      }
+    } catch (exception) {
+      if (mounted) showAppSnack(context, _friendlyError(exception));
+    } finally {
+      if (mounted && widget.state.openPage != originalPage) {
+        widget.state.goToPage(originalPage);
+      }
     }
   }
 
