@@ -28,7 +28,8 @@ class EditorScreen extends StatefulWidget {
   State<EditorScreen> createState() => _EditorScreenState();
 }
 
-class _EditorScreenState extends State<EditorScreen> {
+class _EditorScreenState extends State<EditorScreen>
+    with WidgetsBindingObserver {
   static const _nativeChannel = MethodChannel(
     'com.example.noteeryk/shared_import',
   );
@@ -85,6 +86,7 @@ class _EditorScreenState extends State<EditorScreen> {
   List<DictionaryEntry> _quickDictionaryResults = const [];
   bool _quickDictionaryOpen = false;
   bool _quickDictionaryLoading = false;
+  bool _sessionPdfExportRunning = false;
   int _quickDictionaryRequestSerial = 0;
   bool _quickDictionaryEditing = false;
   double _quickRight = 24;
@@ -108,6 +110,7 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _strokesPage = widget.state.openPage;
     _strokesNotebookId = widget.notebook.id;
     strokes = List.of(
@@ -127,12 +130,36 @@ class _EditorScreenState extends State<EditorScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _quickDictionaryDebounce?.cancel();
     _quickDictionaryController.dispose();
     _quickDictionaryFocus.dispose();
     _canvasController.dispose();
     _canvasGestureStartController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      // Keep the editable .noteeryk backup and the flattened PDF in sync at
+      // the end of every editor session. The stable filename is overwritten,
+      // so Files contains one current PDF instead of a file per session.
+      unawaited(_exportSessionPdf());
+    }
+  }
+
+  Future<void> _exportSessionPdf() async {
+    if (_sessionPdfExportRunning || !mounted) return;
+    _sessionPdfExportRunning = true;
+    try {
+      await _exportNotebookPdf(showMessage: false);
+    } catch (error) {
+      debugPrint('[NoteEryk][Export] automatic PDF export failed: $error');
+    } finally {
+      _sessionPdfExportRunning = false;
+    }
   }
 
   void _beginResultEdit() {
@@ -853,7 +880,7 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
-  Future<void> _exportNotebookPdf() async {
+  Future<void> _exportNotebookPdf({bool showMessage = true}) async {
     final originalPage = widget.state.openPage;
     try {
       final document = pw.Document();
@@ -892,7 +919,7 @@ class _EditorScreenState extends State<EditorScreen> {
       final path =
           '${exportDirectory.path}${Platform.pathSeparator}${widget.notebook.id}_annotated.pdf';
       await File(path).writeAsBytes(await document.save(), flush: true);
-      if (mounted) {
+      if (showMessage && mounted) {
         showAppSnack(
           context,
           'Đã xuất ${widget.notebook.pages} trang PDF có ghi chú',
