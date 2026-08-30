@@ -902,9 +902,14 @@ class _EditorScreenState extends State<EditorScreen>
       // standard PDFKit ink annotations. This is editable in PDF apps that
       // support ink annotations, unlike the screenshot fallback below.
       final sourcePath = widget.state.sourceDocuments[widget.notebook.id];
+      final hasFloatingImages = [
+        for (var page = 1; page <= widget.notebook.pages; page++)
+          ...widget.state.imagePlacementsForPage(widget.notebook.id, page),
+      ].any((placement) => !placement.isBackground);
       if (sourcePath != null &&
           sourcePath.toLowerCase().endsWith('.pdf') &&
-          await File(sourcePath).exists()) {
+          await File(sourcePath).exists() &&
+          !hasFloatingImages) {
         final boundary =
             _pageBoundaryKey.currentContext?.findRenderObject()
                 as RenderRepaintBoundary?;
