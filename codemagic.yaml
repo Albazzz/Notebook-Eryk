@@ -66,9 +66,24 @@ workflows:
         script: |
           set -euo pipefail
           rm -rf build/ios
-          flutter build ios --release --no-codesign \
+          # Generate Flutter's iOS settings and pods first. We invoke
+          # xcodebuild explicitly below so Xcode receives all three
+          # no-signing flags, including for the embedded Share Extension.
+          flutter build ios --release --config-only --no-codesign \
             --build-name=1.0.0 \
             --build-number="$BUILD_NUMBER"
+          xcodebuild build \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$CM_BUILD_DIR/build/ios/DerivedData" \
+            CONFIGURATION_BUILD_DIR="$CM_BUILD_DIR/build/ios/iphoneos" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM=""
 
       - name: Normalize and verify embedded Share Extension
         script: |
