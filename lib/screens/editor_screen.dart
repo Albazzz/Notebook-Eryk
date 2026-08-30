@@ -890,6 +890,61 @@ class _EditorScreenState extends State<EditorScreen>
   Future<void> _exportNotebookPdf({bool showMessage = true}) async {
     final originalPage = widget.state.openPage;
     try {
+      final outputDirectory = await getApplicationDocumentsDirectory();
+      final exportDirectory = Directory(
+        '${outputDirectory.path}${Platform.pathSeparator}exports',
+      );
+      await exportDirectory.create(recursive: true);
+      final outputPath =
+          '${exportDirectory.path}${Platform.pathSeparator}${widget.notebook.id}_annotated.pdf';
+
+      // For an imported PDF, keep the PDF's text/vector content and add
+      // standard PDFKit ink annotations. This is editable in PDF apps that
+      // support ink annotations, unlike the screenshot fallback below.
+      final sourcePath = widget.state.sourceDocuments[widget.notebook.id];
+      if (sourcePath != null &&
+          sourcePath.toLowerCase().endsWith('.pdf') &&
+          await File(sourcePath).exists()) {
+        final boundary =
+            _pageBoundaryKey.currentContext?.findRenderObject()
+                as RenderRepaintBoundary?;
+        final canvasWidth = boundary?.size.width ?? 1;
+        final canvasHeight = boundary?.size.height ?? 1;
+        try {
+          final nativeResult = await _nativeChannel.invokeMethod<String>(
+            'exportPdfWithAnnotations',
+            {
+              'sourcePath': sourcePath,
+              'outputPath': outputPath,
+              'canvasWidth': canvasWidth,
+              'canvasHeight': canvasHeight,
+              'pages': [
+                for (var page = 1; page <= widget.notebook.pages; page++)
+                  {
+                    'page': page,
+                    'strokes': widget.state
+                        .strokesFor(widget.notebook.id, page)
+                        .map((stroke) => stroke.toJson())
+                        .toList(),
+                  },
+              ],
+            },
+          );
+          if (nativeResult == outputPath) {
+            if (showMessage && mounted) {
+              showAppSnack(context, 'Đã xuất PDF có annotation chỉnh sửa được');
+            }
+            return;
+          }
+        } on MissingPluginException {
+          // Fall through to the flattened screenshot export.
+        } on PlatformException catch (error) {
+          debugPrint(
+            '[NoteEryk][Export] PDFKit export failed: ${error.message}',
+          );
+        }
+      }
+
       final document = pw.Document();
       for (var page = 1; page <= widget.notebook.pages; page++) {
         if (!mounted) return;
@@ -918,14 +973,7 @@ class _EditorScreenState extends State<EditorScreen>
           ),
         );
       }
-      final directory = await getApplicationDocumentsDirectory();
-      final exportDirectory = Directory(
-        '${directory.path}${Platform.pathSeparator}exports',
-      );
-      await exportDirectory.create(recursive: true);
-      final path =
-          '${exportDirectory.path}${Platform.pathSeparator}${widget.notebook.id}_annotated.pdf';
-      await File(path).writeAsBytes(await document.save(), flush: true);
+      await File(outputPath).writeAsBytes(await document.save(), flush: true);
       if (showMessage && mounted) {
         showAppSnack(
           context,

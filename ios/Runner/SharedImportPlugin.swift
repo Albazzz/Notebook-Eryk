@@ -1,5 +1,6 @@
 import Flutter
 import Foundation
+import PDFKit
 import UIKit
 
 final class SharedImportPlugin: NSObject, FlutterPlugin {
@@ -73,6 +74,35 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
       } catch {
         result(FlutterError(
           code: "crop_failed",
+          message: error.localizedDescription,
+          details: nil
+        ))
+      }
+    case "exportPdfWithAnnotations":
+      guard let arguments = call.arguments as? [String: Any],
+            let sourcePath = arguments["sourcePath"] as? String,
+            let outputPath = arguments["outputPath"] as? String,
+            let canvasWidth = (arguments["canvasWidth"] as? NSNumber)?.doubleValue,
+            let canvasHeight = (arguments["canvasHeight"] as? NSNumber)?.doubleValue,
+            let pages = arguments["pages"] as? [[String: Any]] else {
+        result(FlutterError(
+          code: "invalid_pdf_arguments",
+          message: "Missing PDF path, canvas size, or page annotations.",
+          details: nil
+        ))
+        return
+      }
+      do {
+        result(try Self.exportPdfWithAnnotations(
+          sourcePath: sourcePath,
+          outputPath: outputPath,
+          canvasWidth: canvasWidth,
+          canvasHeight: canvasHeight,
+          pages: pages
+        ))
+      } catch {
+        result(FlutterError(
+          code: "pdf_export_failed",
           message: error.localizedDescription,
           details: nil
         ))
@@ -395,6 +425,91 @@ final class SharedImportPlugin: NSObject, FlutterPlugin {
       attributes: nil
     )
     try data.write(to: outputURL, options: .atomic)
+    return outputPath
+  }
+
+  private static func exportPdfWithAnnotations(
+    sourcePath: String,
+    outputPath: String,
+    canvasWidth: Double,
+    canvasHeight: Double,
+    pages: [[String: Any]]
+  ) throws -> String {
+    guard canvasWidth > 0, canvasHeight > 0,
+          let document = PDFDocument(url: URL(fileURLWithPath: sourcePath)) else {
+      throw NSError(
+        domain: "NoteErykPdfExport",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Không mở được PDF nguồn."]
+      )
+    }
+
+    for pageData in pages {
+      guard let pageNumber = (pageData["page"] as? NSNumber)?.intValue,
+            let page = document.page(at: pageNumber - 1),
+            let strokes = pageData["strokes"] as? [[String: Any]] else {
+        continue
+      }
+      let bounds = page.bounds(for: .mediaBox)
+      for stroke in strokes {
+        guard let rawPoints = stroke["points"] as? [[String: Any]],
+              !rawPoints.isEmpty else { continue }
+        let path = UIBezierPath()
+        for (index, rawPoint) in rawPoints.enumerated() {
+          guard let x = (rawPoint["x"] as? NSNumber)?.doubleValue,
+                let y = (rawPoint["y"] as? NSNumber)?.doubleValue else {
+            continue
+          }
+          let pdfPoint = CGPoint(
+            x: bounds.minX + CGFloat(x / canvasWidth) * bounds.width,
+            y: bounds.maxY - CGFloat(y / canvasHeight) * bounds.height
+          )
+          if index == 0 {
+            path.move(to: pdfPoint)
+          } else {
+            path.addLine(to: pdfPoint)
+          }
+        }
+        guard !path.isEmpty else { continue }
+        let annotation = PDFAnnotation(
+          bounds: bounds,
+          forType: .ink,
+          withProperties: nil
+        )
+        let colorValue = (stroke["color"] as? NSNumber)?.uint32Value ?? 0xff20242b
+        let alpha = CGFloat((colorValue >> 24) & 0xff) / 255.0
+        let color = UIColor(
+          red: CGFloat((colorValue >> 16) & 0xff) / 255.0,
+          green: CGFloat((colorValue >> 8) & 0xff) / 255.0,
+          blue: CGFloat(colorValue & 0xff) / 255.0,
+          alpha: max(alpha, 0.05)
+        )
+        annotation.color = color
+        let border = PDFBorder()
+        let width = (stroke["width"] as? NSNumber)?.doubleValue ?? 2
+        border.lineWidth = CGFloat(max(0.5, width * bounds.width / canvasWidth))
+        annotation.border = border
+        annotation.add(path)
+        page.addAnnotation(annotation)
+      }
+    }
+
+    let outputURL = URL(fileURLWithPath: outputPath)
+    try FileManager.default.createDirectory(
+      at: outputURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true,
+      attributes: nil
+    )
+    if FileManager.default.fileExists(atPath: outputURL.path) {
+      try FileManager.default.removeItem(at: outputURL)
+    }
+    guard document.write(to: outputURL) else {
+      throw NSError(
+        domain: "NoteErykPdfExport",
+        code: 2,
+        userInfo: [NSLocalizedDescriptionKey: "Không ghi được PDF đã chú thích."]
+      )
+    }
     return outputPath
   }
 }
