@@ -87,6 +87,7 @@ class _EditorScreenState extends State<EditorScreen>
   bool _quickDictionaryOpen = false;
   bool _quickDictionaryLoading = false;
   bool _sessionPdfExportRunning = false;
+  bool _sessionPdfExportRequested = false;
   int _quickDictionaryRequestSerial = 0;
   bool _quickDictionaryEditing = false;
   double _quickRight = 24;
@@ -141,12 +142,18 @@ class _EditorScreenState extends State<EditorScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused ||
+    if (state == AppLifecycleState.resumed) {
+      _sessionPdfExportRequested = false;
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       // Keep the editable .noteeryk backup and the flattened PDF in sync at
       // the end of every editor session. The stable filename is overwritten,
       // so Files contains one current PDF instead of a file per session.
-      unawaited(_exportSessionPdf());
+      if (!_sessionPdfExportRequested) {
+        _sessionPdfExportRequested = true;
+        unawaited(_exportSessionPdf());
+      }
     }
   }
 
