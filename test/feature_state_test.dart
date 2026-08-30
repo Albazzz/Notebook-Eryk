@@ -117,4 +117,72 @@ void main() {
     expect(state.strokesFor('book', 1), [stroke]);
     expect(state.strokesFor('book', 2), [otherStroke]);
   });
+
+  test('folder nested move, cycle protection and undo', () {
+    final state = AppState();
+    addTearDown(state.dispose);
+    state.autoSave = false;
+    state.addNotebook(
+      const NotebookData(
+        id: 'book',
+        title: 'Book',
+        type: 'Notebook',
+        pages: 1,
+        color: Color(0xff000000),
+      ),
+    );
+    state.createFolder('JLPT');
+    final root = state.folders.single;
+    state.createFolder('N3', parentId: root.id);
+    final child = state.folders.last;
+    expect(state.moveFolder(root.id, child.id), isFalse);
+    expect(state.moveNotebookToFolder('book', child.id), isTrue);
+    expect(state.folderNoteCount(root.id), 1);
+    state.undoFolderAction();
+    expect(state.notebooks.single.folderId, isNull);
+  });
+
+  test('deleting folder can move notes to trash and undo', () {
+    final state = AppState();
+    addTearDown(state.dispose);
+    state.autoSave = false;
+    state.addNotebook(
+      const NotebookData(
+        id: 'book',
+        title: 'Book',
+        type: 'Notebook',
+        pages: 1,
+        color: Color(0xff000000),
+      ),
+    );
+    state.createFolder('JLPT');
+    final folder = state.folders.single;
+    state.moveNotebookToFolder('book', folder.id);
+    state.deleteFolder(folder.id, moveToTrash: true);
+    expect(state.notebooks.single.isTrashed, isTrue);
+    expect(state.folders.single.isTrashed, isTrue);
+    state.undoFolderAction();
+    expect(state.notebooks.single.isTrashed, isFalse);
+  });
+
+  test('tags remain independent from a notebook folder', () {
+    final state = AppState();
+    addTearDown(state.dispose);
+    state.autoSave = false;
+    state.addNotebook(
+      const NotebookData(
+        id: 'book',
+        title: 'Book',
+        type: 'Notebook',
+        pages: 1,
+        color: Color(0xff000000),
+      ),
+    );
+    state.createFolder('JLPT');
+    final folder = state.folders.single;
+    expect(state.moveNotebookToFolder('book', folder.id), isTrue);
+    state.setNotebookTags('book', ['N3', ' dễ nhầm ', 'N3']);
+    expect(state.notebooks.single.folderId, folder.id);
+    expect(state.notebooks.single.tags, ['N3', 'dễ nhầm']);
+  });
 }

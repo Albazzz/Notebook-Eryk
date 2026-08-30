@@ -63,6 +63,11 @@ class AppState extends ChangeNotifier {
 
   /// User-created notebooks only. The library starts empty on a fresh install.
   final List<NotebookData> notebooks = [];
+  final List<FolderData> folders = [];
+  String? selectedFolderId;
+  String librarySection = 'all';
+  String folderSearchQuery = '';
+  VoidCallback? _folderUndo;
 
   final Map<String, List<InkStroke>> strokes = {};
   final Map<String, List<PinnedNote>> pinnedNotes = {};
@@ -166,6 +171,16 @@ class AppState extends ChangeNotifier {
             ),
           );
       }
+      final rawFolders = data['folders'] as List?;
+      if (rawFolders != null) {
+        folders
+          ..clear()
+          ..addAll(
+            rawFolders.map(
+              (item) => FolderData.fromJson(item as Map<String, dynamic>),
+            ),
+          );
+      }
       final rawPinned = data['pinnedNotes'] as Map<String, dynamic>?;
       if (rawPinned != null) {
         pinnedNotes
@@ -256,6 +271,7 @@ class AppState extends ChangeNotifier {
     'version': 2,
     'updatedAt': DateTime.now().toIso8601String(),
     'notebooks': notebooks.map((item) => item.toJson()).toList(),
+    'folders': folders.map((item) => item.toJson()).toList(),
     'strokes': strokes.map(
       (key, value) =>
           MapEntry(key, value.map((stroke) => stroke.toJson()).toList()),
@@ -598,6 +614,285 @@ class AppState extends ChangeNotifier {
 
   void addNotebook(NotebookData notebook) {
     notebooks.add(notebook);
+    notifyListeners();
+    schedulePersistence();
+  }
+
+  bool get canUndoFolderAction => _folderUndo != null;
+
+  void undoFolderAction() {
+    final undo = _folderUndo;
+    _folderUndo = null;
+    undo?.call();
+    if (undo != null) {
+      notifyListeners();
+      schedulePersistence();
+    }
+  }
+
+  void _captureFolderUndo() {
+    final oldFolders = List<FolderData>.of(folders);
+    final oldNotebooks = List<NotebookData>.of(notebooks);
+    _folderUndo = () {
+      folders
+        ..clear()
+        ..addAll(oldFolders);
+      notebooks
+        ..clear()
+        ..addAll(oldNotebooks);
+    };
+  }
+
+  FolderData? folderById(String? id) => id == null
+      ? null
+      : folders
+            .where((folder) => folder.id == id && !folder.isTrashed)
+            .firstOrNull;
+
+  List<FolderData> childFolders(String? parentId) => folders
+      .where((folder) => folder.parentId == parentId && !folder.isTrashed)
+      .toList();
+
+  Set<String> folderTreeIds(String folderId) {
+    final ids = <String>{folderId};
+    var changed = true;
+    while (changed) {
+      changed = false;
+      for (final folder in folders) {
+        if (folder.parentId != null &&
+            ids.contains(folder.parentId) &&
+            ids.add(folder.id)) {
+          changed = true;
+        }
+      }
+    }
+    return ids;
+  }
+
+  int folderNoteCount(String? folderId) {
+    if (folderId == null) {
+      return notebooks.where((note) => !note.isTrashed).length;
+    }
+    final ids = folderTreeIds(folderId);
+    return notebooks
+        .where((note) => !note.isTrashed && ids.contains(note.folderId))
+        .length;
+  }
+
+  List<NotebookData> notesInFolder(String? folderId) {
+    final ids = folderId == null ? null : folderTreeIds(folderId);
+    return notebooks
+        .where(
+          (note) =>
+              !note.isTrashed && (ids == null || ids.contains(note.folderId)),
+        )
+        .toList();
+  }
+
+  List<NotebookData> favoriteNotes() {
+    final pinnedFolders = folders
+        .where((folder) => folder.isPinned && !folder.isTrashed)
+        .map((folder) => folder.id)
+        .toSet();
+    return notebooks
+        .where(
+          (note) =>
+              !note.isTrashed &&
+              (note.isPinned ||
+                  (note.folderId != null &&
+                      pinnedFolders.any(
+                        (folderId) =>
+                            folderTreeIds(folderId).contains(note.folderId),
+                      ))),
+        )
+        .toList();
+  }
+
+  void selectFolder(String? folderId) {
+    selectedFolderId = folderId;
+    librarySection = 'all';
+    if (openNotebook != null) openNotebook = null;
+    destination = AppDestination.library;
+    notifyListeners();
+  }
+
+  void selectLibrarySection(String section) {
+    librarySection = section;
+    selectedFolderId = null;
+    if (openNotebook != null) openNotebook = null;
+    destination = AppDestination.library;
+    notifyListeners();
+  }
+
+  void setFolderSearchQuery(String value) {
+    folderSearchQuery = value;
+    notifyListeners();
+  }
+
+  void createFolder(String name, {String? parentId}) {
+    final clean = name.trim();
+    if (clean.isEmpty || (parentId != null && folderById(parentId) == null)) {
+      return;
+    }
+    _captureFolderUndo();
+    folders.add(
+      FolderData(
+        id: 'folder_${DateTime.now().microsecondsSinceEpoch}',
+        name: clean,
+        parentId: parentId,
+      ),
+    );
+    notifyListeners();
+    schedulePersistence();
+  }
+
+  void renameFolder(String id, String name) {
+    final clean = name.trim();
+    final index = folders.indexWhere((folder) => folder.id == id);
+    if (index < 0 || clean.isEmpty) return;
+    _captureFolderUndo();
+    folders[index] = folders[index].copyWith(name: clean);
+    notifyListeners();
+    schedulePersistence();
+  }
+
+  void updateFolderAppearance(String id, {int? color, int? iconCodePoint}) {
+    final index = folders.indexWhere((folder) => folder.id == id);
+    if (index < 0) return;
+    _captureFolderUndo();
+    folders[index] = folders[index].copyWith(
+      color: color,
+      iconCodePoint: iconCodePoint,
+    );
+    notifyListeners();
+    schedulePersistence();
+  }
+
+  void toggleFolderExpanded(String id) {
+    final index = folders.indexWhere((folder) => folder.id == id);
+    if (index < 0) return;
+    folders[index] = folders[index].copyWith(
+      isExpanded: !folders[index].isExpanded,
+    );
+    notifyListeners();
+    schedulePersistence();
+  }
+
+  void pinFolder(String id) {
+    final index = folders.indexWhere((folder) => folder.id == id);
+    if (index < 0) return;
+    _captureFolderUndo();
+    folders[index] = folders[index].copyWith(
+      isPinned: !folders[index].isPinned,
+    );
+    notifyListeners();
+    schedulePersistence();
+  }
+
+  bool moveFolder(String id, String? parentId) {
+    final index = folders.indexWhere((folder) => folder.id == id);
+    if (index < 0 || id == parentId) return false;
+    if (parentId != null && !folders.any((folder) => folder.id == parentId)) {
+      return false;
+    }
+    if (parentId != null && folderTreeIds(id).contains(parentId)) return false;
+    _captureFolderUndo();
+    folders[index] = parentId == null
+        ? folders[index].copyWith(clearParent: true)
+        : folders[index].copyWith(parentId: parentId);
+    notifyListeners();
+    schedulePersistence();
+    return true;
+  }
+
+  bool moveNotebookToFolder(String notebookId, String? folderId) {
+    final index = notebooks.indexWhere((note) => note.id == notebookId);
+    if (index < 0 || (folderId != null && folderById(folderId) == null)) {
+      return false;
+    }
+    _captureFolderUndo();
+    notebooks[index] = folderId == null
+        ? notebooks[index].copyWith(clearFolder: true)
+        : notebooks[index].copyWith(folderId: folderId);
+    notifyListeners();
+    schedulePersistence();
+    return true;
+  }
+
+  bool moveNotebooksToFolder(Iterable<String> notebookIds, String? folderId) {
+    final ids = notebookIds.toSet();
+    if (ids.isEmpty ||
+        (folderId != null && folderById(folderId) == null) ||
+        !notebooks.any((note) => ids.contains(note.id))) {
+      return false;
+    }
+    _captureFolderUndo();
+    for (var index = 0; index < notebooks.length; index++) {
+      if (!ids.contains(notebooks[index].id)) continue;
+      notebooks[index] = folderId == null
+          ? notebooks[index].copyWith(clearFolder: true)
+          : notebooks[index].copyWith(folderId: folderId);
+    }
+    notifyListeners();
+    schedulePersistence();
+    return true;
+  }
+
+  void pinNotebook(String notebookId) {
+    final index = notebooks.indexWhere((note) => note.id == notebookId);
+    if (index < 0) return;
+    _captureFolderUndo();
+    notebooks[index] = notebooks[index].copyWith(
+      isPinned: !notebooks[index].isPinned,
+    );
+    notifyListeners();
+    schedulePersistence();
+  }
+
+  /// Updates content tags without changing the notebook's single folder
+  /// location. Tags are kept as a de-duplicated, trimmed list.
+  void setNotebookTags(String notebookId, Iterable<String> values) {
+    final index = notebooks.indexWhere((note) => note.id == notebookId);
+    if (index < 0) return;
+    final tags = <String>{
+      for (final value in values)
+        if (value.trim().isNotEmpty) value.trim(),
+    }.toList();
+    _captureFolderUndo();
+    notebooks[index] = notebooks[index].copyWith(tags: tags);
+    if (openNotebook?.id == notebookId) openNotebook = notebooks[index];
+    notifyListeners();
+    schedulePersistence();
+  }
+
+  void deleteFolder(String id, {required bool moveToTrash}) {
+    final folder = folderById(id);
+    if (folder == null) return;
+    _captureFolderUndo();
+    final ids = folderTreeIds(id);
+    if (moveToTrash) {
+      for (var index = 0; index < notebooks.length; index++) {
+        if (ids.contains(notebooks[index].folderId)) {
+          notebooks[index] = notebooks[index].copyWith(isTrashed: true);
+        }
+      }
+      for (var index = 0; index < folders.length; index++) {
+        if (ids.contains(folders[index].id)) {
+          folders[index] = folders[index].copyWith(isTrashed: true);
+        }
+      }
+    } else {
+      final parentId = folder.parentId;
+      for (var index = 0; index < notebooks.length; index++) {
+        if (ids.contains(notebooks[index].folderId)) {
+          notebooks[index] = notebooks[index].copyWith(folderId: parentId);
+        }
+      }
+      folders.removeWhere((item) => ids.contains(item.id));
+    }
+    if (selectedFolderId != null && ids.contains(selectedFolderId)) {
+      selectedFolderId = folder.parentId;
+    }
     notifyListeners();
     schedulePersistence();
   }

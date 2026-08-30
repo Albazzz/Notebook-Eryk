@@ -111,6 +111,10 @@ class NotebookData {
     required this.type,
     required this.pages,
     required this.color,
+    this.folderId,
+    this.tags = const [],
+    this.isPinned = false,
+    this.isTrashed = false,
     this.paperStyle = PaperStyle.grid,
     this.paperLineOpacity = .09,
     this.lastOpened = 'Vừa xong',
@@ -121,6 +125,13 @@ class NotebookData {
   final String type;
   final int pages;
   final Color color;
+  final String? folderId;
+
+  /// Content classification is independent from the notebook's folder path.
+  /// A notebook has one folder but can carry any number of tags.
+  final List<String> tags;
+  final bool isPinned;
+  final bool isTrashed;
   final PaperStyle paperStyle;
   final double paperLineOpacity;
   final String lastOpened;
@@ -133,6 +144,10 @@ class NotebookData {
     'type': type,
     'pages': pages,
     'color': color.toARGB32(),
+    'folderId': folderId,
+    'tags': tags,
+    'isPinned': isPinned,
+    'isTrashed': isTrashed,
     'paperStyle': paperStyle.name,
     'paperLineOpacity': paperLineOpacity,
     'lastOpened': lastOpened,
@@ -144,6 +159,10 @@ class NotebookData {
     type: json['type'] as String? ?? 'Notebook',
     pages: ((json['pages'] as num?)?.toInt() ?? 1).clamp(1, 10000).toInt(),
     color: Color((json['color'] as num?)?.toInt() ?? 0xffdce1ff),
+    folderId: json['folderId'] as String?,
+    tags: List<String>.from(json['tags'] as List? ?? const []),
+    isPinned: json['isPinned'] as bool? ?? false,
+    isTrashed: json['isTrashed'] as bool? ?? false,
     paperStyle: PaperStyle.values.firstWhere(
       (value) => value.name == json['paperStyle'],
       orElse: () => PaperStyle.grid,
@@ -157,6 +176,11 @@ class NotebookData {
     String? type,
     int? pages,
     Color? color,
+    String? folderId,
+    bool clearFolder = false,
+    List<String>? tags,
+    bool? isPinned,
+    bool? isTrashed,
     PaperStyle? paperStyle,
     double? paperLineOpacity,
     String? lastOpened,
@@ -166,9 +190,77 @@ class NotebookData {
     type: type ?? this.type,
     pages: pages ?? this.pages,
     color: color ?? this.color,
+    folderId: clearFolder ? null : (folderId ?? this.folderId),
+    tags: tags ?? this.tags,
+    isPinned: isPinned ?? this.isPinned,
+    isTrashed: isTrashed ?? this.isTrashed,
     paperStyle: paperStyle ?? this.paperStyle,
     paperLineOpacity: paperLineOpacity ?? this.paperLineOpacity,
     lastOpened: lastOpened ?? this.lastOpened,
+  );
+}
+
+class FolderData {
+  const FolderData({
+    required this.id,
+    required this.name,
+    this.parentId,
+    this.color = 0xff6b7280,
+    this.iconCodePoint = 0xe2c7,
+    this.isPinned = false,
+    this.isExpanded = true,
+    this.isTrashed = false,
+  });
+
+  final String id;
+  final String name;
+  final String? parentId;
+  final int color;
+  final int iconCodePoint;
+  final bool isPinned;
+  final bool isExpanded;
+  final bool isTrashed;
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'name': name,
+    'parentId': parentId,
+    'color': color,
+    'iconCodePoint': iconCodePoint,
+    'isPinned': isPinned,
+    'isExpanded': isExpanded,
+    'isTrashed': isTrashed,
+  };
+
+  factory FolderData.fromJson(Map<String, dynamic> json) => FolderData(
+    id: json['id'] as String,
+    name: json['name'] as String? ?? 'Folder',
+    parentId: json['parentId'] as String?,
+    color: (json['color'] as num?)?.toInt() ?? 0xff6b7280,
+    iconCodePoint: (json['iconCodePoint'] as num?)?.toInt() ?? 0xe2c7,
+    isPinned: json['isPinned'] as bool? ?? false,
+    isExpanded: json['isExpanded'] as bool? ?? true,
+    isTrashed: json['isTrashed'] as bool? ?? false,
+  );
+
+  FolderData copyWith({
+    String? name,
+    String? parentId,
+    bool clearParent = false,
+    int? color,
+    int? iconCodePoint,
+    bool? isPinned,
+    bool? isExpanded,
+    bool? isTrashed,
+  }) => FolderData(
+    id: id,
+    name: name ?? this.name,
+    parentId: clearParent ? null : (parentId ?? this.parentId),
+    color: color ?? this.color,
+    iconCodePoint: iconCodePoint ?? this.iconCodePoint,
+    isPinned: isPinned ?? this.isPinned,
+    isExpanded: isExpanded ?? this.isExpanded,
+    isTrashed: isTrashed ?? this.isTrashed,
   );
 }
 

@@ -33,6 +33,60 @@ class _LibraryScreenState extends State<LibraryScreen> {
   String search = '';
   bool gridView = true;
   bool _handlingSharedFiles = false;
+  final Set<String> _selectedNotebookIds = {};
+  bool _selectionMode = false;
+
+  void _toggleNotebookSelection(String id) {
+    setState(() {
+      if (!_selectedNotebookIds.add(id)) _selectedNotebookIds.remove(id);
+    });
+  }
+
+  void _clearNotebookSelection() {
+    if (_selectedNotebookIds.isEmpty) return;
+    setState(() => _selectedNotebookIds.clear());
+  }
+
+  void _toggleSelectionMode() {
+    setState(() {
+      _selectionMode = !_selectionMode;
+      if (!_selectionMode) _selectedNotebookIds.clear();
+    });
+  }
+
+  Future<void> _moveSelectedNotebooks() async {
+    final target = await showModalBottomSheet<String?>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            ListTile(
+              title: const Text('Tất cả ghi chú (bỏ folder)'),
+              onTap: () => Navigator.pop(sheetContext, 'root'),
+            ),
+            for (final folder in widget.state.folders.where(
+              (item) => !item.isTrashed,
+            ))
+              ListTile(
+                leading: Icon(Icons.folder, color: Color(folder.color)),
+                title: Text(folder.name),
+                onTap: () => Navigator.pop(sheetContext, folder.id),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (target == null) return;
+    final moved = widget.state.moveNotebooksToFolder(
+      _selectedNotebookIds,
+      target == 'root' ? null : target,
+    );
+    if (moved && mounted) {
+      _clearNotebookSelection();
+      showAppSnack(context, 'Đã di chuyển ghi chú');
+    }
+  }
 
   @override
   void initState() {
@@ -73,9 +127,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final notebooks = widget.state.notebooks.where((item) {
+    final scoped = switch (widget.state.librarySection) {
+      'favorites' => widget.state.favoriteNotes(),
+      'trash' => widget.state.notebooks.where((item) => item.isTrashed),
+      _ => widget.state.notesInFolder(widget.state.selectedFolderId),
+    };
+    final notebooks = scoped.where((item) {
       final matchesSearch = item.title.toLowerCase().contains(
-        search.toLowerCase(),
+        (search.isEmpty ? widget.state.folderSearchQuery : search)
+            .toLowerCase(),
       );
       final matchesFilter =
           filter == 'Tất cả' ||
@@ -94,6 +154,28 @@ class _LibraryScreenState extends State<LibraryScreen> {
             trailing: Wrap(
               spacing: 10,
               children: [
+                if (_selectedNotebookIds.isNotEmpty) ...[
+                  Text('${_selectedNotebookIds.length} đã chọn'),
+                  IconButton(
+                    tooltip: 'Di chuyển đã chọn',
+                    onPressed: _moveSelectedNotebooks,
+                    icon: const Icon(Icons.drive_file_move_outline),
+                  ),
+                  IconButton(
+                    tooltip: 'Bỏ chọn',
+                    onPressed: _clearNotebookSelection,
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+                IconButton(
+                  tooltip: 'Chọn nhiều ghi chú',
+                  onPressed: _toggleSelectionMode,
+                  icon: Icon(
+                    _selectionMode
+                        ? Icons.checklist_rounded
+                        : Icons.playlist_add_check_rounded,
+                  ),
+                ),
                 SearchBox(
                   hint: 'Tìm vở...',
                   width: 220,
@@ -152,10 +234,24 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       height: 245,
                       child: index == notebooks.length
                           ? _CreateCard(onTap: () => _showCreateSheet(context))
-                          : _NotebookCard(
-                              notebook: notebooks[index],
-                              onTap: () => widget.state.open(notebooks[index]),
-                              onMenu: () => _showNotebookMenu(notebooks[index]),
+                          : _draggableNotebook(
+                              notebooks[index],
+                              _NotebookCard(
+                                notebook: notebooks[index],
+                                onTap: () => _selectionMode
+                                    ? _toggleNotebookSelection(
+                                        notebooks[index].id,
+                                      )
+                                    : widget.state.open(notebooks[index]),
+                                onMenu: () =>
+                                    _showNotebookMenu(notebooks[index]),
+                                selected: _selectedNotebookIds.contains(
+                                  notebooks[index].id,
+                                ),
+                                onLongPress: () => _toggleNotebookSelection(
+                                  notebooks[index].id,
+                                ),
+                              ),
                             ),
                     ),
                   );
@@ -171,10 +267,20 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   itemCount: notebooks.length + 1,
                   itemBuilder: (context, index) => index == notebooks.length
                       ? _CreateCard(onTap: () => _showCreateSheet(context))
-                      : _NotebookCard(
-                          notebook: notebooks[index],
-                          onTap: () => widget.state.open(notebooks[index]),
-                          onMenu: () => _showNotebookMenu(notebooks[index]),
+                      : _draggableNotebook(
+                          notebooks[index],
+                          _NotebookCard(
+                            notebook: notebooks[index],
+                            onTap: () => _selectionMode
+                                ? _toggleNotebookSelection(notebooks[index].id)
+                                : widget.state.open(notebooks[index]),
+                            onMenu: () => _showNotebookMenu(notebooks[index]),
+                            selected: _selectedNotebookIds.contains(
+                              notebooks[index].id,
+                            ),
+                            onLongPress: () =>
+                                _toggleNotebookSelection(notebooks[index].id),
+                          ),
                         ),
                 );
               },
@@ -184,6 +290,20 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ),
     );
   }
+
+  Widget _draggableNotebook(NotebookData notebook, Widget child) =>
+      LongPressDraggable<String>(
+        data:
+            _selectedNotebookIds.contains(notebook.id) &&
+                _selectedNotebookIds.length > 1
+            ? 'notes:${_selectedNotebookIds.join(',')}'
+            : 'note:${notebook.id}',
+        feedback: Material(
+          color: Colors.transparent,
+          child: SizedBox(width: 250, height: 190, child: child),
+        ),
+        child: child,
+      );
 
   Future<void> _showCreateSheet(BuildContext context) async {
     final titleController = TextEditingController();
@@ -950,6 +1070,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
               onTap: () => Navigator.pop(context, 'paper'),
             ),
             ListTile(
+              leading: Icon(
+                notebook.isPinned ? Icons.star : Icons.star_border,
+                color: Colors.amber,
+              ),
+              title: Text(notebook.isPinned ? 'Bỏ yêu thích' : 'Yêu thích'),
+              onTap: () => Navigator.pop(context, 'pin'),
+            ),
+            ListTile(
               leading: const Icon(Icons.delete_outline, color: Colors.red),
               title: const Text('Xóa vở'),
               onTap: () => Navigator.pop(context, 'delete'),
@@ -963,6 +1091,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
       widget.state.open(notebook);
     } else if (action == 'paper') {
       await _showNotebookPaperSettings(notebook);
+    } else if (action == 'pin') {
+      widget.state.pinNotebook(notebook.id);
     } else if (action == 'delete') {
       final confirmed = await showDialog<bool>(
         context: context,
@@ -1174,10 +1304,14 @@ class _NotebookCard extends StatelessWidget {
     required this.notebook,
     required this.onTap,
     required this.onMenu,
+    this.selected = false,
+    this.onLongPress,
   });
   final NotebookData notebook;
   final VoidCallback onTap;
   final VoidCallback onMenu;
+  final bool selected;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -1185,6 +1319,8 @@ class _NotebookCard extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
+        onLongPress: onLongPress,
+        borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
@@ -1197,9 +1333,26 @@ class _NotebookCard extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: notebook.color,
                     borderRadius: BorderRadius.circular(16),
+                    border: selected
+                        ? Border.all(color: AppColors.primary, width: 3)
+                        : null,
                   ),
                   child: Stack(
                     children: [
+                      if (selected)
+                        const Positioned(
+                          right: 10,
+                          top: 10,
+                          child: CircleAvatar(
+                            radius: 14,
+                            backgroundColor: Colors.white,
+                            child: Icon(
+                              Icons.check,
+                              color: AppColors.primary,
+                              size: 18,
+                            ),
+                          ),
+                        ),
                       Positioned(
                         right: -14,
                         top: 0,
