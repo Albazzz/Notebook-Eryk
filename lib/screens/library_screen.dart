@@ -190,6 +190,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   onChanged: (value) => setState(() => search = value),
                 ),
                 IconButton.filledTonal(
+                  tooltip: 'T\u1ea1o folder',
+                  onPressed: _showCreateFolderDialog,
+                  icon: const Icon(Icons.create_new_folder_outlined),
+                ),
+                IconButton.filledTonal(
                   onPressed: () => setState(() => gridView = !gridView),
                   icon: Icon(
                     gridView
@@ -246,6 +251,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                               notebooks[index],
                               _NotebookCard(
                                 notebook: notebooks[index],
+                                coverPath: _coverPath(notebooks[index]),
                                 onTap: () => _selectionMode
                                     ? _toggleNotebookSelection(
                                         notebooks[index].id,
@@ -279,6 +285,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           notebooks[index],
                           _NotebookCard(
                             notebook: notebooks[index],
+                            coverPath: _coverPath(notebooks[index]),
                             onTap: () => _selectionMode
                                 ? _toggleNotebookSelection(notebooks[index].id)
                                 : widget.state.open(notebooks[index]),
@@ -298,6 +305,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ),
     );
   }
+
+  String? _coverPath(NotebookData notebook) =>
+      widget.state.imagesForPage(notebook.id, 1).firstOrNull;
 
   Widget _draggableNotebook(NotebookData notebook, Widget child) =>
       LongPressDraggable<String>(
@@ -613,6 +623,39 @@ class _LibraryScreenState extends State<LibraryScreen> {
     await _showImportPreview(paths);
   }
 
+  Future<void> _showCreateFolderDialog() async {
+    final controller = TextEditingController();
+    final parentId = widget.state.selectedFolderId;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(parentId == null ? 'Folder má»›i' : 'Folder con má»›i'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'TĂªn folder'),
+          onSubmitted: (_) => Navigator.pop(dialogContext, true),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Há»§y'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Táº¡o'),
+          ),
+        ],
+      ),
+    );
+    final name = controller.text;
+    controller.dispose();
+    if (accepted == true) {
+      widget.state.createFolder(name, parentId: parentId);
+      if (mounted) showAppSnack(context, 'ÄĂ£ táº¡o folder');
+    }
+  }
+
   Future<bool> _showImportPreview(List<String> inputPaths) async {
     final paths = inputPaths
         .where((path) => File(path).existsSync())
@@ -839,6 +882,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
       type: type,
       pages: pageCount,
       color: AppColors.primary,
+      // Import into the folder currently being viewed, just like dropping a
+      // file onto that folder in the sidebar.
+      folderId: widget.state.selectedFolderId,
       paperStyle: PaperStyle.blank,
     );
     widget.state.addNotebook(notebook);
@@ -1072,6 +1118,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
               onTap: () => Navigator.pop(context, 'open'),
             ),
             ListTile(
+              leading: const Icon(Icons.drive_file_move_outline),
+              title: const Text('Di chuy\u1ec3n v\u00e0o folder'),
+              onTap: () => Navigator.pop(context, 'move'),
+            ),
+            ListTile(
               leading: const Icon(Icons.tune_rounded),
               title: const Text('Cài đặt giấy'),
               subtitle: const Text('Kiểu giấy và độ đậm đường kẻ'),
@@ -1097,6 +1148,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (!mounted) return;
     if (action == 'open') {
       widget.state.open(notebook);
+    } else if (action == 'move') {
+      await _moveNotebookToFolder(notebook);
     } else if (action == 'paper') {
       await _showNotebookPaperSettings(notebook);
     } else if (action == 'pin') {
@@ -1125,6 +1178,45 @@ class _LibraryScreenState extends State<LibraryScreen> {
       if (confirmed != true || !mounted) return;
       widget.state.removeNotebook(notebook.id);
       showAppSnack(context, 'Đã xóa ${notebook.title}');
+    }
+  }
+
+  Future<void> _moveNotebookToFolder(NotebookData notebook) async {
+    final target = await showModalBottomSheet<String?>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.library_books_outlined),
+              title: const Text(
+                'T\u1ea5t c\u1ea3 ghi ch\u00fa (b\u1ecf folder)',
+              ),
+              onTap: () => Navigator.pop(sheetContext, 'root'),
+            ),
+            for (final folder in widget.state.folders.where(
+              (item) => !item.isTrashed,
+            ))
+              ListTile(
+                leading: Icon(Icons.folder, color: Color(folder.color)),
+                title: Text(folder.name),
+                selected: folder.id == notebook.folderId,
+                onTap: () => Navigator.pop(sheetContext, folder.id),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (target == null) return;
+    final folderId = target == 'root' ? null : target;
+    if (folderId == notebook.folderId) return;
+    if (widget.state.moveNotebookToFolder(notebook.id, folderId) && mounted) {
+      showAppSnack(
+        context,
+        '\u0110\u00e3 di chuy\u1ec3n ghi ch\u00fa v\u00e0o folder',
+      );
     }
   }
 
@@ -1310,12 +1402,14 @@ class _CropSlider extends StatelessWidget {
 class _NotebookCard extends StatelessWidget {
   const _NotebookCard({
     required this.notebook,
+    this.coverPath,
     required this.onTap,
     required this.onMenu,
     this.selected = false,
     this.onLongPress,
   });
   final NotebookData notebook;
+  final String? coverPath;
   final VoidCallback onTap;
   final VoidCallback onMenu;
   final bool selected;
@@ -1346,7 +1440,27 @@ class _NotebookCard extends StatelessWidget {
                         : null,
                   ),
                   child: Stack(
+                    fit: StackFit.expand,
                     children: [
+                      if (coverPath != null)
+                        Image.file(
+                          File(coverPath!),
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                        ),
+                      if (coverPath != null)
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                notebook.color.withValues(alpha: .2),
+                                notebook.color.withValues(alpha: .82),
+                              ],
+                            ),
+                          ),
+                        ),
                       if (selected)
                         const Positioned(
                           right: 10,

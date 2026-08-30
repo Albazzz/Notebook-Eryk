@@ -427,6 +427,9 @@ class OpenRouterService {
           {'role': 'user', 'content': text},
         ],
         'temperature': 0.25,
+        // Dictionary responses are intentionally short; limiting output
+        // reduces latency and leaves less room for speculative explanations.
+        'max_tokens': task == AiTask.dictionary ? 220 : 700,
       }),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -492,6 +495,7 @@ class OpenRouterService {
           },
         ],
         'temperature': 0,
+        'max_tokens': 160,
       }),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {

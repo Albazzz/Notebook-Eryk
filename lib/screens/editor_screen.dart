@@ -1453,31 +1453,27 @@ class _EditorScreenState extends State<EditorScreen>
     try {
       final crop = await _captureSelection();
       if (!mounted || requestSerial != _aiRequestSerial) return;
-      final visionModelId = widget.state.modelIds[AiModelSlot.vision] ?? '';
-      final recognized =
-          widget.state.useAiVision &&
-              visionModelId.isNotEmpty &&
-              widget.state.hasApiKey
-          ? await widget.state.aiService.recognizeImageWithAi(
-              apiKey: widget.state.apiKey,
-              modelId: visionModelId,
-              imagePath: crop.path,
-            )
-          : await widget.state.ocr.recognizeImage(crop.path);
+      var recognized = await _recognizeSelectionText(crop.path);
       if (!mounted || requestSerial != _aiRequestSerial) return;
       _latestCropPath = crop.path;
       _latestOcrText = recognized;
       if (tool == EditorTool.dictionary) {
-        final entry = await widget.state.dictionary.lookupNormalized(
-          recognized,
-        );
+        var entry = await widget.state.dictionary.lookupNormalized(recognized);
+        // A tiny crop can be difficult for on-device OCR. Only after the
+        // deterministic dictionary lookup misses do we spend time on the
+        // optional Vision model, then try the local dictionary once more.
+        if (entry == null && _canUseAiVision) {
+          recognized = await _recognizeWithAiVision(crop.path);
+          entry = await widget.state.dictionary.lookupNormalized(recognized);
+        }
         if (entry == null) {
           throw const FormatException(
             'Không tìm thấy từ trong từ điển ngoại tuyến',
           );
         }
+        final resolvedEntry = entry;
         if (!mounted) return;
-        setState(() => result = _SmartResult.dictionary(entry));
+        setState(() => result = _SmartResult.dictionary(resolvedEntry));
       } else if (tool == EditorTool.aiDictionary) {
         final response = await widget.state.aiService.complete(
           apiKey: widget.state.apiKey,
@@ -1538,6 +1534,40 @@ class _EditorScreenState extends State<EditorScreen>
   void _cancelPendingAi() {
     _aiRequestSerial++;
     if (processing) processing = false;
+  }
+
+  bool get _canUseAiVision {
+    final modelId = widget.state.modelIds[AiModelSlot.vision] ?? '';
+    return widget.state.useAiVision &&
+        modelId.trim().isNotEmpty &&
+        widget.state.hasApiKey;
+  }
+
+  Future<String> _recognizeWithAiVision(String imagePath) {
+    final modelId = widget.state.modelIds[AiModelSlot.vision]!.trim();
+    return widget.state.aiService.recognizeImageWithAi(
+      apiKey: widget.state.apiKey,
+      modelId: modelId,
+      imagePath: imagePath,
+    );
+  }
+
+  Future<String> _recognizeSelectionText(String imagePath) async {
+    // Dictionary tools should be fast and reproducible: use ML Kit first and
+    // reserve paid/network Vision OCR for an actual local-OCR failure. Other
+    // AI tools retain the explicit Vision preference configured by the user.
+    final dictionaryTool =
+        tool == EditorTool.dictionary || tool == EditorTool.aiDictionary;
+    if (dictionaryTool) {
+      try {
+        return await widget.state.ocr.recognizeImage(imagePath);
+      } catch (localError) {
+        if (_canUseAiVision) return _recognizeWithAiVision(imagePath);
+        rethrow;
+      }
+    }
+    if (_canUseAiVision) return _recognizeWithAiVision(imagePath);
+    return widget.state.ocr.recognizeImage(imagePath);
   }
 
   Future<void> _finishProcessingAfterOverlay() async {
@@ -1623,7 +1653,15 @@ class _EditorScreenState extends State<EditorScreen>
     if (region.width < 8 || region.height < 8) {
       throw const FormatException('Vùng chọn quá nhỏ. Hãy khoanh lại.');
     }
-    const ratio = 2.0;
+    // Small selections otherwise become only a few dozen pixels wide. Render
+    // them at a higher scale so Japanese kana strokes survive OCR; full-page
+    // selections stay at the cheaper 2x scale.
+    final shortestSide = math.min(region.width, region.height);
+    final ratio = shortestSide < 90
+        ? 4.0
+        : shortestSide < 180
+        ? 3.0
+        : 2.0;
     final pageImage = await boundary.toImage(pixelRatio: ratio);
     final source = Rect.fromLTWH(
       region.left * ratio,
@@ -1650,9 +1688,21 @@ class _EditorScreenState extends State<EditorScreen>
       '${directory.path}${Platform.pathSeparator}weakness_crops',
     );
     await cropDirectory.create(recursive: true);
+    // Upscale only very small crops. This is inexpensive compared with a
+    // network request and gives ML Kit/Vision a useful minimum glyph size.
+    var encoded = bytes.buffer.asUint8List();
+    final decoded = img.decodeImage(encoded);
+    if (decoded != null && (decoded.width < 320 || decoded.height < 160)) {
+      final enlarged = img.copyResize(
+        decoded,
+        width: math.max(decoded.width, 320).toInt(),
+        interpolation: img.Interpolation.cubic,
+      );
+      encoded = Uint8List.fromList(img.encodePng(enlarged));
+    }
     final path =
         '${cropDirectory.path}${Platform.pathSeparator}crop_${DateTime.now().microsecondsSinceEpoch}.png';
-    await File(path).writeAsBytes(bytes.buffer.asUint8List(), flush: true);
+    await File(path).writeAsBytes(encoded, flush: true);
     return _CapturedRegion(path);
   }
 
