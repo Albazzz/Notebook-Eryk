@@ -1056,6 +1056,42 @@ class AppState extends ChangeNotifier {
     return true;
   }
 
+  bool moveNotebooksToTrash(Iterable<String> notebookIds) {
+    final ids = notebookIds.toSet();
+    if (ids.isEmpty ||
+        !notebooks.any((note) => ids.contains(note.id) && !note.isTrashed)) {
+      return false;
+    }
+    _captureFolderUndo();
+    for (var index = 0; index < notebooks.length; index++) {
+      if (ids.contains(notebooks[index].id) && !notebooks[index].isTrashed) {
+        notebooks[index] = notebooks[index].copyWith(isTrashed: true);
+      }
+    }
+    final openId = openNotebook?.id;
+    if (openId != null && ids.contains(openId)) openNotebook = null;
+    notifyListeners();
+    schedulePersistence();
+    return true;
+  }
+
+  bool restoreNotebooksFromTrash(Iterable<String> notebookIds) {
+    final ids = notebookIds.toSet();
+    if (ids.isEmpty ||
+        !notebooks.any((note) => ids.contains(note.id) && note.isTrashed)) {
+      return false;
+    }
+    _captureFolderUndo();
+    for (var index = 0; index < notebooks.length; index++) {
+      if (ids.contains(notebooks[index].id) && notebooks[index].isTrashed) {
+        notebooks[index] = notebooks[index].copyWith(isTrashed: false);
+      }
+    }
+    notifyListeners();
+    schedulePersistence();
+    return true;
+  }
+
   void pinNotebook(String notebookId) {
     final index = notebooks.indexWhere((note) => note.id == notebookId);
     if (index < 0) return;

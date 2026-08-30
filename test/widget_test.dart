@@ -23,6 +23,32 @@ void main() {
     expect(find.text('Tạo mới'), findsOneWidget);
   });
 
+  testWidgets('chọn nhiều trên iPad dọc không ép tiêu đề thành cột', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 1024);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.playlist_add_check_rounded));
+    await tester.pump();
+    await tester.tap(find.text('N3 Grammar'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('1 vở đã chọn'), findsOneWidget);
+    expect(find.byIcon(Icons.drive_file_move_outline), findsOneWidget);
+    expect(find.byIcon(Icons.delete_outline), findsWidgets);
+    final titleSize = tester.getSize(find.text('Vở của tôi').last);
+    expect(titleSize.width, greaterThan(120));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('chạm đồng thời hai ngón hoàn tác nét vừa vẽ', (tester) async {
     tester.view.physicalSize = const Size(1180, 820);
     tester.view.devicePixelRatio = 1;

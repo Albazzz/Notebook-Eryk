@@ -13,26 +13,42 @@ class PageHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
+    final heading = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: Theme.of(context).textTheme.displaySmall),
-              const SizedBox(height: 6),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
+        Text(title, style: Theme.of(context).textTheme.displaySmall),
+        const SizedBox(height: 6),
+        Text(
+          subtitle,
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
         ),
-        ?trailing,
       ],
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // On portrait iPad the action area can be wider than the title. A
+        // fixed Row then compresses Vietnamese text to one character per
+        // line. Put actions on their own row before that can happen.
+        if (trailing != null && constraints.maxWidth < 900) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              heading,
+              const SizedBox(height: 16),
+              Align(alignment: Alignment.centerLeft, child: trailing),
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(child: heading),
+            ?trailing,
+          ],
+        );
+      },
     );
   }
 }

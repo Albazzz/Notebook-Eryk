@@ -209,6 +209,35 @@ void main() {
     expect(state.moveFolder(folder.id, null), isFalse);
   });
 
+  test('bulk trash and restore notebooks supports undo', () {
+    final state = AppState();
+    addTearDown(state.dispose);
+    state.autoSave = false;
+    for (final id in ['book-1', 'book-2', 'book-3']) {
+      state.addNotebook(
+        NotebookData(
+          id: id,
+          title: id,
+          type: 'Notebook',
+          pages: 1,
+          color: const Color(0xff000000),
+        ),
+      );
+    }
+
+    expect(state.moveNotebooksToTrash(['book-1', 'book-2']), isTrue);
+    expect(
+      state.notebooks.where((note) => note.isTrashed).map((note) => note.id),
+      containsAll(['book-1', 'book-2']),
+    );
+    state.undoFolderAction();
+    expect(state.notebooks.where((note) => note.isTrashed), isEmpty);
+
+    state.moveNotebooksToTrash(['book-1', 'book-2']);
+    expect(state.restoreNotebooksFromTrash(['book-1', 'book-2']), isTrue);
+    expect(state.notebooks.where((note) => note.isTrashed), isEmpty);
+  });
+
   test('pinned folders are sorted before normal folders', () {
     final state = AppState();
     addTearDown(state.dispose);

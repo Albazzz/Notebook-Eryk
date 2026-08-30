@@ -40,13 +40,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   void _toggleNotebookSelection(String id) {
     setState(() {
+      _selectionMode = true;
       if (!_selectedNotebookIds.add(id)) _selectedNotebookIds.remove(id);
     });
   }
 
   void _clearNotebookSelection() {
-    if (_selectedNotebookIds.isEmpty) return;
-    setState(() => _selectedNotebookIds.clear());
+    if (_selectedNotebookIds.isEmpty && !_selectionMode) return;
+    setState(() {
+      _selectedNotebookIds.clear();
+      _selectionMode = false;
+    });
   }
 
   void _toggleSelectionMode() {
@@ -86,7 +90,61 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
     if (moved && mounted) {
       _clearNotebookSelection();
-      showAppSnack(context, 'Đã di chuyển ghi chú');
+      showAppSnack(
+        context,
+        'Đã di chuyển các vở đã chọn',
+        actionLabel: 'Hoàn tác',
+        onAction: widget.state.undoFolderAction,
+      );
+    }
+  }
+
+  Future<void> _deleteSelectedNotebooks() async {
+    final selectedIds = Set<String>.of(_selectedNotebookIds);
+    if (selectedIds.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Xóa ${selectedIds.length} vở đã chọn?'),
+        content: const Text(
+          'Các vở sẽ được chuyển vào Thùng rác và có thể hoàn tác.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.delete_outline),
+            label: const Text('Chuyển vào Thùng rác'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    if (widget.state.moveNotebooksToTrash(selectedIds)) {
+      _clearNotebookSelection();
+      showAppSnack(
+        context,
+        'Đã chuyển ${selectedIds.length} vở vào Thùng rác',
+        actionLabel: 'Hoàn tác',
+        onAction: widget.state.undoFolderAction,
+      );
+    }
+  }
+
+  void _restoreSelectedNotebooks() {
+    final selectedIds = Set<String>.of(_selectedNotebookIds);
+    if (widget.state.restoreNotebooksFromTrash(selectedIds)) {
+      _clearNotebookSelection();
+      showAppSnack(
+        context,
+        'Đã khôi phục ${selectedIds.length} vở',
+        actionLabel: 'Hoàn tác',
+        onAction: widget.state.undoFolderAction,
+      );
     }
   }
 
@@ -159,57 +217,86 @@ class _LibraryScreenState extends State<LibraryScreen> {
           PageHeader(
             title: 'Vở của tôi',
             subtitle: 'Mọi trang học tiếng Nhật, ngay trong tầm bút.',
-            trailing: Wrap(
-              spacing: 10,
-              children: [
-                if (_selectedNotebookIds.isNotEmpty) ...[
-                  Text('${_selectedNotebookIds.length} đã chọn'),
-                  IconButton(
-                    tooltip: 'Di chuyển đã chọn',
-                    onPressed: _moveSelectedNotebooks,
-                    icon: const Icon(Icons.drive_file_move_outline),
+            trailing: _selectedNotebookIds.isNotEmpty
+                ? Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Text(
+                          '${_selectedNotebookIds.length} vở đã chọn',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      if (widget.state.librarySection == 'trash')
+                        IconButton.filledTonal(
+                          tooltip: 'Khôi phục các vở đã chọn',
+                          onPressed: _restoreSelectedNotebooks,
+                          icon: const Icon(Icons.restore_from_trash_outlined),
+                        )
+                      else ...[
+                        IconButton.filledTonal(
+                          tooltip: 'Di chuyển vào folder khác',
+                          onPressed: _moveSelectedNotebooks,
+                          icon: const Icon(Icons.drive_file_move_outline),
+                        ),
+                        IconButton.filledTonal(
+                          tooltip: 'Chuyển các vở đã chọn vào Thùng rác',
+                          onPressed: _deleteSelectedNotebooks,
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.red,
+                          ),
+                        ),
+                      ],
+                      IconButton(
+                        tooltip: 'Bỏ chọn',
+                        onPressed: _clearNotebookSelection,
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  )
+                : Wrap(
+                    spacing: 10,
+                    runSpacing: 8,
+                    children: [
+                      IconButton(
+                        tooltip: 'Chọn nhiều ghi chú',
+                        onPressed: _toggleSelectionMode,
+                        icon: Icon(
+                          _selectionMode
+                              ? Icons.checklist_rounded
+                              : Icons.playlist_add_check_rounded,
+                        ),
+                      ),
+                      SearchBox(
+                        hint: 'Tìm vở...',
+                        width: 220,
+                        onChanged: (value) => setState(() => search = value),
+                      ),
+                      IconButton.filledTonal(
+                        tooltip: 'T\u1ea1o folder',
+                        onPressed: _showCreateFolderDialog,
+                        icon: const Icon(Icons.create_new_folder_outlined),
+                      ),
+                      IconButton.filledTonal(
+                        onPressed: () => setState(() => gridView = !gridView),
+                        icon: Icon(
+                          gridView
+                              ? Icons.grid_view_rounded
+                              : Icons.view_list_rounded,
+                        ),
+                        tooltip: gridView ? 'Dạng lưới' : 'Dạng danh sách',
+                      ),
+                      FilledButton.icon(
+                        onPressed: () => _showCreateSheet(context),
+                        icon: const Icon(Icons.add_rounded),
+                        label: const Text('Tạo mới'),
+                      ),
+                    ],
                   ),
-                  IconButton(
-                    tooltip: 'Bỏ chọn',
-                    onPressed: _clearNotebookSelection,
-                    icon: const Icon(Icons.close),
-                  ),
-                ],
-                IconButton(
-                  tooltip: 'Chọn nhiều ghi chú',
-                  onPressed: _toggleSelectionMode,
-                  icon: Icon(
-                    _selectionMode
-                        ? Icons.checklist_rounded
-                        : Icons.playlist_add_check_rounded,
-                  ),
-                ),
-                SearchBox(
-                  hint: 'Tìm vở...',
-                  width: 220,
-                  onChanged: (value) => setState(() => search = value),
-                ),
-                IconButton.filledTonal(
-                  tooltip: 'T\u1ea1o folder',
-                  onPressed: _showCreateFolderDialog,
-                  icon: const Icon(Icons.create_new_folder_outlined),
-                ),
-                IconButton.filledTonal(
-                  onPressed: () => setState(() => gridView = !gridView),
-                  icon: Icon(
-                    gridView
-                        ? Icons.grid_view_rounded
-                        : Icons.view_list_rounded,
-                  ),
-                  tooltip: gridView ? 'Dạng lưới' : 'Dạng danh sách',
-                ),
-                FilledButton.icon(
-                  onPressed: () => _showCreateSheet(context),
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text('Tạo mới'),
-                ),
-              ],
-            ),
           ),
           const SizedBox(height: 26),
           Align(
