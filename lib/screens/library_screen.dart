@@ -629,21 +629,21 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(parentId == null ? 'Folder má»›i' : 'Folder con má»›i'),
+        title: Text(parentId == null ? 'Folder mới' : 'Folder con mới'),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(labelText: 'TĂªn folder'),
+          decoration: const InputDecoration(labelText: 'Tên folder'),
           onSubmitted: (_) => Navigator.pop(dialogContext, true),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Há»§y'),
+            child: const Text('Hủy'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Táº¡o'),
+            child: const Text('Tạo'),
           ),
         ],
       ),
@@ -652,7 +652,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     controller.dispose();
     if (accepted == true) {
       widget.state.createFolder(name, parentId: parentId);
-      if (mounted) showAppSnack(context, 'ÄĂ£ táº¡o folder');
+      if (mounted) showAppSnack(context, 'Đã tạo folder');
     }
   }
 

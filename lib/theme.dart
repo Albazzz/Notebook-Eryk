@@ -21,7 +21,9 @@ ThemeData buildLightTheme() {
     useMaterial3: true,
     colorScheme: scheme,
     scaffoldBackgroundColor: AppColors.warmBackground,
-    fontFamily: 'sans-serif',
+    // Let iPadOS select San Francisco and its Vietnamese/Japanese fallback.
+    // The Android-only generic name `sans-serif` can resolve inconsistently
+    // when the same build is rendered on iOS.
     textTheme: const TextTheme(
       displaySmall: TextStyle(
         fontSize: 34,
