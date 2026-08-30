@@ -1307,14 +1307,14 @@ class _PrivacySettings extends StatelessWidget {
   Future<void> _export(BuildContext context) async {
     final file = await state.exportBackupSnapshot();
     if (context.mounted) {
-      showAppSnack(context, 'Đã tạo backup: ${file.parent.path.split('/').last}');
+      showAppSnack(context, 'Đã tạo backup: ${file.uri.pathSegments.last}');
     }
   }
 
   Future<void> _import(BuildContext context) async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['json'],
+      allowedExtensions: ['noteeryk', 'json'],
     );
     final path = result.isEmpty ? null : result.single.path;
     if (path == null) return;
@@ -1367,7 +1367,7 @@ class _PrivacySettings extends StatelessWidget {
                 style: TextStyle(fontWeight: FontWeight.w800),
               ),
               subtitle: const Text(
-                'Tự lưu thay đổi và tạo bản backup khi app chuyển nền',
+                'Tự lưu thay đổi; backup là một tệp .noteeryk duy nhất',
               ),
               trailing: Wrap(
                 spacing: 4,

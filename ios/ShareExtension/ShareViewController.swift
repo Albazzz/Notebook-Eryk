@@ -24,6 +24,7 @@ final class ShareViewController: UIViewController {
   private let diagnosticsSession = UUID().uuidString.prefix(8)
   private var usesPasteboardFallback = false
   private var didPublishTransfer = false
+  private var didFinishRequest = false
 
   override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
     super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
@@ -720,6 +721,7 @@ final class ShareViewController: UIViewController {
   }
 
   private func finish(message: String, success: Bool) {
+    guard !didFinishRequest else { return }
     recordDiagnostic("Finish · success=\(success) · \(message)")
     spinner.stopAnimating()
     finishSucceeded = success
@@ -730,5 +732,25 @@ final class ShareViewController: UIViewController {
     statusLabel.textColor = success ? .label : .systemRed
     finishButton.configuration?.title = success ? "Xong" : "Đóng"
     finishButton.isHidden = false
+
+    // A Share Extension must end its request. Leaving the view controller
+    // alive makes iPadOS dismiss the black extension sheet without reliably
+    // delivering the staged files to the containing app. Give the host a
+    // short moment to commit the pasteboard/App Group write, then complete.
+    didFinishRequest = true
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(180)) {
+      guard let context = self.extensionContext else { return }
+      if success {
+        context.completeRequest(returningItems: nil)
+      } else {
+        context.cancelRequest(
+          withError: NSError(
+            domain: "NoteErykShareExtension",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: message]
+          )
+        )
+      }
+    }
   }
 }

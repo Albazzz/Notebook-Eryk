@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:archive/archive_io.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -175,9 +176,8 @@ class AppState extends ChangeNotifier {
                 key,
                 (value as List)
                     .map(
-                      (item) => PinnedNote.fromJson(
-                        item as Map<String, dynamic>,
-                      ),
+                      (item) =>
+                          PinnedNote.fromJson(item as Map<String, dynamic>),
                     )
                     .toList(),
               ),
@@ -220,7 +220,9 @@ class AppState extends ChangeNotifier {
         ..addAll(List<String>.from(data['blankPages'] as List? ?? const []));
       sourceDocuments
         ..clear()
-        ..addAll(Map<String, String>.from(data['sourceDocuments'] as Map? ?? {}));
+        ..addAll(
+          Map<String, String>.from(data['sourceDocuments'] as Map? ?? {}),
+        );
       final rawWeakPoints = data['weakPoints'] as List?;
       if (rawWeakPoints != null) {
         weakPoints = rawWeakPoints
@@ -237,9 +239,8 @@ class AppState extends ChangeNotifier {
                 key,
                 (value as List)
                     .map(
-                      (item) => InkStroke.fromJson(
-                        item as Map<String, dynamic>,
-                      ),
+                      (item) =>
+                          InkStroke.fromJson(item as Map<String, dynamic>),
                     )
                     .toList(),
               ),
@@ -256,16 +257,12 @@ class AppState extends ChangeNotifier {
     'updatedAt': DateTime.now().toIso8601String(),
     'notebooks': notebooks.map((item) => item.toJson()).toList(),
     'strokes': strokes.map(
-      (key, value) => MapEntry(
-        key,
-        value.map((stroke) => stroke.toJson()).toList(),
-      ),
+      (key, value) =>
+          MapEntry(key, value.map((stroke) => stroke.toJson()).toList()),
     ),
     'pinnedNotes': pinnedNotes.map(
-      (key, value) => MapEntry(
-        key,
-        value.map((note) => note.toJson()).toList(),
-      ),
+      (key, value) =>
+          MapEntry(key, value.map((note) => note.toJson()).toList()),
     ),
     'pageImages': pageImages.map(
       (notebookId, pages) => MapEntry(
@@ -332,30 +329,24 @@ class AppState extends ChangeNotifier {
         .toIso8601String()
         .replaceAll(':', '-')
         .replaceAll('.', '-');
-    final snapshotDirectory = Directory(
-      '${backups.path}/NoteEryk-$stamp.noteeryk',
-    );
-    final attachmentsDirectory = Directory(
-      '${snapshotDirectory.path}/Files',
-    );
-    await attachmentsDirectory.create(recursive: true);
+    final target = File('${backups.path}/NoteEryk-$stamp.noteeryk');
+    final temporaryTarget = File('${target.path}.tmp');
     final snapshot = _librarySnapshot();
     final attachments = <String, String>{};
+    final attachmentFiles = <({String source, String archiveName})>[];
     var attachmentIndex = 0;
     for (final sourcePath in _attachmentPaths().toSet()) {
       final source = File(sourcePath);
       if (!await source.exists()) continue;
       final filename = source.uri.pathSegments.last;
       final targetName = '${attachmentIndex++}_$filename';
-      await source.copy(
-        '${attachmentsDirectory.path}/$targetName',
-      );
-      attachments[sourcePath] = 'Files/$targetName';
+      final archiveName = 'Files/$targetName';
+      attachments[sourcePath] = archiveName;
+      attachmentFiles.add((source: sourcePath, archiveName: archiveName));
     }
     snapshot['attachments'] = attachments;
-    final target = File('${snapshotDirectory.path}/manifest.json');
-    final temporary = File('${target.path}.tmp');
-    await temporary.writeAsString(
+    final manifest = File('${backups.path}/.NoteEryk-$stamp.manifest.tmp');
+    await manifest.writeAsString(
       jsonEncode({
         'format': 'note-eryk-backup',
         'version': 1,
@@ -364,15 +355,25 @@ class AppState extends ChangeNotifier {
       }),
       flush: true,
     );
-    await temporary.rename(target.path);
-    final snapshots = backups
-        .listSync()
-        .whereType<Directory>()
-        .where((directory) => directory.path.endsWith('.noteeryk'))
-        .toList()
-      ..sort(
-        (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
-      );
+    if (await temporaryTarget.exists()) await temporaryTarget.delete();
+    final encoder = ZipFileEncoder();
+    encoder.create(temporaryTarget.path);
+    await encoder.addFile(manifest, 'manifest.json');
+    for (final entry in attachmentFiles) {
+      await encoder.addFile(File(entry.source), entry.archiveName);
+    }
+    await encoder.close();
+    await manifest.delete();
+    await temporaryTarget.rename(target.path);
+    final snapshots =
+        backups
+            .listSync()
+            .whereType<File>()
+            .where((file) => file.path.endsWith('.noteeryk'))
+            .toList()
+          ..sort(
+            (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+          );
     for (final old in snapshots.skip(5)) {
       await old.delete();
     }
@@ -394,8 +395,20 @@ class AppState extends ChangeNotifier {
 
   Future<bool> importBackupFile(String path) async {
     try {
-      final data = jsonDecode(await File(path).readAsString())
-          as Map<String, dynamic>;
+      final input = File(path);
+      final isArchive = path.toLowerCase().endsWith('.noteeryk');
+      Archive? archive;
+      Map<String, dynamic> data;
+      if (isArchive) {
+        archive = ZipDecoder().decodeBytes(await input.readAsBytes());
+        final manifest = archive.findFile('manifest.json');
+        if (manifest == null) return false;
+        data =
+            jsonDecode(utf8.decode(manifest.readBytes() ?? const []))
+                as Map<String, dynamic>;
+      } else {
+        data = jsonDecode(await input.readAsString()) as Map<String, dynamic>;
+      }
       if (data['format'] != 'note-eryk-backup' || data['version'] != 1) {
         return false;
       }
@@ -414,12 +427,24 @@ class AppState extends ChangeNotifier {
         await restoreDirectory.create(recursive: true);
         final restoredPaths = <String, String>{};
         for (final entry in attachments.entries) {
-          final source = File('${File(path).parent.path}/${entry.value}');
-          if (!await source.exists()) continue;
-          final destination = await source.copy(
-            '${restoreDirectory.path}/${source.uri.pathSegments.last}',
-          );
-          restoredPaths[entry.key] = destination.path;
+          final relative = entry.value as String;
+          if (archive != null) {
+            final archived = archive.findFile(relative);
+            final bytes = archived?.readBytes();
+            if (bytes == null) continue;
+            final destination = File(
+              '${restoreDirectory.path}/${relative.split('/').last}',
+            );
+            await destination.writeAsBytes(bytes, flush: true);
+            restoredPaths[entry.key] = destination.path;
+          } else {
+            final source = File('${input.parent.path}/$relative');
+            if (!await source.exists()) continue;
+            final destination = await source.copy(
+              '${restoreDirectory.path}/${source.uri.pathSegments.last}',
+            );
+            restoredPaths[entry.key] = destination.path;
+          }
         }
         _replaceBackupPaths(library, restoredPaths);
       }
@@ -654,7 +679,7 @@ class AppState extends ChangeNotifier {
               .68,
               .46,
             );
-    imagePlacements[id] = PageImagePlacement(
+      imagePlacements[id] = PageImagePlacement(
         id: id,
         path: path,
         rect: rect,
