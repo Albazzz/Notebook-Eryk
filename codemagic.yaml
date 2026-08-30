@@ -78,18 +78,30 @@ workflows:
           flutter build ios --release --config-only --no-codesign \
             --build-name=1.0.0 \
             --build-number="$BUILD_NUMBER"
+          # Keep Flutter's BUILD_DIR as the single output root. Overriding
+          # CONFIGURATION_BUILD_DIR independently makes CocoaPods' resource
+          # copy phase look in DerivedData while frameworks are elsewhere.
           xcodebuild build \
             -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            -derivedDataPath "$CM_BUILD_DIR/build/ios/DerivedData" \
-            CONFIGURATION_BUILD_DIR="$CM_BUILD_DIR/build/ios/iphoneos" \
+            BUILD_DIR="$CM_BUILD_DIR/build/ios" \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             DEVELOPMENT_TEAM=""
+
+          # Flutter normally copies Xcode's configuration-specific product
+          # (Release-iphoneos) to build/ios/iphoneos after xcodebuild returns.
+          # Reproduce that small step because this workflow invokes Xcode
+          # directly, while leaving CocoaPods' product paths untouched.
+          SOURCE_APP=build/ios/Release-iphoneos/Runner.app
+          test -d "$SOURCE_APP"
+          rm -rf build/ios/iphoneos
+          mkdir -p build/ios/iphoneos
+          ditto "$SOURCE_APP" build/ios/iphoneos/Runner.app
 
       - name: Normalize and verify embedded Share Extension
         script: |
