@@ -41,6 +41,8 @@ class _EditorScreenState extends State<EditorScreen>
   double penOpacity = 1;
   double highlightWidth = 22;
   double highlightOpacity = .64;
+  double eraserWidth = 36;
+  String eraserMode = 'stroke';
   String? selectedImageId;
   bool railOpen = true;
   bool rulerVisible = false;
@@ -56,7 +58,9 @@ class _EditorScreenState extends State<EditorScreen>
   int pageRotation = 0;
   double zoom = 1;
   late List<InkStroke> strokes;
-  final List<InkStroke> redo = [];
+  final List<List<InkStroke>> _undoStrokeHistory = [];
+  final List<List<InkStroke>> _redoStrokeHistory = [];
+  bool _eraserGestureRecorded = false;
   List<StrokePoint>? activePoints;
   Offset? selectionStart;
   Offset? selectionEnd;
@@ -288,7 +292,8 @@ class _EditorScreenState extends State<EditorScreen>
     final notebookId = widget.notebook.id;
     if (_strokesPage == page && _strokesNotebookId == notebookId) return;
     strokes = List.of(widget.state.strokesFor(notebookId, page));
-    redo.clear();
+    _undoStrokeHistory.clear();
+    _redoStrokeHistory.clear();
     activePoints = null;
     selectionStart = null;
     selectionEnd = null;
@@ -1466,6 +1471,7 @@ class _EditorScreenState extends State<EditorScreen>
       result = null;
     }
     if (tool == EditorTool.eraser) {
+      _eraserGestureRecorded = false;
       _eraseNear(event.localPosition);
       return;
     }
@@ -1524,6 +1530,10 @@ class _EditorScreenState extends State<EditorScreen>
   }
 
   void _finishPointerInteraction() {
+    if (tool == EditorTool.eraser) {
+      _eraserGestureRecorded = false;
+      return;
+    }
     if (activePoints != null && activePoints!.length > 1) {
       final drawingTool = tool;
       var points = List<StrokePoint>.of(activePoints!);
@@ -1539,6 +1549,7 @@ class _EditorScreenState extends State<EditorScreen>
           ),
         ];
       }
+      _recordStrokeHistory();
       strokes.add(
         InkStroke(
           points: points,
@@ -1553,7 +1564,6 @@ class _EditorScreenState extends State<EditorScreen>
         ),
       );
       activePoints = null;
-      redo.clear();
       widget.state.saveStrokes(widget.notebook.id, strokes, _strokesPage);
       setState(() {});
     } else if (selectionStart != null && selectionEnd != null) {
@@ -1840,6 +1850,7 @@ class _EditorScreenState extends State<EditorScreen>
       activePoints = null;
       selectionStart = null;
       selectionEnd = null;
+      _eraserGestureRecorded = false;
     });
   }
 
@@ -2528,18 +2539,32 @@ class _EditorScreenState extends State<EditorScreen>
                 const SizedBox(height: 18),
               ],
               Text(
-                'Độ dày: ${selectedTool == EditorTool.highlighter ? highlightWidth.round() : penWidth.toStringAsFixed(1)}',
+                selectedTool == EditorTool.eraser
+                    ? 'Kích thước tẩy: ${eraserWidth.round()}'
+                    : 'Độ dày: ${selectedTool == EditorTool.highlighter ? highlightWidth.round() : penWidth.toStringAsFixed(1)}',
               ),
               Slider(
-                value: selectedTool == EditorTool.highlighter
+                value: selectedTool == EditorTool.eraser
+                    ? eraserWidth
+                    : selectedTool == EditorTool.highlighter
                     ? highlightWidth
                     : penWidth,
-                min: selectedTool == EditorTool.highlighter ? 10 : 1,
-                max: selectedTool == EditorTool.highlighter ? 40 : 12,
+                min: selectedTool == EditorTool.eraser
+                    ? 12
+                    : selectedTool == EditorTool.highlighter
+                    ? 10
+                    : 1,
+                max: selectedTool == EditorTool.eraser
+                    ? 60
+                    : selectedTool == EditorTool.highlighter
+                    ? 40
+                    : 12,
                 onChanged: (value) {
                   setSheetState(() {});
                   setState(() {
-                    if (selectedTool == EditorTool.highlighter) {
+                    if (selectedTool == EditorTool.eraser) {
+                      eraserWidth = value;
+                    } else if (selectedTool == EditorTool.highlighter) {
                       highlightWidth = value;
                     } else {
                       penWidth = value;
@@ -2630,8 +2655,12 @@ class _EditorScreenState extends State<EditorScreen>
                     ButtonSegment(value: 'part', label: Text('Tẩy một phần')),
                     ButtonSegment(value: 'stroke', label: Text('Tẩy cả nét')),
                   ],
-                  selected: const {'stroke'},
-                  onSelectionChanged: (_) {},
+                  selected: {eraserMode},
+                  onSelectionChanged: (selection) {
+                    final mode = selection.first;
+                    setState(() => eraserMode = mode);
+                    setSheetState(() {});
+                  },
                 ),
             ],
           ),
@@ -2720,27 +2749,138 @@ class _EditorScreenState extends State<EditorScreen>
   }
 
   void _eraseNear(Offset point) {
-    final index = strokes.lastIndexWhere(
-      (stroke) =>
-          stroke.points.any((sample) => (sample.offset - point).distance < 22),
-    );
-    if (index >= 0) {
-      redo.add(strokes.removeAt(index));
-      widget.state.saveStrokes(widget.notebook.id, strokes, _strokesPage);
-      setState(() {});
+    if (eraserMode == 'stroke') {
+      final index = strokes.lastIndexWhere(
+        (stroke) => _strokeTouchesEraser(stroke, point),
+      );
+      if (index < 0) return;
+      _recordEraserHistoryOnce();
+      strokes.removeAt(index);
+    } else {
+      var changed = false;
+      final next = <InkStroke>[];
+      for (final stroke in strokes) {
+        final parts = _erasePartOfStroke(stroke, point);
+        if (parts == null) {
+          next.add(stroke);
+        } else {
+          changed = true;
+          next.addAll(parts);
+        }
+      }
+      if (!changed) return;
+      _recordEraserHistoryOnce();
+      strokes = next;
     }
+    widget.state.saveStrokes(widget.notebook.id, strokes, _strokesPage);
+    setState(() {});
+  }
+
+  bool _strokeTouchesEraser(InkStroke stroke, Offset center) {
+    final radius = eraserWidth / 2 + stroke.width / 2;
+    if (stroke.points.any(
+      (sample) => (sample.offset - center).distance <= radius,
+    )) {
+      return true;
+    }
+    for (var index = 1; index < stroke.points.length; index++) {
+      if (_distanceToSegment(
+            center,
+            stroke.points[index - 1].offset,
+            stroke.points[index].offset,
+          ) <=
+          radius) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  List<InkStroke>? _erasePartOfStroke(InkStroke stroke, Offset center) {
+    if (!_strokeTouchesEraser(stroke, center)) return null;
+    final radius = eraserWidth / 2 + stroke.width / 2;
+    final spacing = (radius / 3).clamp(2.0, 8.0);
+    final samples = <StrokePoint>[];
+    for (var index = 0; index < stroke.points.length; index++) {
+      final current = stroke.points[index];
+      if (index == 0) samples.add(current);
+      if (index + 1 >= stroke.points.length) continue;
+      final next = stroke.points[index + 1];
+      final distance = (next.offset - current.offset).distance;
+      final steps = math.max(1, (distance / spacing).ceil());
+      for (var step = 1; step <= steps; step++) {
+        final fraction = step / steps;
+        samples.add(
+          StrokePoint(
+            Offset.lerp(current.offset, next.offset, fraction)!,
+            current.pressure + (next.pressure - current.pressure) * fraction,
+            (current.timeMicros +
+                    (next.timeMicros - current.timeMicros) * fraction)
+                .round(),
+          ),
+        );
+      }
+    }
+
+    final groups = <List<StrokePoint>>[];
+    var currentGroup = <StrokePoint>[];
+    for (final sample in samples) {
+      if ((sample.offset - center).distance <= radius) {
+        if (currentGroup.length >= 2) groups.add(currentGroup);
+        currentGroup = <StrokePoint>[];
+      } else {
+        currentGroup.add(sample);
+      }
+    }
+    if (currentGroup.length >= 2) groups.add(currentGroup);
+    return groups
+        .map(
+          (points) => InkStroke(
+            points: points,
+            color: stroke.color,
+            width: stroke.width,
+            tool: stroke.tool,
+            createdAt: stroke.createdAt,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  double _distanceToSegment(Offset point, Offset start, Offset end) {
+    final delta = end - start;
+    final lengthSquared = delta.dx * delta.dx + delta.dy * delta.dy;
+    if (lengthSquared == 0) return (point - start).distance;
+    final projection =
+        ((point.dx - start.dx) * delta.dx + (point.dy - start.dy) * delta.dy) /
+        lengthSquared;
+    final nearest = start + delta * projection.clamp(0.0, 1.0);
+    return (point - nearest).distance;
+  }
+
+  void _recordEraserHistoryOnce() {
+    if (_eraserGestureRecorded) return;
+    _recordStrokeHistory();
+    _eraserGestureRecorded = true;
+  }
+
+  void _recordStrokeHistory() {
+    _undoStrokeHistory.add(List<InkStroke>.of(strokes));
+    if (_undoStrokeHistory.length > 50) _undoStrokeHistory.removeAt(0);
+    _redoStrokeHistory.clear();
   }
 
   void _undo() {
-    if (strokes.isEmpty) return;
-    redo.add(strokes.removeLast());
+    if (_undoStrokeHistory.isEmpty) return;
+    _redoStrokeHistory.add(List<InkStroke>.of(strokes));
+    strokes = _undoStrokeHistory.removeLast();
     widget.state.saveStrokes(widget.notebook.id, strokes, _strokesPage);
     setState(() {});
   }
 
   void _redo() {
-    if (redo.isEmpty) return;
-    strokes.add(redo.removeLast());
+    if (_redoStrokeHistory.isEmpty) return;
+    _undoStrokeHistory.add(List<InkStroke>.of(strokes));
+    strokes = _redoStrokeHistory.removeLast();
     widget.state.saveStrokes(widget.notebook.id, strokes, _strokesPage);
     setState(() {});
   }

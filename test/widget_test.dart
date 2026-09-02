@@ -192,6 +192,72 @@ void main() {
     );
   });
 
+  testWidgets('chọn Tẩy một phần sẽ cắt nét và có thể hoàn tác', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook()..autoSave = false;
+    addTearDown(state.dispose);
+    state.saveStrokes('n3', [
+      InkStroke(
+        points: const [
+          StrokePoint(Offset(100, 200), 1),
+          StrokePoint(Offset(300, 200), 1),
+        ],
+        color: const Color(0xff000000),
+        width: 3,
+        tool: EditorTool.pen,
+        createdAt: DateTime(2026, 1, 1),
+      ),
+    ], 1);
+    state.open(state.notebooks.first, page: 1);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Tẩy'));
+    await tester.pump();
+    await tester.tap(find.text('Tẩy'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tẩy một phần'));
+    await tester.pump();
+
+    final selector = tester.widget<SegmentedButton<String>>(
+      find.byType(SegmentedButton<String>),
+    );
+    expect(selector.selected, {'part'});
+
+    await tester.tapAt(const Offset(20, 20));
+    await tester.pumpAndSettle();
+    final ink = find.byWidgetPredicate(
+      (widget) =>
+          widget is CustomPaint &&
+          widget.painter.runtimeType.toString() == '_InkPainter',
+    );
+    expect(ink, findsWidgets);
+    final inkWidgets = tester.widgetList<CustomPaint>(ink).toList();
+    inkWidgets.sort((a, b) {
+      final aSize = tester.getSize(find.byWidget(a));
+      final bSize = tester.getSize(find.byWidget(b));
+      return (bSize.width * bSize.height).compareTo(aSize.width * aSize.height);
+    });
+    final pageInk = find.byWidget(inkWidgets.first);
+    final eraserPoint = tester.getTopLeft(pageInk) + const Offset(200, 200);
+    final stylus = TestPointer(71, PointerDeviceKind.stylus);
+    await tester.sendEventToBinding(stylus.down(eraserPoint));
+    await tester.sendEventToBinding(stylus.up());
+    await tester.pump();
+
+    expect(state.strokesFor('n3', 1), hasLength(2));
+
+    await tester.tap(find.byIcon(Icons.undo_rounded));
+    await tester.pump();
+    expect(state.strokesFor('n3', 1), hasLength(1));
+  });
+
   testWidgets('tra từ nhanh mở ngay trên thanh công cụ và không chặn bút', (
     tester,
   ) async {
