@@ -272,6 +272,22 @@ void main() {
     await tester.pumpWidget(NihongoNotebookApp(state: state));
     await tester.pumpAndSettle();
 
+    final quickLookupLabel = find.text('Tra từ nhanh');
+    expect(tester.widget<Text>(quickLookupLabel).textAlign, TextAlign.center);
+    final quickLookupButton = find
+        .ancestor(of: quickLookupLabel, matching: find.byType(InkWell))
+        .first;
+    final quickLookupIcon = find.descendant(
+      of: quickLookupButton,
+      matching: find.byIcon(Icons.search_rounded),
+    );
+    expect(
+      (tester.getCenter(quickLookupLabel).dx -
+              tester.getCenter(quickLookupIcon).dx)
+          .abs(),
+      lessThan(1),
+    );
+
     await tester.tap(find.text('Tra từ nhanh'));
     await tester.pump();
     expect(

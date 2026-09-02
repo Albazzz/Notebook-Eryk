@@ -3497,6 +3497,8 @@ class _ToolButton extends StatelessWidget {
             child: SizedBox(
               width: tool == EditorTool.explain
                   ? 92
+                  : tool == EditorTool.quickDictionary
+                  ? 88
                   : tool == EditorTool.pen
                   ? 104
                   : 72,
@@ -3511,13 +3513,20 @@ class _ToolButton extends StatelessWidget {
                         : Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                   const SizedBox(height: 3),
-                  Text(
-                    label,
-                    maxLines: 1,
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                      color: selected ? color : null,
+                  SizedBox(
+                    width: double.infinity,
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      textAlign: TextAlign.center,
+                      overflow: TextOverflow.visible,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: selected
+                            ? FontWeight.w800
+                            : FontWeight.w600,
+                        color: selected ? color : null,
+                      ),
                     ),
                   ),
                 ],
