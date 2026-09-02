@@ -98,8 +98,11 @@ class AppState extends ChangeNotifier {
   final Map<String, String> sourceDocuments = {};
   List<WeakPoint> weakPoints = [];
   Future<void>? _persistenceInFlight;
+  Future<File>? _backupInFlight;
   bool _persistenceScheduled = false;
   bool _storageReady = false;
+  bool _libraryNeedsRecoveryPersistence = false;
+  String? lastBackupError;
 
   bool get hasApiKey => _apiKey.isNotEmpty;
   String get apiKey => _apiKey;
@@ -181,10 +184,22 @@ class AppState extends ChangeNotifier {
       } catch (_) {}
     }
     await _loadLibrary(prefs);
+    final relocatedAttachments = await _repairRelocatedAttachmentPaths();
     final repairedAttachments = _ensureLegacyImagePlacements();
     final regeneratedPdfPages = await _repairMissingPdfBackgrounds();
     _storageReady = true;
-    if (repairedAttachments || regeneratedPdfPages) schedulePersistence();
+    if (_libraryNeedsRecoveryPersistence) {
+      try {
+        await flushPersistence();
+        _libraryNeedsRecoveryPersistence = false;
+      } catch (error) {
+        debugPrint('[NoteEryk][Storage] recovery persistence failed: $error');
+      }
+    } else if (relocatedAttachments ||
+        repairedAttachments ||
+        regeneratedPdfPages) {
+      schedulePersistence();
+    }
     notifyListeners();
     debugPrint(
       '[NoteEryk][AppState] initialized destination=$destination '
@@ -195,17 +210,39 @@ class AppState extends ChangeNotifier {
 
   Future<void> _loadLibrary(SharedPreferences prefs) async {
     String? fileRaw;
+    String? previousRaw;
+    String? temporaryRaw;
+    // These files only remain after an interrupted atomic replacement. Read
+    // each one independently: one corrupt temporary file must not hide a
+    // complete previous file.
     try {
       final directory = await getApplicationSupportDirectory();
       final file = File('${directory.path}/notebook_library_v2.json');
-      if (await file.exists()) fileRaw = await file.readAsString();
+      fileRaw = await _readStorageCandidate(file, 'library file');
+      previousRaw = await _readStorageCandidate(
+        File('${file.path}.previous'),
+        'previous recovery file',
+      );
+      temporaryRaw = await _readStorageCandidate(
+        File('${file.path}.tmp'),
+        'temporary recovery file',
+      );
     } catch (error) {
-      debugPrint('[NoteEryk][Storage] library file read failed: $error');
+      debugPrint('[NoteEryk][Storage] storage directory unavailable: $error');
     }
     final preferenceRaw = prefs.getString(_libraryStorageName);
+    final committedMirrorMatches = fileRaw != null && fileRaw == preferenceRaw;
     final candidates = <(String, String?)>[
       ('file', fileRaw),
       if (preferenceRaw != fileRaw) ('preferences', preferenceRaw),
+      if (!committedMirrorMatches &&
+          previousRaw != fileRaw &&
+          previousRaw != preferenceRaw)
+        ('previous recovery file', previousRaw),
+      if (temporaryRaw != fileRaw &&
+          temporaryRaw != preferenceRaw &&
+          temporaryRaw != previousRaw)
+        ('temporary recovery file', temporaryRaw),
     ];
     final decodedCandidates = <({String source, Map<String, dynamic> data})>[];
     for (final (source, raw) in candidates) {
@@ -226,15 +263,42 @@ class AppState extends ChangeNotifier {
     // as a tie-breaker. This prevents a sparse file (cover only) replacing a
     // complete mirror containing page backgrounds and strokes.
     decodedCandidates.sort((a, b) {
-      final score = _snapshotContentScore(
+      final score = _safeSnapshotContentScore(
         b.data,
-      ).compareTo(_snapshotContentScore(a.data));
+      ).compareTo(_safeSnapshotContentScore(a.data));
       if (score != 0) return score;
       return _snapshotTimestamp(b.data).compareTo(_snapshotTimestamp(a.data));
     });
-    final selected = decodedCandidates.first;
-    debugPrint('[NoteEryk][Storage] loaded ${selected.source} snapshot');
-    _applyLibrarySnapshot(selected.data);
+    for (final selected in decodedCandidates) {
+      try {
+        _applyLibrarySnapshot(selected.data);
+        _libraryNeedsRecoveryPersistence =
+            selected.source != 'file' || decodedCandidates.length > 1;
+        debugPrint('[NoteEryk][Storage] loaded ${selected.source} snapshot');
+        return;
+      } catch (error) {
+        debugPrint(
+          '[NoteEryk][Storage] ${selected.source} snapshot is invalid: $error',
+        );
+      }
+    }
+  }
+
+  Future<String?> _readStorageCandidate(File file, String label) async {
+    try {
+      return await file.exists() ? await file.readAsString() : null;
+    } catch (error) {
+      debugPrint('[NoteEryk][Storage] $label read failed: $error');
+      return null;
+    }
+  }
+
+  int _safeSnapshotContentScore(Map<String, dynamic> data) {
+    try {
+      return _snapshotContentScore(data);
+    } catch (_) {
+      return -1;
+    }
   }
 
   int _snapshotContentScore(Map<String, dynamic> data) {
@@ -267,7 +331,7 @@ class AppState extends ChangeNotifier {
   }
 
   String _snapshotTimestamp(Map<String, dynamic> data) =>
-      (data['updatedAt'] as String?) ?? '';
+      data['updatedAt']?.toString() ?? '';
 
   void _applyLibrarySnapshot(Map<String, dynamic> data) {
     // Decode into temporary values first. A corrupt attachment/page entry must
@@ -367,6 +431,67 @@ class AppState extends ChangeNotifier {
       strokes
         ..clear()
         ..addAll(parsedStrokes);
+    }
+  }
+
+  /// App/container updates can change the absolute prefix of Application
+  /// Support while preserving its contents. Older snapshots stored absolute
+  /// paths, so recover those references from their stable in-app suffix before
+  /// treating the page images as missing.
+  Future<bool> _repairRelocatedAttachmentPaths() async {
+    try {
+      final support = await getApplicationSupportDirectory();
+      final replacements = <String, String>{};
+      for (final oldPath in _attachmentPaths().toSet()) {
+        if (oldPath.isEmpty || await File(oldPath).exists()) continue;
+        final normalized = oldPath.replaceAll('\\', '/');
+        String? relative;
+        for (final marker in const ['/imports/', '/pdf_backgrounds/']) {
+          final index = normalized.indexOf(marker);
+          if (index >= 0) {
+            relative = normalized.substring(index + 1);
+            break;
+          }
+        }
+        if (relative == null) continue;
+        final candidate = File(
+          '${support.path}${Platform.pathSeparator}${relative.replaceAll('/', Platform.pathSeparator)}',
+        );
+        if (await _isUsableBackupFile(candidate)) {
+          replacements[oldPath] = candidate.path;
+        }
+      }
+      if (replacements.isEmpty) return false;
+
+      for (final pages in pageImages.values) {
+        for (final paths in pages.values) {
+          for (var index = 0; index < paths.length; index++) {
+            paths[index] = replacements[paths[index]] ?? paths[index];
+          }
+        }
+      }
+      for (final entry in imagePlacements.entries.toList()) {
+        final replacement = replacements[entry.value.path];
+        if (replacement != null) {
+          imagePlacements[entry.key] = entry.value.copyWith(path: replacement);
+        }
+      }
+      for (final entry in sourceDocuments.entries.toList()) {
+        sourceDocuments[entry.key] = replacements[entry.value] ?? entry.value;
+      }
+      weakPoints = weakPoints.map((point) {
+        final replacement = replacements[point.sourceImagePath];
+        if (replacement == null) return point;
+        final json = point.toJson()..['sourceImagePath'] = replacement;
+        return WeakPoint.fromJson(json);
+      }).toList();
+      debugPrint(
+        '[NoteEryk][Storage] repaired ${replacements.length} relocated attachment paths',
+      );
+      return true;
+    } catch (error) {
+      debugPrint('[NoteEryk][Storage] attachment relocation failed: $error');
+      return false;
     }
   }
 
@@ -510,15 +635,17 @@ class AppState extends ChangeNotifier {
     'pageImages': pageImages.map(
       (notebookId, pages) => MapEntry(
         notebookId,
-        pages.map((page, paths) => MapEntry(page.toString(), paths)),
+        pages.map(
+          (page, paths) => MapEntry(page.toString(), List<String>.of(paths)),
+        ),
       ),
     ),
     'imagePlacements': imagePlacements.map(
       (key, value) => MapEntry(key, value.toJson()),
     ),
     'blankPages': blankPages.toList(),
-    'sourceDocuments': sourceDocuments,
-    'lastPages': lastPages,
+    'sourceDocuments': Map<String, String>.of(sourceDocuments),
+    'lastPages': Map<String, int>.of(lastPages),
     'weakPoints': weakPoints.map((item) => item.toJson()).toList(),
   };
 
@@ -572,9 +699,18 @@ class AppState extends ChangeNotifier {
     final temporary = File('${target.path}.tmp');
     final previous = File('${target.path}.previous');
     await temporary.writeAsString(encoded, flush: true);
+    if (await temporary.length() != utf8.encode(encoded).length ||
+        await temporary.readAsString() != encoded) {
+      throw const FileSystemException(
+        'Temporary library file verification failed',
+      );
+    }
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_libraryStorageName, encoded);
+      final mirrored = await prefs.setString(_libraryStorageName, encoded);
+      if (!mirrored) {
+        debugPrint('[NoteEryk][Storage] preferences mirror was not accepted');
+      }
     } catch (error) {
       debugPrint('[NoteEryk][Storage] preferences mirror failed: $error');
     }
@@ -602,8 +738,25 @@ class AppState extends ChangeNotifier {
   }
 
   Future<File> exportBackupSnapshot() async {
+    final running = _backupInFlight;
+    if (running != null) return running;
+    lastBackupError = null;
+    final operation = _exportBackupSnapshot();
+    _backupInFlight = operation;
+    try {
+      return await operation;
+    } catch (error) {
+      lastBackupError = _readableBackupError(error);
+      rethrow;
+    } finally {
+      if (identical(_backupInFlight, operation)) _backupInFlight = null;
+    }
+  }
+
+  Future<File> _exportBackupSnapshot() async {
     _ensureLegacyImagePlacements();
     await _repairMissingPdfBackgrounds();
+    await _validateCurrentPageFilesForBackup();
     final documents = await getApplicationDocumentsDirectory();
     final backups = Directory('${documents.path}/$_backupDirectoryName');
     await backups.create(recursive: true);
@@ -617,49 +770,191 @@ class AppState extends ChangeNotifier {
     final attachments = <String, String>{};
     final attachmentFiles = <({String source, String archiveName})>[];
     var attachmentIndex = 0;
+    final optionalMissingPaths = <String>{};
     for (final sourcePath in _attachmentPaths().toSet()) {
       final source = File(sourcePath);
-      if (!await source.exists()) continue;
+      if (!await _isUsableBackupFile(source)) {
+        optionalMissingPaths.add(sourcePath);
+        continue;
+      }
       final filename = source.uri.pathSegments.last;
       final targetName = '${attachmentIndex++}_$filename';
       final archiveName = 'Files/$targetName';
       attachments[sourcePath] = archiveName;
       attachmentFiles.add((source: sourcePath, archiveName: archiveName));
     }
+    _removeMissingOptionalPaths(snapshot, optionalMissingPaths);
     snapshot['attachments'] = attachments;
     final manifest = File('${backups.path}/.NoteEryk-$stamp.manifest.tmp');
-    await manifest.writeAsString(
-      jsonEncode({
-        'format': 'note-eryk-backup',
-        'version': 1,
-        'createdAt': DateTime.now().toIso8601String(),
-        ...snapshot,
-      }),
-      flush: true,
-    );
-    if (await temporaryTarget.exists()) await temporaryTarget.delete();
-    final encoder = ZipFileEncoder();
-    encoder.create(temporaryTarget.path);
-    await encoder.addFile(manifest, 'manifest.json');
-    for (final entry in attachmentFiles) {
-      await encoder.addFile(File(entry.source), entry.archiveName);
+    ZipFileEncoder? encoder;
+    var completed = false;
+    try {
+      await manifest.writeAsString(
+        jsonEncode({
+          ...snapshot,
+          'format': 'note-eryk-backup',
+          'backupVersion': 1,
+          'createdAt': DateTime.now().toIso8601String(),
+        }),
+        flush: true,
+      );
+      if (await temporaryTarget.exists()) await temporaryTarget.delete();
+      encoder = ZipFileEncoder()..create(temporaryTarget.path);
+      await encoder.addFile(manifest, 'manifest.json');
+      for (final entry in attachmentFiles) {
+        await encoder.addFile(File(entry.source), entry.archiveName);
+      }
+      await encoder.close();
+      encoder = null;
+      await _validateCreatedBackup(temporaryTarget, attachmentFiles);
+      await temporaryTarget.rename(target.path);
+      completed = true;
+    } finally {
+      if (encoder != null) {
+        try {
+          await encoder.close();
+        } catch (_) {}
+      }
+      if (await manifest.exists()) {
+        try {
+          await manifest.delete();
+        } catch (_) {}
+      }
+      if (!completed && await temporaryTarget.exists()) {
+        try {
+          await temporaryTarget.delete();
+        } catch (_) {}
+      }
     }
-    await encoder.close();
-    await manifest.delete();
-    await temporaryTarget.rename(target.path);
-    final snapshots =
-        backups
-            .listSync()
-            .whereType<File>()
-            .where((file) => file.path.endsWith('.noteeryk'))
-            .toList()
-          ..sort(
-            (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
-          );
-    for (final old in snapshots.skip(5)) {
-      await old.delete();
+    try {
+      final snapshots =
+          backups
+              .listSync()
+              .whereType<File>()
+              .where((file) => file.path.endsWith('.noteeryk'))
+              .toList()
+            ..sort(
+              (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+            );
+      for (final old in snapshots.skip(5)) {
+        try {
+          await old.delete();
+        } catch (error) {
+          debugPrint('[NoteEryk][Storage] old backup cleanup failed: $error');
+        }
+      }
+    } catch (error) {
+      // The new backup is already verified and safely renamed. Failure to
+      // prune an older copy must not turn a successful backup into a failure.
+      debugPrint('[NoteEryk][Storage] backup list cleanup failed: $error');
     }
     return target;
+  }
+
+  Future<bool> _isUsableBackupFile(File file) async =>
+      await file.exists() && await file.length() > 0;
+
+  Future<void> _validateCurrentPageFilesForBackup() async {
+    final missing = <String>[];
+    final requiredPaths = <String>{
+      for (final pages in pageImages.values)
+        for (final paths in pages.values) ...paths,
+      for (final placement in imagePlacements.values) placement.path,
+    };
+    for (final path in requiredPaths) {
+      if (path.isEmpty || !await _isUsableBackupFile(File(path))) {
+        missing.add(path);
+      }
+    }
+    if (missing.isNotEmpty) {
+      throw StateError(
+        'Thiếu ${missing.length} tệp ảnh/trang. Backup đã dừng để tránh tạo bản sao lưu có trang trắng.',
+      );
+    }
+
+    for (final notebook in notebooks.where((item) => item.isPdf)) {
+      final sourcePath = sourceDocuments[notebook.id];
+      final hasSource =
+          sourcePath != null && await _isUsableBackupFile(File(sourcePath));
+      for (var page = 1; page <= notebook.pages; page++) {
+        if (blankPages.contains('${notebook.id}:$page')) continue;
+        final prefix = '${notebook.id}:$page:';
+        final hasBackground = imagePlacements.values.any(
+          (placement) =>
+              placement.id.startsWith(prefix) &&
+              placement.isBackground &&
+              File(placement.path).existsSync(),
+        );
+        if (!hasBackground && !hasSource) {
+          throw StateError(
+            'Vở "${notebook.title}" thiếu dữ liệu trang $page. Backup đã dừng để không lưu một bản bị trắng trang.',
+          );
+        }
+      }
+    }
+  }
+
+  void _removeMissingOptionalPaths(
+    Map<String, Object?> snapshot,
+    Set<String> missingPaths,
+  ) {
+    final documents = snapshot['sourceDocuments'] as Map<String, String>;
+    documents.removeWhere((_, path) => missingPaths.contains(path));
+    final points = snapshot['weakPoints'] as List;
+    for (final item in points) {
+      final point = item as Map<String, dynamic>;
+      if (missingPaths.contains(point['sourceImagePath'])) {
+        point['sourceImagePath'] = null;
+      }
+    }
+  }
+
+  Future<void> _validateCreatedBackup(
+    File backup,
+    List<({String source, String archiveName})> attachments,
+  ) async {
+    if (!await _isUsableBackupFile(backup)) {
+      throw StateError('Tệp backup tạo ra bị rỗng.');
+    }
+    final input = InputFileStream(backup.path);
+    try {
+      final archive = ZipDecoder().decodeStream(input);
+      final manifest = archive.findFile('manifest.json');
+      if (manifest == null || manifest.size == 0) {
+        throw StateError('Backup thiếu danh mục dữ liệu.');
+      }
+      final manifestData = jsonDecode(
+        utf8.decode(manifest.readBytes() ?? const []),
+      );
+      if (manifestData is! Map<String, dynamic> ||
+          manifestData['format'] != 'note-eryk-backup' ||
+          manifestData['backupVersion'] != 1 ||
+          (manifestData['attachments'] as Map?)?.length != attachments.length) {
+        throw StateError('Danh mục dữ liệu trong backup không hợp lệ.');
+      }
+      for (final attachment in attachments) {
+        final archived = archive.findFile(attachment.archiveName);
+        final sourceLength = await File(attachment.source).length();
+        final sourceCrc = await _fileCrc32(File(attachment.source));
+        if (archived == null ||
+            archived.size != sourceLength ||
+            archived.crc32 != sourceCrc) {
+          throw StateError(
+            'Backup thiếu hoặc cắt dở tệp ${attachment.archiveName}.',
+          );
+        }
+      }
+    } finally {
+      await input.close();
+    }
+  }
+
+  Future<int> _fileCrc32(File file) async {
+    var crc = 0;
+    await for (final chunk in file.openRead()) {
+      crc = getCrc32(chunk, crc);
+    }
+    return crc;
   }
 
   Iterable<String> _attachmentPaths() sync* {
@@ -682,75 +977,277 @@ class AppState extends ChangeNotifier {
   }
 
   Future<bool> importBackupFile(String path) async {
+    lastBackupError = null;
+    Directory? restoreDirectory;
+    InputFileStream? archiveInput;
     try {
       final input = File(path);
       final isArchive = path.toLowerCase().endsWith('.noteeryk');
       Archive? archive;
       Map<String, dynamic> data;
       if (isArchive) {
-        archive = ZipDecoder().decodeBytes(await input.readAsBytes());
+        archiveInput = InputFileStream(input.path);
+        archive = ZipDecoder().decodeStream(archiveInput);
         final manifest = archive.findFile('manifest.json');
-        if (manifest == null) return false;
+        if (manifest == null || manifest.size == 0) {
+          throw const FormatException('Backup thiếu danh mục dữ liệu.');
+        }
         data =
             jsonDecode(utf8.decode(manifest.readBytes() ?? const []))
                 as Map<String, dynamic>;
       } else {
         data = jsonDecode(await input.readAsString()) as Map<String, dynamic>;
       }
-      if (data['format'] != 'note-eryk-backup' || data['version'] != 1) {
-        return false;
+      final backupVersion = data['backupVersion'];
+      final libraryVersion = data['version'];
+      final supportedLegacyEnvelope =
+          backupVersion == null && (libraryVersion == 1 || libraryVersion == 2);
+      if (data['format'] != 'note-eryk-backup' ||
+          (backupVersion != 1 && !supportedLegacyEnvelope)) {
+        throw const FormatException(
+          'Định dạng hoặc phiên bản backup không hợp lệ.',
+        );
       }
-      final prefs = await SharedPreferences.getInstance();
       final library = Map<String, dynamic>.from(data)
         ..remove('format')
+        ..remove('backupVersion')
         ..remove('createdAt')
         ..remove('attachments');
+      _normalizeAndValidateImportedLibrary(library);
       final attachments = Map<String, dynamic>.from(
         data['attachments'] as Map? ?? const {},
       );
+      final requiredPaths = _requiredImportedPagePaths(library);
+      final packagedPaths = attachments.keys
+          .map((key) => key.toString())
+          .toSet();
+      final unpackaged = requiredPaths.difference(packagedPaths);
+      if (unpackaged.isNotEmpty) {
+        throw FormatException(
+          'Backup thiếu ${unpackaged.length} ảnh/trang được ghi trong danh mục.',
+        );
+      }
+      _removeUnrestoredOptionalImportedPaths(library, packagedPaths);
+      _validateImportedPdfPages(library, packagedPaths);
       if (attachments.isNotEmpty) {
-        final restoreDirectory = Directory(
-          '${(await getApplicationSupportDirectory()).path}/imports/restored_${DateTime.now().microsecondsSinceEpoch}',
+        final support = await getApplicationSupportDirectory();
+        final imports = Directory(
+          '${support.path}${Platform.pathSeparator}imports',
+        );
+        restoreDirectory = Directory(
+          '${imports.path}${Platform.pathSeparator}restored_${DateTime.now().microsecondsSinceEpoch}',
         );
         await restoreDirectory.create(recursive: true);
         final restoredPaths = <String, String>{};
+        var attachmentIndex = 0;
         for (final entry in attachments.entries) {
+          if (entry.value is! String) {
+            throw const FormatException('Danh mục tệp trong backup bị lỗi.');
+          }
           final relative = entry.value as String;
+          if (!_isSafeBackupArchivePath(relative)) {
+            throw const FormatException(
+              'Backup chứa đường dẫn tệp không an toàn.',
+            );
+          }
+          final filename = relative.split('/').last;
+          final destination = File(
+            '${restoreDirectory.path}${Platform.pathSeparator}${attachmentIndex++}_$filename',
+          );
+          int expectedLength;
+          int? expectedCrc;
           if (archive != null) {
             final archived = archive.findFile(relative);
-            final bytes = archived?.readBytes();
-            if (bytes == null) continue;
-            final destination = File(
-              '${restoreDirectory.path}/${relative.split('/').last}',
-            );
-            await destination.writeAsBytes(bytes, flush: true);
-            restoredPaths[entry.key] = destination.path;
+            if (archived == null || archived.size == 0) {
+              throw FormatException('Backup thiếu tệp $relative.');
+            }
+            expectedLength = archived.size;
+            expectedCrc = archived.crc32;
+            final output = OutputFileStream(destination.path);
+            try {
+              archived.writeContent(output);
+            } finally {
+              await output.close();
+            }
           } else {
             final source = File('${input.parent.path}/$relative');
-            if (!await source.exists()) continue;
-            final destination = await source.copy(
-              '${restoreDirectory.path}/${source.uri.pathSegments.last}',
-            );
-            restoredPaths[entry.key] = destination.path;
+            if (!await _isUsableBackupFile(source)) {
+              throw FormatException('Backup thiếu tệp $relative.');
+            }
+            expectedLength = await source.length();
+            await source.copy(destination.path);
           }
+          if (!await destination.exists() ||
+              await destination.length() != expectedLength) {
+            throw FormatException('Tệp $relative bị cắt dở khi khôi phục.');
+          }
+          if (expectedCrc != null &&
+              await _fileCrc32(destination) != expectedCrc) {
+            throw FormatException('Tệp $relative bị hỏng trong backup.');
+          }
+          restoredPaths[entry.key] = destination.path;
+        }
+        if (restoredPaths.length != attachments.length) {
+          throw const FormatException(
+            'Backup chưa khôi phục đủ các tệp đính kèm.',
+          );
         }
         _replaceBackupPaths(library, restoredPaths);
       }
-      await prefs.setString(_libraryStorageName, jsonEncode(library));
-      try {
-        final directory = await getApplicationSupportDirectory();
-        final existing = File('${directory.path}/notebook_library_v2.json');
-        if (await existing.exists()) await existing.delete();
-      } catch (_) {}
-      await _loadLibrary(prefs);
-      _ensureLegacyImagePlacements();
-      await _repairMissingPdfBackgrounds();
+
+      // Persist and create a portable rescue copy of the current library
+      // before replacing anything. A bad restore can therefore be rolled back
+      // without relying on the selected import file.
       await flushPersistence();
+      await exportBackupSnapshot();
+      final currentSnapshot = _librarySnapshot();
+      try {
+        _applyLibrarySnapshot(library);
+        _ensureLegacyImagePlacements();
+        await _repairMissingPdfBackgrounds();
+        await flushPersistence();
+      } catch (_) {
+        _applyLibrarySnapshot(currentSnapshot);
+        try {
+          await flushPersistence();
+        } catch (_) {}
+        rethrow;
+      }
+      restoreDirectory = null;
       notifyListeners();
       return true;
     } catch (error) {
+      lastBackupError = _readableBackupError(error);
       debugPrint('[NoteEryk][Storage] backup import failed: $error');
       return false;
+    } finally {
+      await archiveInput?.close();
+      final failedRestore = restoreDirectory;
+      if (failedRestore != null && await failedRestore.exists()) {
+        final parent = failedRestore.parent.absolute.path;
+        final expectedParent = Directory(
+          '${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}imports',
+        ).absolute.path;
+        if (parent == expectedParent &&
+            failedRestore.uri.pathSegments
+                .where((segment) => segment.isNotEmpty)
+                .last
+                .startsWith('restored_')) {
+          try {
+            await failedRestore.delete(recursive: true);
+          } catch (_) {}
+        }
+      }
+    }
+  }
+
+  String _readableBackupError(Object error) {
+    if (error is FormatException) return error.message.toString();
+    if (error is StateError) return error.message.toString();
+    return 'Không thể hoàn tất backup. Dữ liệu hiện tại vẫn được giữ nguyên.';
+  }
+
+  void _normalizeAndValidateImportedLibrary(Map<String, dynamic> library) {
+    if (library['notebooks'] is! List ||
+        library['strokes'] is! Map ||
+        library['pageImages'] is! Map) {
+      throw const FormatException('Backup thiếu dữ liệu thư viện bắt buộc.');
+    }
+    library.putIfAbsent('folders', () => <dynamic>[]);
+    library.putIfAbsent('pinnedNotes', () => <String, dynamic>{});
+    library.putIfAbsent('imagePlacements', () => <String, dynamic>{});
+    library.putIfAbsent('blankPages', () => <dynamic>[]);
+    library.putIfAbsent('sourceDocuments', () => <String, dynamic>{});
+    library.putIfAbsent('lastPages', () => <String, dynamic>{});
+    library.putIfAbsent('weakPoints', () => <dynamic>[]);
+  }
+
+  Set<String> _requiredImportedPagePaths(Map<String, dynamic> library) {
+    final result = <String>{};
+    final images = library['pageImages'] as Map;
+    for (final pages in images.values) {
+      if (pages is! Map) {
+        throw const FormatException('Danh mục ảnh trang trong backup bị lỗi.');
+      }
+      for (final paths in pages.values) {
+        if (paths is! List || paths.any((path) => path is! String)) {
+          throw const FormatException(
+            'Danh mục ảnh trang trong backup bị lỗi.',
+          );
+        }
+        result.addAll(paths.cast<String>());
+      }
+    }
+    final placements = library['imagePlacements'] as Map;
+    for (final value in placements.values) {
+      if (value is! Map || value['path'] is! String) {
+        throw const FormatException('Vị trí ảnh trong backup bị lỗi.');
+      }
+      result.add(value['path'] as String);
+    }
+    result.removeWhere((path) => path.isEmpty);
+    return result;
+  }
+
+  bool _isSafeBackupArchivePath(String relative) {
+    final segments = relative.split('/');
+    return relative.startsWith('Files/') &&
+        !relative.contains('\\') &&
+        segments.length == 2 &&
+        segments.every((segment) => segment.isNotEmpty && segment != '..');
+  }
+
+  void _removeUnrestoredOptionalImportedPaths(
+    Map<String, dynamic> library,
+    Set<String> restoredOriginalPaths,
+  ) {
+    final documents = library['sourceDocuments'] as Map;
+    documents.removeWhere(
+      (_, path) => path is! String || !restoredOriginalPaths.contains(path),
+    );
+    final points = library['weakPoints'] as List;
+    for (final item in points) {
+      if (item is! Map<String, dynamic>) continue;
+      final path = item['sourceImagePath'];
+      if (path is String && !restoredOriginalPaths.contains(path)) {
+        item['sourceImagePath'] = null;
+      }
+    }
+  }
+
+  void _validateImportedPdfPages(
+    Map<String, dynamic> library,
+    Set<String> packagedPaths,
+  ) {
+    final importedNotebooks = (library['notebooks'] as List).map(
+      (item) => NotebookData.fromJson(item as Map<String, dynamic>),
+    );
+    final blanks = Set<String>.from(library['blankPages'] as List);
+    final documents = library['sourceDocuments'] as Map;
+    final placements = library['imagePlacements'] as Map;
+    final images = library['pageImages'] as Map;
+    for (final notebook in importedNotebooks.where((item) => item.isPdf)) {
+      final source = documents[notebook.id];
+      final hasSource = source is String && packagedPaths.contains(source);
+      final notebookPages = images[notebook.id] as Map?;
+      for (var page = 1; page <= notebook.pages; page++) {
+        if (blanks.contains('${notebook.id}:$page')) continue;
+        final prefix = '${notebook.id}:$page:';
+        final hasPlacement = placements.entries.any((entry) {
+          final value = entry.value;
+          return entry.key.toString().startsWith(prefix) &&
+              value is Map &&
+              value['isBackground'] == true &&
+              packagedPaths.contains(value['path']);
+        });
+        final legacyPaths = notebookPages?[page.toString()] as List?;
+        final hasLegacyPage = legacyPaths?.any(packagedPaths.contains) ?? false;
+        if (!hasPlacement && !hasLegacyPage && !hasSource) {
+          throw FormatException(
+            'Backup thiếu dữ liệu trang $page của vở "${notebook.title}".',
+          );
+        }
+      }
     }
   }
 

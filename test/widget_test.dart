@@ -49,6 +49,33 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('chọn tất cả và bỏ chọn tất cả các vở đang hiển thị', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.playlist_add_check_rounded));
+    await tester.pump();
+    await tester.tap(find.text('Chọn tất cả'));
+    await tester.pump();
+
+    expect(find.text('1 vở đã chọn'), findsOneWidget);
+    expect(find.text('Bỏ chọn tất cả'), findsOneWidget);
+
+    await tester.tap(find.text('Bỏ chọn tất cả'));
+    await tester.pump();
+    expect(find.text('1 vở đã chọn'), findsNothing);
+    expect(find.text('Chọn tất cả'), findsOneWidget);
+  });
+
   testWidgets('chạm đồng thời hai ngón hoàn tác nét vừa vẽ', (tester) async {
     tester.view.physicalSize = const Size(1180, 820);
     tester.view.devicePixelRatio = 1;

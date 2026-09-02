@@ -60,6 +60,22 @@ class _LibraryScreenState extends State<LibraryScreen> {
     });
   }
 
+  void _toggleSelectAllVisible(Iterable<NotebookData> visibleNotebooks) {
+    final visibleIds = visibleNotebooks.map((item) => item.id).toSet();
+    if (visibleIds.isEmpty) return;
+    setState(() {
+      _selectionMode = true;
+      final allVisibleSelected = visibleIds.every(
+        _selectedNotebookIds.contains,
+      );
+      if (allVisibleSelected) {
+        _selectedNotebookIds.removeAll(visibleIds);
+      } else {
+        _selectedNotebookIds.addAll(visibleIds);
+      }
+    });
+  }
+
   Future<void> _moveSelectedNotebooks() async {
     final target = await showModalBottomSheet<String?>(
       context: context,
@@ -244,6 +260,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
           (filter == 'Vở trắng' && !item.isPdf);
       return matchesSearch && matchesFilter;
     }).toList();
+    final visibleNotebookIds = notebooks.map((item) => item.id).toSet();
+    final allVisibleSelected =
+        visibleNotebookIds.isNotEmpty &&
+        visibleNotebookIds.every(_selectedNotebookIds.contains);
     return Padding(
       padding: const EdgeInsets.fromLTRB(28, 28, 28, 0),
       child: Column(
@@ -266,6 +286,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         child: Text(
                           '${_selectedNotebookIds.length} vở đã chọn',
                           style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      TextButton.icon(
+                        onPressed: () => _toggleSelectAllVisible(notebooks),
+                        icon: Icon(
+                          allVisibleSelected
+                              ? Icons.deselect_rounded
+                              : Icons.select_all_rounded,
+                        ),
+                        label: Text(
+                          allVisibleSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả',
                         ),
                       ),
                       if (widget.state.librarySection == 'trash') ...[
@@ -317,6 +348,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
                               : Icons.playlist_add_check_rounded,
                         ),
                       ),
+                      if (_selectionMode)
+                        TextButton.icon(
+                          onPressed: notebooks.isEmpty
+                              ? null
+                              : () => _toggleSelectAllVisible(notebooks),
+                          icon: const Icon(Icons.select_all_rounded),
+                          label: const Text('Chọn tất cả'),
+                        ),
                       SearchBox(
                         hint: 'Tìm vở...',
                         width: 220,

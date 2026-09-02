@@ -1305,9 +1305,19 @@ class _PrivacySettings extends StatelessWidget {
   final AppState state;
 
   Future<void> _export(BuildContext context) async {
-    final file = await state.exportBackupSnapshot();
-    if (context.mounted) {
-      showAppSnack(context, 'Đã tạo backup: ${file.uri.pathSegments.last}');
+    try {
+      final file = await state.exportBackupSnapshot();
+      if (context.mounted) {
+        showAppSnack(context, 'Đã tạo backup: ${file.uri.pathSegments.last}');
+      }
+    } catch (_) {
+      if (context.mounted) {
+        showAppSnack(
+          context,
+          state.lastBackupError ??
+              'Không thể tạo backup. Dữ liệu hiện tại vẫn được giữ nguyên.',
+        );
+      }
     }
   }
 
@@ -1322,7 +1332,9 @@ class _PrivacySettings extends StatelessWidget {
     if (!context.mounted) return;
     showAppSnack(
       context,
-      restored ? 'Đã khôi phục dữ liệu Note Eryk' : 'File backup không hợp lệ',
+      restored
+          ? 'Đã khôi phục dữ liệu Note Eryk'
+          : state.lastBackupError ?? 'File backup không hợp lệ',
     );
   }
 

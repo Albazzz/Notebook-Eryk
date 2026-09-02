@@ -1,10 +1,185 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:noteeryk/app_state.dart';
 import 'package:noteeryk/models.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test(
+    'từ chối backup thiếu ảnh trang và giữ nguyên thư viện hiện tại',
+    () async {
+      final state = AppState();
+      addTearDown(state.dispose);
+      state.autoSave = false;
+      state.addNotebook(
+        const NotebookData(
+          id: 'current-book',
+          title: 'Dữ liệu hiện tại',
+          type: 'Notebook',
+          pages: 1,
+          color: Color(0xff000000),
+        ),
+      );
+      final temporary = await Directory.systemTemp.createTemp(
+        'noteeryk_backup_test_',
+      );
+      addTearDown(() => temporary.delete(recursive: true));
+      final backup = File('${temporary.path}/broken.json');
+      await backup.writeAsString(
+        jsonEncode({
+          'format': 'note-eryk-backup',
+          // Backups created by older builds used the library version as the
+          // envelope version. Keep accepting those files.
+          'version': 2,
+          'notebooks': [
+            const NotebookData(
+              id: 'imported-book',
+              title: 'Bản lỗi',
+              type: 'Notebook',
+              pages: 1,
+              color: Color(0xff000000),
+            ).toJson(),
+          ],
+          'strokes': <String, dynamic>{},
+          'pageImages': {
+            'imported-book': {
+              '1': ['/missing/page-1.jpg'],
+            },
+          },
+          'attachments': <String, String>{},
+        }),
+        flush: true,
+      );
+
+      expect(await state.importBackupFile(backup.path), isFalse);
+      expect(state.notebooks.single.id, 'current-book');
+      expect(state.lastBackupError, contains('thiếu'));
+    },
+  );
+
+  test('backup đầy đủ có thể khôi phục cả ảnh trang', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'noteeryk_backup_roundtrip_',
+    );
+    addTearDown(() => root.delete(recursive: true));
+    final originalProvider = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _TestPathProvider(root.path);
+    addTearDown(() => PathProviderPlatform.instance = originalProvider);
+
+    final sourceImage = File('${root.path}/page-1.jpg');
+    const imageBytes = <int>[1, 2, 3, 4, 5, 6, 7, 8];
+    await sourceImage.writeAsBytes(imageBytes, flush: true);
+    final sourceState = AppState()..autoSave = false;
+    addTearDown(sourceState.dispose);
+    sourceState.addNotebook(
+      const NotebookData(
+        id: 'source-book',
+        title: 'Vở có ảnh',
+        type: 'Notebook',
+        pages: 1,
+        color: Color(0xff000000),
+      ),
+    );
+    sourceState.attachImages('source-book', 1, [sourceImage.path]);
+
+    final backup = await sourceState.exportBackupSnapshot();
+    expect(await backup.exists(), isTrue);
+
+    final restoredState = AppState()..autoSave = false;
+    addTearDown(restoredState.dispose);
+    restoredState.addNotebook(
+      const NotebookData(
+        id: 'old-book',
+        title: 'Dữ liệu cũ',
+        type: 'Notebook',
+        pages: 1,
+        color: Color(0xff000000),
+      ),
+    );
+
+    expect(await restoredState.importBackupFile(backup.path), isTrue);
+    expect(restoredState.notebooks.single.id, 'source-book');
+    final restoredImage = File(
+      restoredState.imagesForPage('source-book', 1).single,
+    );
+    expect(await restoredImage.exists(), isTrue);
+    expect(await restoredImage.readAsBytes(), imageBytes);
+  });
+
+  test(
+    'tự nối lại đường dẫn ảnh khi thư mục ứng dụng đổi sau cập nhật',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'noteeryk_relocated_path_',
+      );
+      addTearDown(() => root.delete(recursive: true));
+      final originalProvider = PathProviderPlatform.instance;
+      PathProviderPlatform.instance = _TestPathProvider(root.path);
+      addTearDown(() => PathProviderPlatform.instance = originalProvider);
+      SharedPreferences.setMockInitialValues({'autoSave': false});
+
+      final support = Directory('${root.path}/support');
+      final currentImage = File(
+        '${support.path}${Platform.pathSeparator}imports${Platform.pathSeparator}page_images${Platform.pathSeparator}page-1.jpg',
+      );
+      await currentImage.parent.create(recursive: true);
+      await currentImage.writeAsBytes(const [9, 8, 7, 6], flush: true);
+      const oldPath = '/old/container/imports/page_images/page-1.jpg';
+      final snapshot = {
+        'version': 2,
+        'updatedAt': DateTime(2026, 1, 1).toIso8601String(),
+        'notebooks': [
+          const NotebookData(
+            id: 'relocated-book',
+            title: 'Vở sau cập nhật',
+            type: 'Notebook',
+            pages: 1,
+            color: Color(0xff000000),
+          ).toJson(),
+        ],
+        'folders': <dynamic>[],
+        'strokes': <String, dynamic>{},
+        'pinnedNotes': <String, dynamic>{},
+        'pageImages': {
+          'relocated-book': {
+            '1': [oldPath],
+          },
+        },
+        'imagePlacements': {
+          'relocated-book:1:background': const PageImagePlacement(
+            id: 'relocated-book:1:background',
+            path: oldPath,
+            rect: Rect.fromLTWH(0, 0, 1, 1),
+            isBackground: true,
+          ).toJson(),
+        },
+        'blankPages': <dynamic>[],
+        'sourceDocuments': <String, dynamic>{},
+        'lastPages': <String, dynamic>{},
+        'weakPoints': <dynamic>[],
+      };
+      await support.create(recursive: true);
+      await File(
+        '${support.path}/notebook_library_v2.json',
+      ).writeAsString(jsonEncode(snapshot), flush: true);
+
+      final state = AppState();
+      addTearDown(state.dispose);
+      await state.initialize();
+      await state.flushPersistence();
+
+      expect(state.imagesForPage('relocated-book', 1), [currentImage.path]);
+      expect(
+        state.imagePlacementsForPage('relocated-book', 1).single.path,
+        currentImage.path,
+      );
+    },
+  );
+
   test('gán một model cho nhiều chức năng', () {
     final state = AppState();
     addTearDown(state.dispose);
@@ -310,4 +485,24 @@ void main() {
     expect(state.notebooks.single.folderId, folder.id);
     expect(state.notebooks.single.tags, ['N3', 'dễ nhầm']);
   });
+}
+
+class _TestPathProvider extends PathProviderPlatform {
+  _TestPathProvider(this.rootPath);
+
+  final String rootPath;
+
+  @override
+  Future<String?> getApplicationDocumentsPath() async {
+    final directory = Directory('$rootPath/documents');
+    await directory.create(recursive: true);
+    return directory.path;
+  }
+
+  @override
+  Future<String?> getApplicationSupportPath() async {
+    final directory = Directory('$rootPath/support');
+    await directory.create(recursive: true);
+    return directory.path;
+  }
 }
