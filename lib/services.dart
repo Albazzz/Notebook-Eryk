@@ -395,6 +395,7 @@ class OpenRouterService {
     required String jlpt,
     required String language,
     String? weaknessKind,
+    String? imagePath,
   }) async {
     final instruction = _promptFor(
       task,
@@ -413,9 +414,22 @@ class OpenRouterService {
       language,
       weaknessKind ?? '',
       text.trim(),
+      imagePath ?? '',
     ].join('|');
     final cached = _completionCache[cacheKey];
     if (cached != null) return cached;
+    final userContent = imagePath == null
+        ? text
+        : [
+            {'type': 'text', 'text': text},
+            {
+              'type': 'image_url',
+              'image_url': {
+                'url':
+                    'data:image/png;base64,${base64Encode(await File(imagePath).readAsBytes())}',
+              },
+            },
+          ];
     final response = await _request(
       'POST',
       '/chat/completions',
@@ -424,7 +438,7 @@ class OpenRouterService {
         'model': normalizedModelId,
         'messages': [
           {'role': 'system', 'content': instruction},
-          {'role': 'user', 'content': text},
+          {'role': 'user', 'content': userContent},
         ],
         'temperature': 0.25,
         // Dictionary responses are intentionally short; limiting output
@@ -454,6 +468,98 @@ class OpenRouterService {
     }
     _completionCache[cacheKey] = formatted;
     return formatted;
+  }
+
+  /// Tách tất cả điểm yếu có trong một câu hỏi/câu trả lời thành các mục
+  /// độc lập để người học duyệt từng mục trước khi lưu.
+  Future<List<WeakPointDraft>> completeWeakPointDrafts({
+    required String apiKey,
+    required String modelId,
+    required String text,
+    required String jlpt,
+    required String language,
+    required Set<WeaknessKind> kinds,
+    String? imagePath,
+  }) async {
+    final selected = kinds.map((kind) => kind.name).join(', ');
+    final instruction =
+        '''
+Bạn là giáo viên tiếng Nhật. Hãy phân tích đúng nội dung người học đã khoanh,
+có thể gồm câu hỏi, các lựa chọn và đáp án. Chỉ tạo điểm yếu thuộc các loại
+được yêu cầu: $selected. Nếu câu hỏi hỏi về một từ hoặc kanji, hãy lấy chính
+từ/kanji xuất hiện trong câu hỏi hoặc đáp án và giải thích nghĩa trong đúng
+ngữ cảnh đó. Không tự lấy từ bên ngoài và không đoán khi chữ không rõ.
+Một câu có nhiều mẫu ngữ pháp hoặc nhiều từ đáng học thì tạo nhiều item riêng.
+Với grammar: title là mẫu ngữ pháp, có meaning, conjugation, examples.
+Với vocabulary: title là từ khóa trong câu, có reading, meaning, hanViet nếu
+chắc chắn và sourceSentence là câu chứa từ đó.
+Với kanji: title là chữ kanji, có reading, meaning và sourceSentence.
+Trả về DUY NHẤT JSON object: {
+  "items": [
+    {
+      "title":"...", "kind":"grammar|vocabulary|kanji|reading|other",
+      "meaning":"...", "reading":"", "hanViet":"", "conjugation":"",
+      "examples":[], "sourceSentence":"", "reminder":"", "note":"",
+      "tags":["$jlpt"]
+    }
+  ],
+  "warning":""
+}
+Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
+''';
+    final normalizedModelId = modelId.trim();
+    if (normalizedModelId.isEmpty) throw ArgumentError('Chưa chọn model AI');
+    final userContent = imagePath == null
+        ? text
+        : [
+            {'type': 'text', 'text': text},
+            {
+              'type': 'image_url',
+              'image_url': {
+                'url':
+                    'data:image/png;base64,${base64Encode(await File(imagePath).readAsBytes())}',
+              },
+            },
+          ];
+    final response = await _request(
+      'POST',
+      '/chat/completions',
+      apiKey,
+      body: jsonEncode({
+        'model': normalizedModelId,
+        'messages': [
+          {'role': 'system', 'content': instruction},
+          {'role': 'user', 'content': userContent},
+        ],
+        'temperature': 0.15,
+        'max_tokens': 1400,
+      }),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw HttpException(
+        'Yêu cầu AI tạo điểm yếu thất bại (${response.statusCode})',
+      );
+    }
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    final choices = decoded['choices'] as List<dynamic>?;
+    if (choices == null || choices.isEmpty) {
+      throw const FormatException('AI không trả về bản nháp điểm yếu');
+    }
+    final message =
+        (choices.first as Map<String, dynamic>)['message']
+            as Map<String, dynamic>;
+    final raw = message['content'] as String? ?? '';
+    final object = _decodeJsonObject(raw);
+    if (object == null) {
+      throw const FormatException('AI trả về dữ liệu điểm yếu không hợp lệ');
+    }
+    final items = object['items'] as List<dynamic>? ?? const [];
+    return items
+        .whereType<Map>()
+        .map((item) => WeakPointDraft.fromJson(Map<String, dynamic>.from(item)))
+        .where((item) => item.title.isNotEmpty && item.content.isNotEmpty)
+        .where((item) => kinds.contains(item.kind))
+        .toList(growable: false);
   }
 
   void dispose() => _client.close(force: true);

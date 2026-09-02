@@ -199,6 +199,7 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
     final hanViet = TextEditingController(text: item.hanViet);
     final conjugation = TextEditingController(text: item.conjugation);
     final examples = TextEditingController(text: item.examples.join('\n'));
+    final sourceSentence = TextEditingController(text: item.sourceSentence);
     var kind = item.kind;
     final saved = await showModalBottomSheet<bool>(
       context: context,
@@ -271,6 +272,13 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
                   decoration: const InputDecoration(labelText: 'Nội dung'),
                 ),
                 const SizedBox(height: 12),
+                TextField(
+                  controller: sourceSentence,
+                  minLines: 2,
+                  maxLines: 4,
+                  decoration: const InputDecoration(labelText: 'Câu gốc'),
+                ),
+                const SizedBox(height: 12),
                 if (kind == WeaknessKind.grammar) ...[
                   TextField(
                     controller: conjugation,
@@ -334,6 +342,7 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
                             .map((line) => line.trim())
                             .where((line) => line.isNotEmpty)
                             .toList();
+                        item.sourceSentence = sourceSentence.text.trim();
                         widget.state.updateWeakPoint(item);
                         Navigator.pop(context, true);
                       },
@@ -356,6 +365,7 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
     hanViet.dispose();
     conjugation.dispose();
     examples.dispose();
+    sourceSentence.dispose();
     if (saved == true && mounted) showAppSnack(context, 'Đã lưu thay đổi');
   }
 
@@ -541,6 +551,8 @@ class _DetailText extends StatelessWidget {
         ),
         const SizedBox(height: 24),
         _LabelValue(label: 'NỘI DUNG', value: item.content),
+        if (item.sourceSentence.isNotEmpty)
+          _LabelValue(label: 'CÂU GỐC', value: item.sourceSentence),
         if (item.reading.isNotEmpty)
           _LabelValue(label: 'CÁCH ĐỌC', value: item.reading),
         if (item.hanViet.isNotEmpty)

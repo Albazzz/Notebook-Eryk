@@ -426,9 +426,7 @@ class _EditorScreenState extends State<EditorScreen>
                                 child: _ZoomControl(
                                   zoom: zoom,
                                   enabled: !pageLocked,
-                                  onChanged: (value) => setState(
-                                    () => zoom = value.clamp(.7, 1.5),
-                                  ),
+                                  onChanged: _setToolbarZoom,
                                 ),
                               ),
                             ],
@@ -481,9 +479,19 @@ class _EditorScreenState extends State<EditorScreen>
                     ],
                   ],
                 ),
-                Text(
-                  'Trang ${widget.state.openPage} · Đã lưu',
-                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                InkWell(
+                  borderRadius: BorderRadius.circular(6),
+                  onTap: _showJumpToPage,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 2,
+                      horizontal: 3,
+                    ),
+                    child: Text(
+                      'Trang ${widget.state.openPage} · Đã lưu',
+                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -809,6 +817,44 @@ class _EditorScreenState extends State<EditorScreen>
     controller.dispose();
   }
 
+  Future<void> _showJumpToPage() async {
+    final controller = TextEditingController(text: '${widget.state.openPage}');
+    final page = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Đi nhanh tới trang'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            hintText: 'Nhập số từ 1 đến ${widget.notebook.pages}',
+          ),
+          onSubmitted: (_) =>
+              Navigator.pop(dialogContext, int.tryParse(controller.text)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, int.tryParse(controller.text)),
+            child: const Text('Đi tới'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (!mounted || page == null) return;
+    if (page < 1 || page > widget.notebook.pages) {
+      showAppSnack(context, 'Số trang phải từ 1 đến ${widget.notebook.pages}');
+      return;
+    }
+    widget.state.goToPage(page);
+  }
+
   Future<void> _shareNotebook() async {
     final details =
         '${widget.notebook.title}\nTrang ${widget.state.openPage}/${widget.notebook.pages}';
@@ -1055,7 +1101,7 @@ class _EditorScreenState extends State<EditorScreen>
   Widget _buildWorkspace() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final targetHeight = math.min(constraints.maxHeight - 26, 770.0) * zoom;
+        final targetHeight = math.min(constraints.maxHeight - 26, 770.0);
         final targetWidth = targetHeight * .72;
         // Raw touch tracking avoids Flutter's gesture arena entirely. Pencil
         // events never enter these callbacks, so writing cannot move the page.
@@ -1264,6 +1310,20 @@ class _EditorScreenState extends State<EditorScreen>
     );
   }
 
+  void _setToolbarZoom(double requested) {
+    final next = requested.clamp(.7, 2.5).toDouble();
+    if (next == 1) {
+      _canvasController.value = Matrix4.identity();
+    } else {
+      final current = _canvasController.value.getMaxScaleOnAxis();
+      final factor = next / (current == 0 ? 1 : current);
+      final matrix = _canvasController.value.clone()
+        ..scaleByDouble(factor, factor, 1, 1);
+      _canvasController.value = matrix;
+    }
+    setState(() => zoom = next);
+  }
+
   int get _minimumCanvasTouches => widget.state.drawWithFinger ? 2 : 1;
 
   void _onCanvasPointerDown(PointerDownEvent event) {
@@ -1319,6 +1379,7 @@ class _EditorScreenState extends State<EditorScreen>
       1,
     );
     _canvasController.value = matrix;
+    if (mounted) setState(() => zoom = nextScale);
   }
 
   void _onCanvasPointerUp(PointerUpEvent event) {
@@ -1542,6 +1603,7 @@ class _EditorScreenState extends State<EditorScreen>
           text: recognized,
           jlpt: widget.state.jlpt,
           language: widget.state.explanationLanguage,
+          imagePath: crop.path,
         );
         if (!mounted || requestSerial != _aiRequestSerial) return;
         setState(
@@ -1570,6 +1632,7 @@ class _EditorScreenState extends State<EditorScreen>
           text: recognized,
           jlpt: widget.state.jlpt,
           language: widget.state.explanationLanguage,
+          imagePath: crop.path,
         );
         if (!mounted || requestSerial != _aiRequestSerial) return;
         setState(
@@ -1783,9 +1846,13 @@ class _EditorScreenState extends State<EditorScreen>
     }
     final logicalSize = boundary.size;
     var region = Rect.fromPoints(start, end);
-    if (tool == EditorTool.dictionary || tool == EditorTool.aiDictionary) {
-      region = region.inflate(18);
-    }
+    // Keep a small safety margin around glyphs at the edge of the selection;
+    // the margin is still clipped to the page and is the image sent to AI.
+    region = region.inflate(
+      tool == EditorTool.dictionary || tool == EditorTool.aiDictionary
+          ? 18
+          : 10,
+    );
     region = region.intersect(Offset.zero & logicalSize);
     if (region.width < 8 || region.height < 8) {
       throw const FormatException('Vùng chọn quá nhỏ. Hãy khoanh lại.');
@@ -2683,16 +2750,6 @@ class _EditorScreenState extends State<EditorScreen>
     showAppSnack(context, 'Đã ghim vào trang');
   }
 
-  String _draftSection(String? draft, String heading) {
-    if (draft == null || draft.isEmpty) return '';
-    final marker = '$heading\n';
-    final start = draft.indexOf(marker);
-    if (start < 0) return '';
-    final contentStart = start + marker.length;
-    final end = draft.indexOf('\n\n', contentStart);
-    return draft.substring(contentStart, end < 0 ? draft.length : end).trim();
-  }
-
   String _weaknessKindDescription(WeaknessKind kind) {
     switch (kind) {
       case WeaknessKind.grammar:
@@ -2806,11 +2863,10 @@ class _EditorScreenState extends State<EditorScreen>
     final resolvedOcr =
         ocrText ?? _latestOcrText ?? result?.source ?? 'Không có OCR text';
     final resolvedImage = sourceImagePath ?? _latestCropPath;
-    final shortOcr = resolvedOcr.replaceAll('\n', ' ').trim();
-    var kind = result?.dictionaryEntry != null
+    final initialKind = result?.dictionaryEntry != null
         ? WeaknessKind.vocabulary
         : WeaknessKind.grammar;
-    final chosenKinds = await _chooseWeaknessKinds(kind);
+    final chosenKinds = await _chooseWeaknessKinds(initialKind);
     if (!mounted ||
         chosenKinds == null ||
         chosenKinds.isEmpty ||
@@ -2818,84 +2874,89 @@ class _EditorScreenState extends State<EditorScreen>
       await _finishProcessingAfterOverlay();
       return;
     }
-    kind = chosenKinds.first;
-    String? aiDraft;
-    final weaknessModel = widget.state.modelIdFor(AiTask.createWeakPoint);
-    if (widget.state.hasApiKey && weaknessModel.isNotEmpty) {
+    var drafts = <WeakPointDraft>[];
+    final model = widget.state.modelIdFor(AiTask.createWeakPoint);
+    if (widget.state.hasApiKey && model.isNotEmpty) {
       if (!processing) setState(() => processing = true);
       try {
-        aiDraft = await widget.state.aiService.complete(
+        drafts = await widget.state.aiService.completeWeakPointDrafts(
           apiKey: widget.state.apiKey,
-          modelId: weaknessModel,
-          task: AiTask.createWeakPoint,
+          modelId: model,
           text: resolvedOcr,
           jlpt: widget.state.jlpt,
           language: widget.state.explanationLanguage,
-          weaknessKind: kind.name,
+          kinds: chosenKinds,
+          imagePath: resolvedImage,
         );
-      } catch (_) {
-        // A weak-point draft remains usable when the optional AI call fails.
-      }
+      } catch (_) {}
       if (!mounted || activeSerial != _aiRequestSerial) return;
     }
-    if (!mounted) return;
+    if (drafts.isEmpty) {
+      final shortOcr = resolvedOcr.replaceAll('\n', ' ').trim();
+      drafts = chosenKinds
+          .map(
+            (kind) => WeakPointDraft(
+              title: shortOcr.isEmpty ? 'Điểm cần ôn' : shortOcr,
+              kind: kind,
+              content: 'Nội dung OCR từ vùng đã khoanh:\n$resolvedOcr',
+              reminder: 'Ghi điều bạn thường nhầm để ôn lại.',
+              tags: [widget.state.jlpt],
+              sourceSentence: resolvedOcr,
+            ),
+          )
+          .toList();
+    }
     await _finishProcessingAfterOverlay();
     if (!mounted) return;
-    final aiMeaning = _draftSection(aiDraft, 'Nghĩa');
-    final aiReading = _draftSection(aiDraft, 'Cách đọc');
-    final aiHanViet = _draftSection(aiDraft, 'Hán Việt');
-    final aiConjugation = _draftSection(aiDraft, 'Cách chia');
-    final aiExamples = _draftSection(aiDraft, 'Ví dụ');
-    final aiReminder = _draftSection(aiDraft, 'Điểm cần nhớ');
-    final aiNote = _draftSection(aiDraft, 'Ghi chú');
-    final aiTitle = aiDraft?.split('\n').first.trim() ?? '';
-    final titleController = TextEditingController(
-      text: result?.dictionaryEntry != null
-          ? '${result!.dictionaryEntry!.word}【${result!.dictionaryEntry!.reading}】'
-          : aiTitle.isNotEmpty
-          ? aiTitle
-          : shortOcr.isEmpty
-          ? 'Điểm cần ôn'
-          : 'Ôn lại ${shortOcr.length > 18 ? '${shortOcr.substring(0, 18)}…' : shortOcr}',
-    );
-    final contentController = TextEditingController(
-      text:
-          result?.shortBody ??
-          (aiMeaning.isNotEmpty ? aiMeaning : aiDraft) ??
-          'Nội dung OCR từ vùng đã khoanh:\n$resolvedOcr',
-    );
-    final readingController = TextEditingController(
-      text: aiReading.isNotEmpty
-          ? aiReading
-          : result?.dictionaryEntry?.reading ?? '',
-    );
-    final hanVietController = TextEditingController(text: aiHanViet);
-    final conjugationController = TextEditingController(text: aiConjugation);
-    final examplesController = TextEditingController(text: aiExamples);
-    final reminderController = TextEditingController(
-      text: aiReminder.isNotEmpty
-          ? aiReminder
-          : 'Ghi điều bạn thường nhầm để ôn lại.',
-    );
-    final noteController = TextEditingController(text: aiNote);
+    final forms = drafts.asMap().entries.map((entry) {
+      final form = _WeaknessDraftForm.fromDraft(entry.value, entry.key);
+      if (!form.tags.contains(widget.state.jlpt)) {
+        form.tags.add(widget.state.jlpt);
+      }
+      return form;
+    }).toList();
+    final pageController = PageController();
+    final tagController = TextEditingController();
+    var activeIndex = 0;
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
       builder: (context) => StatefulBuilder(
-        builder: (context, setSheetState) => Padding(
-          padding: EdgeInsets.fromLTRB(
-            24,
-            0,
-            24,
-            MediaQuery.viewInsetsOf(context).bottom + 24,
-          ),
-          child: SizedBox(
-            width: 680,
-            child: SingleChildScrollView(
+        builder: (context, setSheetState) {
+          if (forms.isEmpty) return const SizedBox.shrink();
+          final current = forms[activeIndex.clamp(0, forms.length - 1)];
+          void removeCurrent() {
+            setSheetState(() {
+              forms.removeAt(activeIndex);
+              if (forms.isNotEmpty) {
+                activeIndex = activeIndex.clamp(0, forms.length - 1);
+              }
+            });
+            if (forms.isEmpty) Navigator.pop(context, false);
+          }
+
+          void addTag() {
+            final tag = tagController.text.trim();
+            if (tag.isEmpty || current.tags.contains(tag)) return;
+            setSheetState(() {
+              current.tags.add(tag);
+              tagController.clear();
+            });
+          }
+
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              24,
+              0,
+              24,
+              MediaQuery.viewInsetsOf(context).bottom + 18,
+            ),
+            child: SizedBox(
+              width: 720,
+              height: math.min(MediaQuery.sizeOf(context).height * .82, 720),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
                 children: [
                   Row(
                     children: [
@@ -2904,11 +2965,11 @@ class _EditorScreenState extends State<EditorScreen>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Thêm điểm yếu',
+                              'Duyệt điểm yếu (${forms.length})',
                               style: Theme.of(context).textTheme.headlineMedium,
                             ),
                             const Text(
-                              'AI đã tạo bản nháp — hãy kiểm tra trước khi lưu.',
+                              'Mỗi thẻ là một điểm riêng trong câu hỏi/đáp án.',
                               style: TextStyle(color: Colors.grey),
                             ),
                           ],
@@ -2917,39 +2978,26 @@ class _EditorScreenState extends State<EditorScreen>
                       const Icon(Icons.auto_awesome, color: AppColors.weakness),
                     ],
                   ),
-                  const SizedBox(height: 18),
-                  Container(
-                    width: double.infinity,
-                    constraints: const BoxConstraints(minHeight: 90),
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xfffff4e8),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child:
-                        resolvedImage != null &&
-                            File(resolvedImage).existsSync()
-                        ? ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: Image.file(
-                              File(resolvedImage),
-                              height: 140,
-                              width: double.infinity,
-                              fit: BoxFit.contain,
-                            ),
-                          )
-                        : Text(
-                            resolvedOcr,
-                            style: const TextStyle(fontSize: 16),
-                          ),
-                  ),
                   const SizedBox(height: 8),
+                  if (resolvedImage != null && File(resolvedImage).existsSync())
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Image.file(
+                        File(resolvedImage),
+                        height: 88,
+                        width: double.infinity,
+                        fit: BoxFit.contain,
+                      ),
+                    )
+                  else
+                    Text(
+                      resolvedOcr,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ExpansionTile(
                     tilePadding: EdgeInsets.zero,
-                    title: const Text('Văn bản OCR trên thiết bị'),
-                    subtitle: const Text(
-                      'Có thể đối chiếu với ảnh trước khi lưu',
-                    ),
+                    title: const Text('Câu hỏi / đáp án đã nhận dạng'),
                     children: [
                       Align(
                         alignment: Alignment.centerLeft,
@@ -2957,123 +3005,51 @@ class _EditorScreenState extends State<EditorScreen>
                       ),
                     ],
                   ),
-                  const SizedBox(height: 14),
-                  TextField(
-                    controller: titleController,
-                    decoration: const InputDecoration(labelText: 'Tên'),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<WeaknessKind>(
-                    initialValue: kind,
-                    decoration: const InputDecoration(labelText: 'Loại'),
-                    items: WeaknessKind.values
-                        .map(
-                          (value) => DropdownMenuItem(
-                            value: value,
-                            child: Text(value.label),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) =>
-                        setSheetState(() => kind = value ?? kind),
-                  ),
-                  const SizedBox(height: 12),
-                  if (chosenKinds.any(
-                    (value) => {
-                      WeaknessKind.vocabulary,
-                      WeaknessKind.kanji,
-                    }.contains(value),
-                  )) ...[
-                    TextField(
-                      controller: readingController,
-                      decoration: const InputDecoration(
-                        labelText: 'Cách đọc (よみ / furigana)',
+                  SizedBox(
+                    height: 42,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: forms.length,
+                      separatorBuilder: (_, _) => const SizedBox(width: 6),
+                      itemBuilder: (_, index) => ChoiceChip(
+                        label: Text('${index + 1}. ${forms[index].kind.label}'),
+                        selected: index == activeIndex,
+                        onSelected: (_) {
+                          setSheetState(() => activeIndex = index);
+                          pageController.animateToPage(
+                            index,
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeOut,
+                          );
+                        },
                       ),
                     ),
-                    const SizedBox(height: 12),
-                  ],
-                  if (chosenKinds.any(
-                    (value) => {
-                      WeaknessKind.vocabulary,
-                      WeaknessKind.kanji,
-                    }.contains(value),
-                  )) ...[
-                    TextField(
-                      controller: hanVietController,
-                      decoration: const InputDecoration(labelText: 'Hán Việt'),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-                  TextField(
-                    controller: contentController,
-                    minLines: 2,
-                    maxLines: 4,
-                    decoration: InputDecoration(
-                      labelText: kind == WeaknessKind.grammar
-                          ? 'Nghĩa / cách dùng'
-                          : 'Nghĩa',
-                    ),
                   ),
-                  const SizedBox(height: 12),
-                  if (chosenKinds.contains(WeaknessKind.grammar)) ...[
-                    TextField(
-                      controller: conjugationController,
-                      minLines: 2,
-                      maxLines: 4,
-                      decoration: const InputDecoration(
-                        labelText: 'Cách chia / cấu trúc',
-                        hintText: 'Ví dụ: Vます bỏ ます + ながら',
+                  Expanded(
+                    child: PageView.builder(
+                      controller: pageController,
+                      itemCount: forms.length,
+                      onPageChanged: (index) =>
+                          setSheetState(() => activeIndex = index),
+                      itemBuilder: (_, index) => SingleChildScrollView(
+                        padding: const EdgeInsets.only(top: 4, bottom: 12),
+                        child: _buildWeaknessDraftEditor(
+                          forms[index],
+                          setSheetState,
+                          tagController,
+                          addTag,
+                          removeCurrent,
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 12),
-                  ],
-                  if (chosenKinds.any(
-                    (value) => {
-                      WeaknessKind.grammar,
-                      WeaknessKind.vocabulary,
-                      WeaknessKind.kanji,
-                    }.contains(value),
-                  )) ...[
-                    TextField(
-                      controller: examplesController,
-                      minLines: 2,
-                      maxLines: 4,
-                      decoration: const InputDecoration(
-                        labelText: 'Ví dụ (mỗi dòng một ví dụ)',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-                  TextField(
-                    controller: reminderController,
-                    minLines: 2,
-                    maxLines: 3,
-                    decoration: const InputDecoration(
-                      labelText: 'Điểm cần nhớ',
-                    ),
                   ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: noteController,
-                    minLines: 2,
-                    maxLines: 3,
-                    decoration: const InputDecoration(
-                      labelText: 'Ghi chú của tôi',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Wrap(
-                    spacing: 8,
-                    children: [
-                      Chip(label: Text('N3')),
-                      Chip(label: Text('dễ nhầm')),
-                      ActionChip(label: Text('+ Tag'), onPressed: null),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
                     children: [
+                      Text(
+                        '${activeIndex + 1}/${forms.length}',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      const Spacer(),
                       TextButton(
                         onPressed: () => Navigator.pop(context, false),
                         child: const Text('Hủy'),
@@ -3081,31 +3057,26 @@ class _EditorScreenState extends State<EditorScreen>
                       const SizedBox(width: 8),
                       FilledButton.icon(
                         onPressed: () {
-                          for (final savedKind in chosenKinds) {
+                          for (final form in forms) {
                             widget.state.addWeakPoint(
                               WeakPoint(
-                                id: '${DateTime.now().microsecondsSinceEpoch}_${savedKind.name}',
-                                title: chosenKinds.length > 1
-                                    ? '${titleController.text.trim()} · ${savedKind.label}'
-                                    : titleController.text.trim(),
-                                kind: savedKind,
-                                content: contentController.text.trim(),
-                                reminder: reminderController.text.trim(),
-                                note: noteController.text.trim(),
-                                reading: readingController.text.trim(),
-                                hanViet: hanVietController.text.trim(),
-                                conjugation: conjugationController.text.trim(),
-                                examples: examplesController.text
-                                    .split('\n')
-                                    .map((line) => line.trim())
-                                    .where((line) => line.isNotEmpty)
-                                    .toList(),
-                                tags: ['N3', 'dễ nhầm'],
+                                id: '${DateTime.now().microsecondsSinceEpoch}_${form.id}',
+                                title: form.title.trim(),
+                                kind: form.kind,
+                                content: form.content.trim(),
+                                reminder: form.reminder.trim(),
+                                note: form.note.trim(),
+                                tags: form.tags,
                                 notebookId: widget.notebook.id,
                                 notebookTitle: widget.notebook.title,
                                 page: widget.state.openPage,
                                 ocrText: resolvedOcr,
                                 sourceImagePath: resolvedImage,
+                                reading: form.reading.trim(),
+                                hanViet: form.hanViet.trim(),
+                                conjugation: form.conjugation.trim(),
+                                examples: form.examples,
+                                sourceSentence: form.sourceSentence.trim(),
                                 createdAt: DateTime.now(),
                               ),
                             );
@@ -3113,25 +3084,19 @@ class _EditorScreenState extends State<EditorScreen>
                           Navigator.pop(context, true);
                         },
                         icon: const Icon(Icons.bookmark_add_outlined),
-                        label: const Text('Lưu điểm yếu'),
+                        label: const Text('Lưu tất cả'),
                       ),
                     ],
                   ),
                 ],
               ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
-    titleController.dispose();
-    contentController.dispose();
-    readingController.dispose();
-    hanVietController.dispose();
-    conjugationController.dispose();
-    examplesController.dispose();
-    reminderController.dispose();
-    noteController.dispose();
+    pageController.dispose();
+    tagController.dispose();
     if (saved != true && resolvedImage != null) {
       try {
         await File(resolvedImage).delete();
@@ -3149,12 +3114,188 @@ class _EditorScreenState extends State<EditorScreen>
       });
       showAppSnack(
         context,
-        'Đã lưu vào Điểm yếu',
+        'Đã lưu ${forms.length} điểm yếu',
         actionLabel: 'Xem',
         onAction: () => widget.state.goTo(AppDestination.weaknesses),
       );
     }
   }
+
+  Widget _buildWeaknessDraftEditor(
+    _WeaknessDraftForm form,
+    StateSetter setSheetState,
+    TextEditingController tagController,
+    VoidCallback addTag,
+    VoidCallback removeCurrent,
+  ) {
+    Widget field(
+      String label,
+      String value,
+      void Function(String) onChanged, {
+      int minLines = 1,
+      int maxLines = 4,
+    }) => Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TextFormField(
+        key: ValueKey('${form.id}-$label'),
+        initialValue: value,
+        minLines: minLines,
+        maxLines: maxLines,
+        onChanged: onChanged,
+        decoration: InputDecoration(labelText: label),
+      ),
+    );
+    final lexical = {
+      WeaknessKind.vocabulary,
+      WeaknessKind.kanji,
+    }.contains(form.kind);
+    final examples = {
+      WeaknessKind.grammar,
+      WeaknessKind.vocabulary,
+      WeaknessKind.kanji,
+    }.contains(form.kind);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Chip(label: Text(form.kind.label)),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: removeCurrent,
+              icon: const Icon(Icons.delete_outline),
+              label: const Text('Bỏ mục này'),
+            ),
+          ],
+        ),
+        field(
+          form.kind == WeaknessKind.grammar
+              ? 'Mẫu ngữ pháp'
+              : form.kind == WeaknessKind.kanji
+              ? 'Chữ Kanji'
+              : 'Từ khóa',
+          form.title,
+          (v) => form.title = v,
+        ),
+        field(
+          form.kind == WeaknessKind.grammar
+              ? 'Nghĩa / cách dùng'
+              : 'Nghĩa trong câu hỏi/đáp án',
+          form.content,
+          (v) => form.content = v,
+          minLines: 2,
+        ),
+        if (lexical) field('Cách đọc', form.reading, (v) => form.reading = v),
+        if (lexical)
+          field(
+            'Hán Việt (nếu chắc chắn)',
+            form.hanViet,
+            (v) => form.hanViet = v,
+          ),
+        if (form.kind == WeaknessKind.grammar)
+          field(
+            'Cách chia / cấu trúc',
+            form.conjugation,
+            (v) => form.conjugation = v,
+            minLines: 2,
+          ),
+        if (examples)
+          field(
+            'Ví dụ / câu gốc',
+            form.examples.join('\n'),
+            (v) => form.examples = v
+                .split('\n')
+                .map((line) => line.trim())
+                .where((line) => line.isNotEmpty)
+                .toList(),
+            minLines: 2,
+          ),
+        field(
+          'Câu chứa điểm này',
+          form.sourceSentence,
+          (v) => form.sourceSentence = v,
+          minLines: 2,
+        ),
+        field(
+          'Điểm cần nhớ',
+          form.reminder,
+          (v) => form.reminder = v,
+          minLines: 2,
+        ),
+        field('Ghi chú của tôi', form.note, (v) => form.note = v, minLines: 2),
+        Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          children: [
+            ...form.tags.map(
+              (tag) => InputChip(
+                label: Text(tag),
+                onDeleted: () => setSheetState(() => form.tags.remove(tag)),
+              ),
+            ),
+            SizedBox(
+              width: 190,
+              child: TextField(
+                controller: tagController,
+                onSubmitted: (_) => addTag(),
+                decoration: const InputDecoration(
+                  hintText: 'Thêm thẻ',
+                  isDense: true,
+                ),
+              ),
+            ),
+            ActionChip(label: const Text('+ Thêm'), onPressed: addTag),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _WeaknessDraftForm {
+  _WeaknessDraftForm({
+    required this.id,
+    required this.kind,
+    required this.title,
+    required this.content,
+    required this.reminder,
+    required this.note,
+    required this.tags,
+    required this.reading,
+    required this.hanViet,
+    required this.conjugation,
+    required this.examples,
+    required this.sourceSentence,
+  });
+
+  factory _WeaknessDraftForm.fromDraft(WeakPointDraft draft, int index) =>
+      _WeaknessDraftForm(
+        id: '${DateTime.now().microsecondsSinceEpoch}_$index',
+        kind: draft.kind,
+        title: draft.title,
+        content: draft.content,
+        reminder: draft.reminder,
+        note: draft.note,
+        tags: {...draft.tags, draft.kind.label}.toList(),
+        reading: draft.reading,
+        hanViet: draft.hanViet,
+        conjugation: draft.conjugation,
+        examples: List.of(draft.examples),
+        sourceSentence: draft.sourceSentence,
+      );
+
+  final String id;
+  final WeaknessKind kind;
+  String title;
+  String content;
+  String reminder;
+  String note;
+  List<String> tags;
+  String reading;
+  String hanViet;
+  String conjugation;
+  List<String> examples;
+  String sourceSentence;
 }
 
 class _ToolButton extends StatelessWidget {
@@ -3526,7 +3667,9 @@ class _PageImageLayer extends StatelessWidget {
                         ),
                         child: Image.file(
                           File(placement.path),
-                          fit: BoxFit.contain,
+                          fit: placement.isBackground
+                              ? BoxFit.fill
+                              : BoxFit.contain,
                           errorBuilder: (_, _, _) => const Center(
                             child: Icon(Icons.broken_image_outlined),
                           ),

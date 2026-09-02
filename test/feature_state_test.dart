@@ -26,6 +26,23 @@ void main() {
     expect(state.modelIds[AiModelSlot.solve], isNull);
   });
 
+  test('tách bản nháp điểm yếu theo loại và giữ câu gốc', () {
+    final draft = WeakPointDraft.fromJson({
+      'title': '尊重',
+      'kind': 'vocabulary',
+      'meaning': 'tôn trọng trong câu đã khoanh',
+      'reading': 'そんちょう',
+      'sourceSentence': '彼の意見を尊重する。',
+      'tags': ['N3', 'Từ vựng'],
+    });
+
+    expect(draft.kind, WeaknessKind.vocabulary);
+    expect(draft.title, '尊重');
+    expect(draft.content, contains('trong câu'));
+    expect(draft.sourceSentence, contains('尊重'));
+    expect(draft.tags, contains('Từ vựng'));
+  });
+
   test('ảnh nền và ảnh chèn có vị trí độc lập', () {
     final state = AppState();
     addTearDown(state.dispose);
@@ -116,6 +133,25 @@ void main() {
 
     expect(state.strokesFor('book', 1), [stroke]);
     expect(state.strokesFor('book', 2), [otherStroke]);
+  });
+
+  test('mỗi vở nhớ trang cuối và model mặc định là Luna', () {
+    final state = AppState();
+    addTearDown(state.dispose);
+    const notebook = NotebookData(
+      id: 'book-pages',
+      title: 'Book',
+      type: 'Notebook',
+      pages: 600,
+      color: Color(0xff000000),
+    );
+    state.addNotebook(notebook);
+    state.open(notebook, page: 340);
+    state.closeEditor();
+    state.open(notebook);
+
+    expect(state.openPage, 340);
+    expect(state.selectedModelId, AppState.defaultAiModelId);
   });
 
   test('folder nested move, cycle protection and undo', () {

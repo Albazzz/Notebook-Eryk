@@ -360,6 +360,7 @@ class WeakPoint {
     this.hanViet = '',
     this.conjugation = '',
     this.examples = const [],
+    this.sourceSentence = '',
   });
 
   final String id;
@@ -379,6 +380,7 @@ class WeakPoint {
   String hanViet;
   String conjugation;
   List<String> examples;
+  String sourceSentence;
 
   Map<String, Object?> toJson() => {
     'id': id,
@@ -398,6 +400,7 @@ class WeakPoint {
     'hanViet': hanViet,
     'conjugation': conjugation,
     'examples': examples,
+    'sourceSentence': sourceSentence,
   };
 
   factory WeakPoint.fromJson(Map<String, dynamic> json) => WeakPoint(
@@ -418,7 +421,73 @@ class WeakPoint {
     hanViet: json['hanViet'] as String? ?? '',
     conjugation: json['conjugation'] as String? ?? '',
     examples: List<String>.from(json['examples'] as List? ?? const []),
+    sourceSentence: json['sourceSentence'] as String? ?? '',
   );
+}
+
+/// Bản nháp điểm yếu do AI tách ra từ một vùng câu hỏi/câu trả lời.
+/// Một vùng OCR có thể tạo nhiều bản nháp độc lập.
+class WeakPointDraft {
+  const WeakPointDraft({
+    required this.title,
+    required this.kind,
+    required this.content,
+    this.reminder = '',
+    this.note = '',
+    this.tags = const [],
+    this.reading = '',
+    this.hanViet = '',
+    this.conjugation = '',
+    this.examples = const [],
+    this.sourceSentence = '',
+  });
+
+  final String title;
+  final WeaknessKind kind;
+  final String content;
+  final String reminder;
+  final String note;
+  final List<String> tags;
+  final String reading;
+  final String hanViet;
+  final String conjugation;
+  final List<String> examples;
+  final String sourceSentence;
+
+  factory WeakPointDraft.fromJson(Map<String, dynamic> json) {
+    final rawKind = (json['kind'] ?? json['type'] ?? 'other')
+        .toString()
+        .trim()
+        .toLowerCase();
+    final kind = switch (rawKind) {
+      'grammar' || 'ngữ pháp' => WeaknessKind.grammar,
+      'vocabulary' || 'vocab' || 'từ vựng' => WeaknessKind.vocabulary,
+      'kanji' => WeaknessKind.kanji,
+      'reading' || 'đọc hiểu' => WeaknessKind.reading,
+      _ => WeaknessKind.other,
+    };
+    String stringValue(String key) => (json[key] as String? ?? '').trim();
+    List<String> stringList(String key) =>
+        (json[key] as List<dynamic>? ?? const [])
+            .map((value) => value.toString().trim())
+            .where((value) => value.isNotEmpty)
+            .toList(growable: false);
+    return WeakPointDraft(
+      title: stringValue('title'),
+      kind: kind,
+      content: stringValue('meaning').isNotEmpty
+          ? stringValue('meaning')
+          : stringValue('content'),
+      reminder: stringValue('reminder'),
+      note: stringValue('note'),
+      tags: stringList('tags'),
+      reading: stringValue('reading'),
+      hanViet: stringValue('hanViet'),
+      conjugation: stringValue('conjugation'),
+      examples: stringList('examples'),
+      sourceSentence: stringValue('sourceSentence'),
+    );
+  }
 }
 
 class DictionaryEntry {

@@ -14,6 +14,8 @@ import 'services.dart';
 import 'widgets/common.dart';
 
 class AppState extends ChangeNotifier {
+  static const defaultAiModelId = 'openai/gpt-5.6-luna';
+  static const defaultAiModelName = 'GPT-5.6 Luna';
   static const defaultToolbarTools = <EditorTool>[
     EditorTool.pen,
     EditorTool.highlighter,
@@ -40,7 +42,7 @@ class AppState extends ChangeNotifier {
 
   AppDestination destination = AppDestination.library;
   NotebookData? openNotebook;
-  int openPage = 12;
+  int openPage = 1;
   bool focusSource = false;
   ThemeMode themeMode = ThemeMode.light;
   bool autoSave = true;
@@ -53,8 +55,8 @@ class AppState extends ChangeNotifier {
   String studentName = 'Eryk';
   String jlpt = 'N3';
   String explanationLanguage = 'Tiếng Việt';
-  String selectedModelId = '';
-  String selectedModelName = '';
+  String selectedModelId = defaultAiModelId;
+  String selectedModelName = defaultAiModelName;
 
   /// Per-feature model assignments. The same API key can use different models.
   final Map<AiModelSlot, String> modelIds = {};
@@ -86,6 +88,7 @@ class AppState extends ChangeNotifier {
 
   final Map<String, List<InkStroke>> strokes = {};
   final Map<String, List<PinnedNote>> pinnedNotes = {};
+  final Map<String, int> lastPages = {};
 
   /// Local images attached to a notebook page (page number -> file paths).
   final Map<String, Map<int, List<String>>> pageImages = {};
@@ -119,8 +122,14 @@ class AppState extends ChangeNotifier {
     jlpt = prefs.getString('jlpt') ?? 'N3';
     explanationLanguage =
         prefs.getString('explanationLanguage') ?? 'Tiếng Việt';
-    selectedModelId = prefs.getString('selectedModelId') ?? '';
-    selectedModelName = prefs.getString('selectedModelName') ?? '';
+    final storedModelId = prefs.getString('selectedModelId');
+    final storedModelName = prefs.getString('selectedModelName');
+    selectedModelId = storedModelId?.trim().isNotEmpty == true
+        ? storedModelId!
+        : defaultAiModelId;
+    selectedModelName = storedModelName?.trim().isNotEmpty == true
+        ? storedModelName!
+        : defaultAiModelName;
     useAiVision = prefs.getBool('useAiVision') ?? false;
     final savedToolbarTools = prefs.getStringList('editorToolbarTools');
     if (savedToolbarTools != null) {
@@ -252,6 +261,9 @@ class AppState extends ChangeNotifier {
     final parsedWeakPoints = (data['weakPoints'] as List?)
         ?.map((item) => WeakPoint.fromJson(item as Map<String, dynamic>))
         .toList();
+    final parsedLastPages = (data['lastPages'] as Map?)?.map(
+      (key, value) => MapEntry(key.toString(), (value as num).toInt()),
+    );
     final parsedStrokes = (data['strokes'] as Map<String, dynamic>?)?.map(
       (key, value) => MapEntry(
         key,
@@ -294,6 +306,11 @@ class AppState extends ChangeNotifier {
       ..addAll(parsedDocuments);
     if (parsedWeakPoints != null) {
       weakPoints = parsedWeakPoints;
+    }
+    if (parsedLastPages != null) {
+      lastPages
+        ..clear()
+        ..addAll(parsedLastPages);
     }
     if (parsedStrokes != null) {
       strokes
@@ -450,6 +467,7 @@ class AppState extends ChangeNotifier {
     ),
     'blankPages': blankPages.toList(),
     'sourceDocuments': sourceDocuments,
+    'lastPages': lastPages,
     'weakPoints': weakPoints.map((item) => item.toJson()).toList(),
   };
 
@@ -769,7 +787,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void open(NotebookData notebook, {int page = 12, bool source = false}) {
+  void open(NotebookData notebook, {int? page, bool source = false}) {
     debugPrint(
       '[NoteEryk][Navigation] open notebook=${notebook.id} page=$page source=$source',
     );
@@ -777,17 +795,22 @@ class AppState extends ChangeNotifier {
     // A newly created notebook has one blank page. Clamp the requested page
     // so it can never open on a non-existent page (the old default of 12
     // made a one-page notebook appear to start at page 12).
-    openPage = page.clamp(1, notebook.pages);
+    final remembered = lastPages[notebook.id] ?? 1;
+    openPage = (page ?? remembered).clamp(1, notebook.pages);
+    lastPages[notebook.id] = openPage;
     focusSource = source;
     notifyListeners();
+    schedulePersistence();
   }
 
   void goToPage(int page) {
     if (openNotebook == null) return;
     openPage = page.clamp(1, openNotebook!.pages);
+    lastPages[openNotebook!.id] = openPage;
     focusSource = false;
     debugPrint('[NoteEryk][Pages] goToPage $openPage');
     notifyListeners();
+    schedulePersistence();
   }
 
   void closeEditor() {
@@ -1440,6 +1463,12 @@ class AppState extends ChangeNotifier {
         modelIds[slot] = selectedModelId;
         modelNames[slot] = selectedModelName;
       }
+    }
+    // New installs (and older installs without a per-feature assignment) use
+    // Luna consistently in every AI function while still allowing overrides.
+    for (final slot in AiModelSlot.values) {
+      modelIds.putIfAbsent(slot, () => selectedModelId);
+      modelNames.putIfAbsent(slot, () => selectedModelName);
     }
     final rawSaved = prefs.getString(_savedModelsStorageName);
     if (rawSaved != null) {
