@@ -5,10 +5,61 @@ import 'dart:ui';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:noteeryk/app_state.dart';
 import 'package:noteeryk/models.dart';
+import 'package:noteeryk/services.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('Luna chỉ nhận text sau OCR, không nhận lại ảnh đã khoanh', () async {
+    final editorSource = await File(
+      'lib/screens/editor_screen.dart',
+    ).readAsString();
+
+    expect(editorSource, isNot(contains('imagePath: crop.path')));
+    expect(editorSource, isNot(contains('imagePath: resolvedImage')));
+  });
+
+  test('giải thích giữ đủ phần dù model trả cấu trúc hơi khác schema', () {
+    final service = OpenRouterService();
+    addTearDown(service.dispose);
+    final formatted = service.formatStructuredResultForTesting(
+      AiTask.explain,
+      jsonEncode({
+        'meaning': 'Nghĩa tổng quát',
+        'grammar': {
+          'form': '〜わけではない',
+          'explanation': 'Không hẳn là',
+          'use': 'Dùng để phủ định một phần.',
+        },
+        'breakdown': ['彼が来ない → Anh ấy không đến'],
+        'choices': {
+          'option': 'B',
+          'correct': true,
+          'explanation': 'Phù hợp với ngữ cảnh.',
+        },
+        'warning': '',
+      }),
+    );
+
+    expect(formatted, contains('Nghĩa tổng quát'));
+    expect(formatted, contains('Cấu trúc chính'));
+    expect(formatted, contains('〜わけではない'));
+    expect(formatted, contains('Tách câu'));
+    expect(formatted, contains('Đáp án đúng: B'));
+  });
+
+  test('không âm thầm coi mỗi nghĩa là một giải thích đầy đủ', () {
+    final service = OpenRouterService();
+    addTearDown(service.dispose);
+    final formatted = service.formatStructuredResultForTesting(
+      AiTask.explain,
+      jsonEncode({'meaning': 'Chỉ có nghĩa', 'warning': ''}),
+    );
+
+    expect(formatted, contains('Chỉ có nghĩa'));
+    expect(formatted, contains('AI chưa trả đủ'));
+  });
+
   test(
     'từ chối backup thiếu ảnh trang và giữ nguyên thư viện hiện tại',
     () async {

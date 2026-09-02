@@ -1603,7 +1603,6 @@ class _EditorScreenState extends State<EditorScreen>
           text: recognized,
           jlpt: widget.state.jlpt,
           language: widget.state.explanationLanguage,
-          imagePath: crop.path,
         );
         if (!mounted || requestSerial != _aiRequestSerial) return;
         setState(
@@ -1632,7 +1631,6 @@ class _EditorScreenState extends State<EditorScreen>
           text: recognized,
           jlpt: widget.state.jlpt,
           language: widget.state.explanationLanguage,
-          imagePath: crop.path,
         );
         if (!mounted || requestSerial != _aiRequestSerial) return;
         setState(
@@ -1766,7 +1764,20 @@ class _EditorScreenState extends State<EditorScreen>
         rethrow;
       }
     }
-    if (_canUseAiVision) return _recognizeWithAiVision(imagePath);
+    if (_canUseAiVision) {
+      try {
+        return await _recognizeWithAiVision(imagePath);
+      } catch (visionError) {
+        // A temporary provider limit must not block the whole tool. The crop
+        // is already local, so fall back to on-device OCR without another
+        // network request and preserve the Vision error only if both fail.
+        try {
+          return await widget.state.ocr.recognizeImage(imagePath);
+        } catch (_) {
+          throw visionError;
+        }
+      }
+    }
     return widget.state.ocr.recognizeImage(imagePath);
   }
 
@@ -1917,6 +1928,9 @@ class _EditorScreenState extends State<EditorScreen>
     }
     if (value.contains('quota') || value.contains('402')) {
       return 'Tài khoản OpenRouter đã hết quota.';
+    }
+    if (value.contains('429')) {
+      return 'Dịch vụ AI đang giới hạn lượt. Hãy đợi một chút rồi thử lại.';
     }
     if (value.contains('SocketException')) {
       return 'Mất kết nối mạng. Vùng chọn của bạn vẫn được giữ.';
@@ -2886,7 +2900,6 @@ class _EditorScreenState extends State<EditorScreen>
           jlpt: widget.state.jlpt,
           language: widget.state.explanationLanguage,
           kinds: chosenKinds,
-          imagePath: resolvedImage,
         );
       } catch (_) {}
       if (!mounted || activeSerial != _aiRequestSerial) return;

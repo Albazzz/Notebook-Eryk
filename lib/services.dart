@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
 import 'package:flutter/services.dart';
@@ -350,6 +351,8 @@ class OpenRouterService {
   final HttpClient _client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 15);
   final Map<String, String> _completionCache = {};
+  final Map<String, String> _visionOcrCache = {};
+  final Map<String, Future<String>> _visionOcrInFlight = {};
 
   Future<void> testConnection(String apiKey) async {
     final response = await _request('GET', '/key', apiKey);
@@ -395,7 +398,6 @@ class OpenRouterService {
     required String jlpt,
     required String language,
     String? weaknessKind,
-    String? imagePath,
   }) async {
     final instruction = _promptFor(
       task,
@@ -414,22 +416,9 @@ class OpenRouterService {
       language,
       weaknessKind ?? '',
       text.trim(),
-      imagePath ?? '',
     ].join('|');
     final cached = _completionCache[cacheKey];
     if (cached != null) return cached;
-    final userContent = imagePath == null
-        ? text
-        : [
-            {'type': 'text', 'text': text},
-            {
-              'type': 'image_url',
-              'image_url': {
-                'url':
-                    'data:image/png;base64,${base64Encode(await File(imagePath).readAsBytes())}',
-              },
-            },
-          ];
     final response = await _request(
       'POST',
       '/chat/completions',
@@ -438,12 +427,16 @@ class OpenRouterService {
         'model': normalizedModelId,
         'messages': [
           {'role': 'system', 'content': instruction},
-          {'role': 'user', 'content': userContent},
+          {'role': 'user', 'content': text},
         ],
         'temperature': 0.25,
         // Dictionary responses are intentionally short; limiting output
         // reduces latency and leaves less room for speculative explanations.
-        'max_tokens': task == AiTask.dictionary ? 220 : 700,
+        'max_tokens': switch (task) {
+          AiTask.dictionary => 220,
+          AiTask.explain => 1050,
+          _ => 700,
+        },
       }),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -479,7 +472,6 @@ class OpenRouterService {
     required String jlpt,
     required String language,
     required Set<WeaknessKind> kinds,
-    String? imagePath,
   }) async {
     final selected = kinds.map((kind) => kind.name).join(', ');
     final instruction =
@@ -509,18 +501,6 @@ Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
 ''';
     final normalizedModelId = modelId.trim();
     if (normalizedModelId.isEmpty) throw ArgumentError('Chưa chọn model AI');
-    final userContent = imagePath == null
-        ? text
-        : [
-            {'type': 'text', 'text': text},
-            {
-              'type': 'image_url',
-              'image_url': {
-                'url':
-                    'data:image/png;base64,${base64Encode(await File(imagePath).readAsBytes())}',
-              },
-            },
-          ];
     final response = await _request(
       'POST',
       '/chat/completions',
@@ -529,7 +509,7 @@ Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
         'model': normalizedModelId,
         'messages': [
           {'role': 'system', 'content': instruction},
-          {'role': 'user', 'content': userContent},
+          {'role': 'user', 'content': text},
         ],
         'temperature': 0.15,
         'max_tokens': 1400,
@@ -572,39 +552,85 @@ Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
     required String imagePath,
   }) async {
     final bytes = await File(imagePath).readAsBytes();
-    final response = await _request(
-      'POST',
-      '/chat/completions',
-      apiKey,
-      body: jsonEncode({
-        'model': modelId.trim(),
-        'messages': [
-          {
-            'role': 'system',
-            'content':
-                'Bạn là OCR tiếng Nhật. Chỉ đọc đúng chữ nhìn thấy trong ảnh, giữ nguyên kanji/kana và xuống dòng. Trả về DUY NHẤT JSON object dạng {"text":"...","warning":""}. Không suy đoán phần bị cắt hoặc mờ.',
-          },
-          {
-            'role': 'user',
-            'content': [
-              {
-                'type': 'text',
-                'text': 'Đọc toàn bộ chữ Nhật trong vùng ảnh đã khoanh.',
-              },
-              {
-                'type': 'image_url',
-                'image_url': {
-                  'url': 'data:image/png;base64,${base64Encode(bytes)}',
-                },
-              },
-            ],
-          },
-        ],
-        'temperature': 0,
-        'max_tokens': 160,
-      }),
+    final normalizedModelId = modelId.trim();
+    if (normalizedModelId.isEmpty) {
+      throw ArgumentError('Chưa chọn model nhận diện ảnh');
+    }
+    final cacheKey =
+        '$normalizedModelId|${bytes.length}|${_byteFingerprint(bytes)}';
+    final cached = _visionOcrCache[cacheKey];
+    if (cached != null) return cached;
+    final running = _visionOcrInFlight[cacheKey];
+    if (running != null) return running;
+    final operation = _recognizeImageBytesWithAi(
+      apiKey: apiKey,
+      modelId: normalizedModelId,
+      bytes: bytes,
     );
+    _visionOcrInFlight[cacheKey] = operation;
+    try {
+      final result = await operation;
+      if (_visionOcrCache.length >= 30) {
+        _visionOcrCache.remove(_visionOcrCache.keys.first);
+      }
+      _visionOcrCache[cacheKey] = result;
+      return result;
+    } finally {
+      _visionOcrInFlight.remove(cacheKey);
+    }
+  }
+
+  Future<String> _recognizeImageBytesWithAi({
+    required String apiKey,
+    required String modelId,
+    required List<int> bytes,
+  }) async {
+    final body = jsonEncode({
+      'model': modelId,
+      'messages': [
+        {
+          'role': 'system',
+          'content':
+              'Bạn là OCR tiếng Nhật. Chỉ đọc đúng chữ nhìn thấy trong ảnh, giữ nguyên kanji/kana và xuống dòng. Trả về DUY NHẤT JSON object dạng {"text":"...","warning":""}. Không suy đoán phần bị cắt hoặc mờ.',
+        },
+        {
+          'role': 'user',
+          'content': [
+            {
+              'type': 'text',
+              'text': 'Đọc toàn bộ chữ Nhật trong vùng ảnh đã khoanh.',
+            },
+            {
+              'type': 'image_url',
+              'image_url': {
+                'url': 'data:image/png;base64,${base64Encode(bytes)}',
+              },
+            },
+          ],
+        },
+      ],
+      'temperature': 0,
+      'max_tokens': 220,
+    });
+    late _HttpResult response;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      response = await _request(
+        'POST',
+        '/chat/completions',
+        apiKey,
+        body: body,
+      );
+      if (response.statusCode != 429 || attempt == 1) break;
+      await Future<void>.delayed(
+        response.retryAfter ?? const Duration(seconds: 2),
+      );
+    }
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      if (response.statusCode == 429) {
+        throw const HttpException(
+          'Model nhận diện ảnh đang giới hạn lượt (429)',
+        );
+      }
       throw HttpException('Nhận diện ảnh thất bại (${response.statusCode})');
     }
     final decoded = jsonDecode(response.body) as Map<String, dynamic>;
@@ -628,6 +654,14 @@ Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
     }
   }
 
+  int _byteFingerprint(List<int> bytes) {
+    var hash = 0xcbf29ce484222325;
+    for (final byte in bytes) {
+      hash = ((hash ^ byte) * 0x100000001b3) & 0xffffffffffffffff;
+    }
+    return hash;
+  }
+
   String _promptFor(
     AiTask task, {
     required String jlpt,
@@ -647,6 +681,7 @@ Giữ tên riêng; câu dịch tự nhiên; nuance tối đa 1 câu.''',
 Nhiệm vụ: giải thích tiếng Nhật bằng $language ở độ khó phù hợp $jlpt.
 Schema bắt buộc: {"meaning":"...","structures":[{"pattern":"...","meaning":"...","usage":"..."}],"segments":[{"japanese":"...","meaning":"..."}],"choiceAnalysis":[{"label":"A","correct":false,"reason":"..."}],"warning":""}.
 Chỉ chọn tối đa 3 cấu trúc chính và tối đa 6 đoạn tách câu.
+Với một câu hoàn chỉnh, meaning, structures và segments đều bắt buộc có nội dung; không được chỉ trả meaning. Mỗi cấu trúc phải có pattern, meaning và usage. Mỗi đoạn phải giữ nguyên japanese rồi mới giải nghĩa.
 Nếu nội dung là câu hỏi có các lựa chọn, xác định đáp án đúng rồi giải thích thật đơn giản vì sao đúng và vì sao từng lựa chọn còn lại sai. Mỗi reason tối đa 2 câu. Nếu không có lựa chọn, trả choiceAnalysis là [].''',
       AiTask.solve =>
         '''
@@ -690,6 +725,10 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
       return _cleanAiText(raw);
     }
   }
+
+  @visibleForTesting
+  String formatStructuredResultForTesting(AiTask task, String raw) =>
+      _formatStructuredResult(task, raw);
 
   /// Models occasionally wrap the required object in prose or a markdown
   /// code fence. Find and decode the first balanced JSON object so the user
@@ -755,27 +794,75 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
   }
 
   String _formatExplanation(Map<String, dynamic> data) {
-    final buffer = StringBuffer('Nghĩa\n${data['meaning'] ?? ''}');
-    final structures = data['structures'] as List<dynamic>? ?? const [];
+    final meaning = _firstText(data, const [
+      'meaning',
+      'summary',
+      'overallMeaning',
+      'explanation',
+    ]);
+    final buffer = StringBuffer('Nghĩa\n$meaning');
+    final structures = _firstItems(data, const [
+      'structures',
+      'grammar',
+      'grammarPoints',
+      'patterns',
+    ]);
     if (structures.isNotEmpty) buffer.write('\n\nCấu trúc chính');
     for (final rawItem in structures) {
-      final item = rawItem as Map<String, dynamic>;
-      buffer.write('\n${item['pattern'] ?? ''} — ${item['meaning'] ?? ''}');
-      final usage = item['usage'] as String? ?? '';
+      if (rawItem is! Map) {
+        final text = rawItem.toString().trim();
+        if (text.isNotEmpty) buffer.write('\n$text');
+        continue;
+      }
+      final item = Map<String, dynamic>.from(rawItem);
+      final pattern = _firstText(item, const ['pattern', 'form', 'grammar']);
+      final itemMeaning = _firstText(item, const ['meaning', 'explanation']);
+      final heading = [
+        pattern,
+        itemMeaning,
+      ].where((value) => value.isNotEmpty).join(' — ');
+      if (heading.isNotEmpty) buffer.write('\n$heading');
+      final usage = _firstText(item, const ['usage', 'use', 'conjugation']);
       if (usage.isNotEmpty) buffer.write('\n$usage');
     }
-    final segments = data['segments'] as List<dynamic>? ?? const [];
+    final segments = _firstItems(data, const [
+      'segments',
+      'breakdown',
+      'sentenceBreakdown',
+      'parts',
+    ]);
     if (segments.isNotEmpty) buffer.write('\n\nTách câu');
     for (final rawItem in segments) {
-      final item = rawItem as Map<String, dynamic>;
-      buffer.write('\n${item['japanese'] ?? ''} → ${item['meaning'] ?? ''}');
+      if (rawItem is! Map) {
+        final text = rawItem.toString().trim();
+        if (text.isNotEmpty) buffer.write('\n$text');
+        continue;
+      }
+      final item = Map<String, dynamic>.from(rawItem);
+      final japanese = _firstText(item, const ['japanese', 'text', 'segment']);
+      final itemMeaning = _firstText(item, const [
+        'meaning',
+        'translation',
+        'explanation',
+      ]);
+      final line = [
+        japanese,
+        itemMeaning,
+      ].where((value) => value.isNotEmpty).join(' → ');
+      if (line.isNotEmpty) buffer.write('\n$line');
     }
-    final choices = data['choiceAnalysis'] as List<dynamic>? ?? const [];
+    final choices = _firstItems(data, const [
+      'choiceAnalysis',
+      'choices',
+      'options',
+      'answers',
+    ]);
     if (choices.isNotEmpty) {
       final correctLabels = choices
-          .whereType<Map<String, dynamic>>()
-          .where((item) => item['correct'] == true)
-          .map((item) => '${item['label'] ?? ''}')
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .where((item) => _isTrue(item['correct']))
+          .map((item) => _firstText(item, const ['label', 'option', 'answer']))
           .where((label) => label.isNotEmpty)
           .join(', ');
       if (correctLabels.isNotEmpty) {
@@ -784,13 +871,50 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
       buffer.write('\nGiải thích đơn giản từng lựa chọn:');
     }
     for (final rawItem in choices) {
-      final item = rawItem as Map<String, dynamic>;
+      if (rawItem is! Map) {
+        final text = rawItem.toString().trim();
+        if (text.isNotEmpty) buffer.write('\n$text');
+        continue;
+      }
+      final item = Map<String, dynamic>.from(rawItem);
+      final label = _firstText(item, const ['label', 'option', 'answer']);
+      final correct = _isTrue(item['correct']);
+      final reason = _firstText(item, const [
+        'reason',
+        'explanation',
+        'meaning',
+      ]);
+      buffer.write('\n$label${correct ? ' ✓' : ' ✗'}: $reason');
+    }
+    if (structures.isEmpty && segments.isEmpty && choices.isEmpty) {
       buffer.write(
-        '\n${item['label'] ?? ''}${item['correct'] == true ? ' ✓' : ' ✗'}: ${item['reason'] ?? ''}',
+        '\n\nPhân tích\nAI chưa trả đủ phần cấu trúc và tách câu; kết quả trên mới chỉ có nghĩa tổng quát.',
       );
     }
     return buffer.toString();
   }
+
+  String _firstText(Map<String, dynamic> data, List<String> keys) {
+    for (final key in keys) {
+      final value = data[key];
+      if (value is String && value.trim().isNotEmpty) return value.trim();
+      if (value is num || value is bool) return value.toString();
+    }
+    return '';
+  }
+
+  List<dynamic> _firstItems(Map<String, dynamic> data, List<String> keys) {
+    for (final key in keys) {
+      final value = data[key];
+      if (value is List && value.isNotEmpty) return value;
+      if (value is Map) return [value];
+      if (value is String && value.trim().isNotEmpty) return [value.trim()];
+    }
+    return const [];
+  }
+
+  bool _isTrue(Object? value) =>
+      value == true || value?.toString().toLowerCase() == 'true';
 
   String _formatSolution(Map<String, dynamic> data) {
     final buffer = StringBuffer(
@@ -848,13 +972,38 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
       request.add(bodyBytes);
     }
     final response = await request.close().timeout(const Duration(seconds: 30));
+    final retryAfter = _retryAfter(response.headers.value('retry-after'));
     final responseBody = await utf8.decoder.bind(response).join();
-    return _HttpResult(response.statusCode, responseBody);
+    return _HttpResult(response.statusCode, responseBody, retryAfter);
+  }
+
+  Duration? _retryAfter(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    final seconds = int.tryParse(value.trim());
+    Duration? duration;
+    if (seconds != null) {
+      duration = Duration(seconds: seconds);
+    } else {
+      try {
+        duration = HttpDate.parse(
+          value.trim(),
+        ).difference(DateTime.now().toUtc());
+      } catch (_) {}
+    }
+    if (duration == null || duration.isNegative) return null;
+    if (duration < const Duration(milliseconds: 500)) {
+      duration = const Duration(milliseconds: 500);
+    }
+    if (duration > const Duration(seconds: 5)) {
+      duration = const Duration(seconds: 5);
+    }
+    return duration;
   }
 }
 
 class _HttpResult {
-  const _HttpResult(this.statusCode, this.body);
+  const _HttpResult(this.statusCode, this.body, this.retryAfter);
   final int statusCode;
   final String body;
+  final Duration? retryAfter;
 }
