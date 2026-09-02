@@ -173,9 +173,10 @@ void main() {
       addTearDown(() => PathProviderPlatform.instance = originalProvider);
       SharedPreferences.setMockInitialValues({'autoSave': false});
 
+      final documents = Directory('${root.path}/documents');
       final support = Directory('${root.path}/support');
       final currentImage = File(
-        '${support.path}${Platform.pathSeparator}imports${Platform.pathSeparator}page_images${Platform.pathSeparator}page-1.jpg',
+        '${documents.path}${Platform.pathSeparator}imports${Platform.pathSeparator}page_images${Platform.pathSeparator}page-1.jpg',
       );
       await currentImage.parent.create(recursive: true);
       await currentImage.writeAsBytes(const [9, 8, 7, 6], flush: true);
@@ -213,9 +214,10 @@ void main() {
         'lastPages': <String, dynamic>{},
         'weakPoints': <dynamic>[],
       };
+      await documents.create(recursive: true);
       await support.create(recursive: true);
       await File(
-        '${support.path}/notebook_library_v2.json',
+        '${root.path}/support/notebook_library_v2.json',
       ).writeAsString(jsonEncode(snapshot), flush: true);
 
       final state = AppState();

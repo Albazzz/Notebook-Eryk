@@ -441,6 +441,12 @@ class AppState extends ChangeNotifier {
   Future<bool> _repairRelocatedAttachmentPaths() async {
     try {
       final support = await getApplicationSupportDirectory();
+      // Imported PDFs/images are stored in Documents, while rendered repair
+      // backgrounds and restored backup files use Application Support. Both
+      // directories can keep their contents while the absolute container
+      // prefix changes after an iPad update.
+      final documents = await getApplicationDocumentsDirectory();
+      final roots = <String>{support.path, documents.path};
       final replacements = <String, String>{};
       for (final oldPath in _attachmentPaths().toSet()) {
         if (oldPath.isEmpty || await File(oldPath).exists()) continue;
@@ -454,11 +460,14 @@ class AppState extends ChangeNotifier {
           }
         }
         if (relative == null) continue;
-        final candidate = File(
-          '${support.path}${Platform.pathSeparator}${relative.replaceAll('/', Platform.pathSeparator)}',
-        );
-        if (await _isUsableBackupFile(candidate)) {
-          replacements[oldPath] = candidate.path;
+        for (final root in roots) {
+          final candidate = File(
+            '$root${Platform.pathSeparator}${relative.replaceAll('/', Platform.pathSeparator)}',
+          );
+          if (await _isUsableBackupFile(candidate)) {
+            replacements[oldPath] = candidate.path;
+            break;
+          }
         }
       }
       if (replacements.isEmpty) return false;
