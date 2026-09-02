@@ -38,7 +38,7 @@ class AppState extends ChangeNotifier {
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   final OpenRouterService aiService = OpenRouterService();
   final DictionaryRepository dictionary = LocalDictionaryRepository();
-  final OcrService ocr = MlKitJapaneseOcrService();
+  final OcrService ocr = AppleVisionJapaneseOcrService();
 
   AppDestination destination = AppDestination.library;
   NotebookData? openNotebook;

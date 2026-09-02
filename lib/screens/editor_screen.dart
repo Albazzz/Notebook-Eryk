@@ -1761,8 +1761,8 @@ class _EditorScreenState extends State<EditorScreen>
   }
 
   Future<String> _recognizeSelectionText(String imagePath) async {
-    // Dictionary tools should be fast and reproducible: use ML Kit first and
-    // reserve paid/network Vision OCR for an actual local-OCR failure. Other
+    // Dictionary tools should be fast and reproducible: use Apple Vision first
+    // and reserve paid/network Vision OCR for an actual local-OCR failure. Other
     // AI tools retain the explicit Vision preference configured by the user.
     final dictionaryTool =
         tool == EditorTool.dictionary || tool == EditorTool.aiDictionary;
@@ -1915,7 +1915,7 @@ class _EditorScreenState extends State<EditorScreen>
     );
     await cropDirectory.create(recursive: true);
     // Upscale only very small crops. This is inexpensive compared with a
-    // network request and gives ML Kit/Vision a useful minimum glyph size.
+    // network request and gives Apple Vision a useful minimum glyph size.
     var encoded = bytes.buffer.asUint8List();
     final decoded = img.decodeImage(encoded);
     if (decoded != null && (decoded.width < 320 || decoded.height < 160)) {

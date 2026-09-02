@@ -609,7 +609,7 @@ class _AiSettingsState extends State<_AiSettings> {
                     : null,
                 title: const Text('Dùng AI nhận diện ảnh'),
                 subtitle: const Text(
-                  'Tắt để dùng OCR ML Kit trên máy và không phát sinh phí.',
+                  'Tắt để dùng Apple Vision OCR trên iPad và không phát sinh phí.',
                 ),
               ),
             ],

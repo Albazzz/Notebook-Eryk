@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
@@ -325,22 +324,25 @@ abstract class OcrService {
   Future<String> recognizeImage(String imagePath);
 }
 
-class MlKitJapaneseOcrService implements OcrService {
-  final TextRecognizer _recognizer = TextRecognizer(
-    script: TextRecognitionScript.japanese,
-  );
+/// Japanese OCR backed by Apple's Vision framework on iPadOS.
+class AppleVisionJapaneseOcrService implements OcrService {
+  static const _channel = MethodChannel('noteeryk/apple_vision_ocr');
 
   @override
   Future<String> recognizeImage(String imagePath) async {
-    final image = InputImage.fromFilePath(imagePath);
-    final result = await _recognizer.processImage(image);
-    final text = result.text.trim();
-    if (text.isEmpty) {
-      throw const FormatException(
-        'Không nhận dạng được chữ trong vùng đã chọn',
+    try {
+      final text = await _channel.invokeMethod<String>(
+        'recognizeJapaneseText',
+        {'imagePath': imagePath},
       );
+      final normalized = text?.trim() ?? '';
+      if (normalized.isEmpty) {
+        throw const FormatException('Vision OCR returned no text');
+      }
+      return normalized;
+    } on PlatformException catch (error) {
+      throw FormatException(error.message ?? 'Apple Vision OCR failed');
     }
-    return text;
   }
 }
 
@@ -544,7 +546,7 @@ Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
 
   void dispose() => _client.close(force: true);
 
-  /// Optional paid OCR path. The editor still defaults to on-device ML Kit;
+  /// Optional paid OCR path. The editor defaults to on-device Apple Vision;
   /// this is only used when the user explicitly enables AI image recognition.
   Future<String> recognizeImageWithAi({
     required String apiKey,

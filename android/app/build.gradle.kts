@@ -35,11 +35,6 @@ android {
     }
 }
 
-dependencies {
-    // Bundled ML Kit model: Japanese OCR works immediately and stays on-device.
-    implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
-}
-
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17

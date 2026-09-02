@@ -33,7 +33,7 @@ APK debug được tạo tại `build/app/outputs/flutter-apk/app-debug.apk`.
 
 ## Điểm tích hợp cần dữ liệu/native service
 
-- OCR tiếng Nhật dùng ML Kit Text Recognition v2 trên thiết bị. App crop đúng vùng khoanh, lưu PNG nguồn và OCR text cùng Điểm yếu.
+- OCR tiếng Nhật trên iPad dùng Apple Vision chạy trên thiết bị. App crop đúng vùng khoanh, lưu PNG nguồn và OCR text cùng Điểm yếu.
 - `LocalDictionaryRepository` có dữ liệu mẫu. Hãy thay implementation bằng database Nhật–Việt thực tế của sản phẩm.
 - Sheet nhập PDF đã có UX và mô hình notebook; chọn file/render từng trang PDF cần nối plugin PDF/file picker trong giai đoạn tích hợp thiết bị.
 
@@ -51,7 +51,7 @@ cd ios && pod install && cd ..
 open ios/Runner.xcworkspace
 ```
 
-Trong Xcode, chọn Team Apple Developer, đổi Bundle Identifier nếu cần, cắm iPad và bấm Run. Để gửi bản beta cho iPad, archive rồi upload lên App Store Connect và cài qua TestFlight. Project đã bật iPad và đặt iOS Deployment Target 15.5 vì ML Kit yêu cầu tối thiểu phiên bản này.
+Trong Xcode, chọn Team Apple Developer, đổi Bundle Identifier nếu cần, cắm iPad và bấm Run. Để gửi bản beta cho iPad, archive rồi upload lên App Store Connect và cài qua TestFlight. Project đã bật iPad và đặt iOS Deployment Target 15.5; OCR Vision chạy trực tiếp trên thiết bị.
 
 ### Share Extension trên iPad
 
