@@ -148,6 +148,40 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
   }
 
+  Future<void> _deletePermanentlySelectedNotebooks() async {
+    final selectedIds = Set<String>.of(_selectedNotebookIds);
+    if (selectedIds.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Xóa vĩnh viễn ${selectedIds.length} vở?'),
+        content: const Text(
+          'Dữ liệu sẽ bị xóa khỏi Thùng rác và không thể khôi phục.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.delete_forever_outlined),
+            label: const Text('Xóa vĩnh viễn'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    for (final id in selectedIds) {
+      widget.state.removeNotebook(id);
+    }
+    _clearNotebookSelection();
+    if (mounted) {
+      showAppSnack(context, 'Đã xóa vĩnh viễn ${selectedIds.length} vở');
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -215,8 +249,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
       child: Column(
         children: [
           PageHeader(
-            title: 'Vở của tôi',
-            subtitle: 'Mọi trang học tiếng Nhật, ngay trong tầm bút.',
+            title: widget.state.librarySection == 'trash'
+                ? 'Thùng rác'
+                : 'Vở của tôi',
+            subtitle: widget.state.librarySection == 'trash'
+                ? 'Chọn khôi phục hoặc xóa vĩnh viễn từng vở.'
+                : 'Mọi trang học tiếng Nhật, ngay trong tầm bút.',
             trailing: _selectedNotebookIds.isNotEmpty
                 ? Wrap(
                     crossAxisAlignment: WrapCrossAlignment.center,
@@ -230,13 +268,21 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                       ),
-                      if (widget.state.librarySection == 'trash')
+                      if (widget.state.librarySection == 'trash') ...[
                         IconButton.filledTonal(
-                          tooltip: 'Khôi phục các vở đã chọn',
+                          tooltip: 'Khôi phục về Tất cả ghi chú',
                           onPressed: _restoreSelectedNotebooks,
                           icon: const Icon(Icons.restore_from_trash_outlined),
-                        )
-                      else ...[
+                        ),
+                        IconButton.filledTonal(
+                          tooltip: 'Xóa vĩnh viễn các vở đã chọn',
+                          onPressed: _deletePermanentlySelectedNotebooks,
+                          icon: const Icon(
+                            Icons.delete_forever_outlined,
+                            color: Colors.red,
+                          ),
+                        ),
+                      ] else ...[
                         IconButton.filledTonal(
                           tooltip: 'Di chuyển vào folder khác',
                           onPressed: _moveSelectedNotebooks,
@@ -1223,11 +1269,26 @@ class _LibraryScreenState extends State<LibraryScreen> {
               title: Text(notebook.isPinned ? 'Bỏ yêu thích' : 'Yêu thích'),
               onTap: () => Navigator.pop(context, 'pin'),
             ),
-            ListTile(
-              leading: const Icon(Icons.delete_outline, color: Colors.red),
-              title: const Text('Xóa vở'),
-              onTap: () => Navigator.pop(context, 'delete'),
-            ),
+            if (notebook.isTrashed) ...[
+              ListTile(
+                leading: const Icon(Icons.restore_from_trash_outlined),
+                title: const Text('Khôi phục về Tất cả ghi chú'),
+                onTap: () => Navigator.pop(context, 'restore'),
+              ),
+              ListTile(
+                leading: const Icon(
+                  Icons.delete_forever_outlined,
+                  color: Colors.red,
+                ),
+                title: const Text('Xóa vĩnh viễn'),
+                onTap: () => Navigator.pop(context, 'deleteForever'),
+              ),
+            ] else
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                title: const Text('Chuyển vào Thùng rác'),
+                onTap: () => Navigator.pop(context, 'trash'),
+              ),
           ],
         ),
       ),
@@ -1241,13 +1302,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
       await _showNotebookPaperSettings(notebook);
     } else if (action == 'pin') {
       widget.state.pinNotebook(notebook.id);
-    } else if (action == 'delete') {
+    } else if (action == 'trash') {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Xóa vở này?'),
+          title: const Text('Chuyển vở vào Thùng rác?'),
           content: Text(
-            'Toàn bộ nội dung “${notebook.title}” sẽ bị gỡ khỏi thư viện.',
+            'Vở “${notebook.title}” sẽ được chuyển vào Thùng rác và vẫn có thể khôi phục.',
           ),
           actions: [
             TextButton(
@@ -1257,14 +1318,42 @@ class _LibraryScreenState extends State<LibraryScreen> {
             FilledButton(
               style: FilledButton.styleFrom(backgroundColor: Colors.red),
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Xóa'),
+              child: const Text('Chuyển vào Thùng rác'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      widget.state.moveNotebooksToTrash([notebook.id]);
+      showAppSnack(context, 'Đã chuyển vào Thùng rác');
+    } else if (action == 'restore') {
+      widget.state.restoreNotebooksFromTrash([notebook.id]);
+      showAppSnack(context, 'Đã khôi phục về Tất cả ghi chú');
+    } else if (action == 'deleteForever') {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Xóa vĩnh viễn vở này?'),
+          content: Text(
+            'Toàn bộ dữ liệu của “${notebook.title}” sẽ bị xóa khỏi Thùng rác và không thể khôi phục.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Hủy'),
+            ),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(context, true),
+              icon: const Icon(Icons.delete_forever_outlined),
+              label: const Text('Xóa vĩnh viễn'),
             ),
           ],
         ),
       );
       if (confirmed != true || !mounted) return;
       widget.state.removeNotebook(notebook.id);
-      showAppSnack(context, 'Đã xóa ${notebook.title}');
+      showAppSnack(context, 'Đã xóa vĩnh viễn');
     }
   }
 
