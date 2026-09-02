@@ -207,16 +207,67 @@ class AppState extends ChangeNotifier {
       ('file', fileRaw),
       if (preferenceRaw != fileRaw) ('preferences', preferenceRaw),
     ];
+    final decodedCandidates = <({String source, Map<String, dynamic> data})>[];
     for (final (source, raw) in candidates) {
       if (raw == null || raw.isEmpty) continue;
       try {
-        _applyLibrarySnapshot(jsonDecode(raw) as Map<String, dynamic>);
-        return;
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          decodedCandidates.add((source: source, data: decoded));
+        }
       } catch (error) {
         debugPrint('[NoteEryk][Storage] $source library load failed: $error');
       }
     }
+    if (decodedCandidates.isEmpty) return;
+    // The file and SharedPreferences mirror can be one write apart when an
+    // update or forced close interrupts persistence. Prefer the snapshot that
+    // still contains the most actual notebook content, then use its timestamp
+    // as a tie-breaker. This prevents a sparse file (cover only) replacing a
+    // complete mirror containing page backgrounds and strokes.
+    decodedCandidates.sort((a, b) {
+      final score = _snapshotContentScore(
+        b.data,
+      ).compareTo(_snapshotContentScore(a.data));
+      if (score != 0) return score;
+      return _snapshotTimestamp(b.data).compareTo(_snapshotTimestamp(a.data));
+    });
+    final selected = decodedCandidates.first;
+    debugPrint('[NoteEryk][Storage] loaded ${selected.source} snapshot');
+    _applyLibrarySnapshot(selected.data);
   }
+
+  int _snapshotContentScore(Map<String, dynamic> data) {
+    int listLength(String key) => (data[key] as List?)?.length ?? 0;
+    var score = listLength('notebooks') * 100000;
+    score += listLength('weakPoints') * 100;
+    score += listLength('blankPages') * 10;
+    final strokes = data['strokes'] as Map?;
+    if (strokes != null) {
+      score += strokes.values.fold<int>(
+        0,
+        (sum, value) => sum + (value as List).length * 10,
+      );
+    }
+    final images = data['pageImages'] as Map?;
+    if (images != null) {
+      for (final pages in images.values) {
+        if (pages is Map) {
+          score += pages.values.fold<int>(
+            0,
+            (sum, value) => sum + (value as List).length * 20,
+          );
+        }
+      }
+    }
+    score += ((data['imagePlacements'] as Map?)?.length ?? 0) * 20;
+    score += ((data['sourceDocuments'] as Map?)?.length ?? 0) * 20;
+    score += ((data['pinnedNotes'] as Map?)?.length ?? 0) * 10;
+    return score;
+  }
+
+  String _snapshotTimestamp(Map<String, dynamic> data) =>
+      (data['updatedAt'] as String?) ?? '';
 
   void _applyLibrarySnapshot(Map<String, dynamic> data) {
     // Decode into temporary values first. A corrupt attachment/page entry must
@@ -519,14 +570,34 @@ class AppState extends ChangeNotifier {
     final directory = await getApplicationSupportDirectory();
     final target = File('${directory.path}/notebook_library_v2.json');
     final temporary = File('${target.path}.tmp');
+    final previous = File('${target.path}.previous');
     await temporary.writeAsString(encoded, flush: true);
-    if (await target.exists()) await target.delete();
-    await temporary.rename(target.path);
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_libraryStorageName, encoded);
     } catch (error) {
       debugPrint('[NoteEryk][Storage] preferences mirror failed: $error');
+    }
+    try {
+      if (await previous.exists()) await previous.delete();
+      if (await target.exists()) await target.rename(previous.path);
+      await temporary.rename(target.path);
+      if (await previous.exists()) await previous.delete();
+    } catch (error) {
+      // Never leave the app without a readable file if replacement is
+      // interrupted by an update or process termination.
+      if (!await target.exists() && await previous.exists()) {
+        try {
+          await previous.rename(target.path);
+        } catch (_) {}
+      }
+      rethrow;
+    } finally {
+      if (await temporary.exists()) {
+        try {
+          await temporary.delete();
+        } catch (_) {}
+      }
     }
   }
 
