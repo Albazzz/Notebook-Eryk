@@ -70,6 +70,25 @@ class PageImagePlacement {
 
 enum WeaknessKind { grammar, vocabulary, kanji, reading, other }
 
+enum TranslationStyle { literal, balanced, fluent }
+
+extension TranslationStyleLabel on TranslationStyle {
+  String get label => switch (this) {
+    TranslationStyle.literal => 'Sát nghĩa',
+    TranslationStyle.balanced => 'Tự nhiên',
+    TranslationStyle.fluent => 'Mượt mà',
+  };
+
+  String get helper => switch (this) {
+    TranslationStyle.literal =>
+      'Bám sát từ ngữ và cấu trúc câu gốc, không lược ý.',
+    TranslationStyle.balanced =>
+      'Giữ đủ ý nhưng điều chỉnh vừa phải để dễ đọc.',
+    TranslationStyle.fluent =>
+      'Ưu tiên câu tiếng Việt trôi chảy, có thể đổi trật tự diễn đạt.',
+  };
+}
+
 /// Các ngăn model độc lập. Một OpenRouter API key có thể dùng nhiều model.
 enum AiModelSlot { vision, translate, explain, solve, weakness, dictionary }
 

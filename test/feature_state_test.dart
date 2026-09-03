@@ -61,6 +61,36 @@ void main() {
   });
 
   test(
+    'kết quả JSON dấu ngoặc cong không lộ schema và hiện đúng xuống dòng',
+    () {
+      final service = OpenRouterService();
+      addTearDown(service.dispose);
+      final formatted = service.formatStructuredResultForTesting(
+        AiTask.translate,
+        r'{“translation”:“Dòng 1\\n\\nDòng 2”,“nuance”:“”,“warning”:“”}',
+      );
+
+      expect(formatted, 'Dòng 1\n\nDòng 2');
+      expect(formatted, isNot(contains('translation')));
+      expect(formatted, isNot(contains(r'\n')));
+      expect(formatted, isNot(contains('{')));
+    },
+  );
+
+  test('JSON bị cắt vẫn chỉ hiện phần đọc được, không lộ khóa transport', () {
+    final service = OpenRouterService();
+    addTearDown(service.dispose);
+    final formatted = service.formatStructuredResultForTesting(
+      AiTask.translate,
+      '{“translation”:“Bản dịch chưa đóng',
+    );
+
+    expect(formatted, 'Bản dịch chưa đóng');
+    expect(formatted, isNot(contains('translation')));
+    expect(formatted, isNot(contains('{')));
+  });
+
+  test(
     'từ chối backup thiếu ảnh trang và giữ nguyên thư viện hiện tại',
     () async {
       final state = AppState();

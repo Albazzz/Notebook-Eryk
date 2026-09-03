@@ -653,6 +653,37 @@ class _AiSettingsState extends State<_AiSettings> {
                 onChanged: (value) =>
                     widget.state.explanationLanguage = value ?? 'Tiếng Việt',
               ),
+              const SizedBox(height: 18),
+              const _FieldLabel('PHONG CÁCH DỊCH'),
+              const SizedBox(height: 8),
+              SegmentedButton<TranslationStyle>(
+                segments: TranslationStyle.values
+                    .map(
+                      (value) =>
+                          ButtonSegment(value: value, label: Text(value.label)),
+                    )
+                    .toList(),
+                selected: {widget.state.translationStyle},
+                onSelectionChanged: (values) => setState(
+                  () => widget.state.translationStyle = values.first,
+                ),
+              ),
+              const SizedBox(height: 7),
+              Text(
+                widget.state.translationStyle.helper,
+                style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+              ),
+              const Divider(height: 30),
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                value: widget.state.showOcrInAiResults,
+                onChanged: (value) =>
+                    setState(() => widget.state.showOcrInAiResults = value),
+                title: const Text('Hiện nội dung OCR trong kết quả'),
+                subtitle: const Text(
+                  'Mặc định chỉ hiện bản dịch/lời giải; cảnh báo phục dựng vẫn luôn hiện.',
+                ),
+              ),
             ],
           ),
         ),

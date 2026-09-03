@@ -150,6 +150,7 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
                       final details = _DetailText(item: item);
                       final source = _SourcePanel(
                         item: item,
+                        showOcr: widget.state.showOcrInAiResults,
                         onOpenSource: () => Navigator.pop(context, 'source'),
                       );
                       return twoColumns
@@ -417,98 +418,104 @@ class _WeaknessItem extends StatelessWidget {
   final VoidCallback onSource;
   final VoidCallback onDelete;
   @override
-  Widget build(BuildContext context) => Card(
-    child: InkWell(
-      onTap: onOpen,
-      borderRadius: BorderRadius.circular(20),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 104,
-              height: 82,
-              child: _SourceThumbnail(
-                imagePath: item.sourceImagePath,
-                fallbackText: item.ocrText,
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          item.title,
-                          style: Theme.of(context).textTheme.titleMedium,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+  Widget build(BuildContext context) {
+    final reading = item.reading.trim();
+    final hanViet = item.hanViet.trim();
+    return Card(
+      child: InkWell(
+        onTap: onOpen,
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
+          child: Row(
+            children: [
+              _KindBadge(kind: item.kind),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            item.title,
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      _KindBadge(kind: item.kind),
-                      ...item.tags
-                          .take(1)
-                          .map(
-                            (tag) => Padding(
-                              padding: const EdgeInsets.only(left: 6),
-                              child: Chip(
-                                label: Text(tag),
-                                visualDensity: VisualDensity.compact,
+                        if (reading.isNotEmpty &&
+                            item.kind != WeaknessKind.grammar) ...[
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              '【$reading】',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
                               ),
                             ),
                           ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    item.reminder,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '${item.notebookTitle} · Trang ${item.page} · ${_relativeDate(item.createdAt)}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ],
+                      ],
                     ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Wrap(
-              children: [
-                TextButton(onPressed: onOpen, child: const Text('Mở')),
-                IconButton(
-                  onPressed: onEdit,
-                  tooltip: 'Sửa',
-                  icon: const Icon(Icons.edit_outlined),
-                ),
-                IconButton(
-                  onPressed: onSource,
-                  tooltip: 'Xem nguồn',
-                  icon: const Icon(Icons.my_location_rounded),
-                ),
-                PopupMenuButton<String>(
-                  onSelected: (value) {
-                    if (value == 'delete') onDelete();
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'delete', child: Text('Xóa')),
+                    const SizedBox(height: 5),
+                    Text(
+                      item.content,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(height: 1.35),
+                    ),
+                    if (hanViet.isNotEmpty &&
+                        (item.kind == WeaknessKind.vocabulary ||
+                            item.kind == WeaknessKind.kanji)) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Hán Việt: $hanViet',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 5),
+                    Text(
+                      '${item.notebookTitle} · Trang ${item.page}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
                   ],
                 ),
-              ],
-            ),
-          ],
+              ),
+              PopupMenuButton<String>(
+                tooltip: 'Tùy chọn',
+                onSelected: (value) {
+                  if (value == 'edit') onEdit();
+                  if (value == 'source') onSource();
+                  if (value == 'delete') onDelete();
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'edit', child: Text('Sửa')),
+                  PopupMenuItem(value: 'source', child: Text('Xem nguồn')),
+                  PopupMenuItem(value: 'delete', child: Text('Xóa')),
+                ],
+              ),
+              const Icon(Icons.chevron_right_rounded, color: Colors.grey),
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _KindBadge extends StatelessWidget {
@@ -550,7 +557,7 @@ class _DetailText extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 24),
-        _LabelValue(label: 'NỘI DUNG', value: item.content),
+        _LabelValue(label: 'NGHĨA', value: item.content),
         if (item.sourceSentence.isNotEmpty)
           _LabelValue(label: 'CÂU GỐC', value: item.sourceSentence),
         if (item.reading.isNotEmpty)
@@ -561,15 +568,16 @@ class _DetailText extends StatelessWidget {
           _LabelValue(label: 'CÁCH CHIA / CẤU TRÚC', value: item.conjugation),
         if (item.examples.isNotEmpty)
           _LabelValue(label: 'VÍ DỤ', value: item.examples.join('\n')),
-        _LabelValue(
-          label: 'ĐIỂM CẦN NHỚ',
-          value: item.reminder,
-          emphasized: true,
-        ),
-        _LabelValue(
-          label: 'GHI CHÚ CỦA TÔI',
-          value: item.note.isEmpty ? 'Chưa có ghi chú.' : item.note,
-        ),
+        if (item.reminder.isNotEmpty)
+          _LabelValue(
+            label: item.kind == WeaknessKind.grammar
+                ? 'SO SÁNH / ĐIỂM CẦN NHỚ'
+                : 'ĐIỂM CẦN NHỚ',
+            value: item.reminder,
+            emphasized: true,
+          ),
+        if (item.note.isNotEmpty)
+          _LabelValue(label: 'GHI CHÚ CỦA TÔI', value: item.note),
       ],
     ),
   );
@@ -607,8 +615,13 @@ class _LabelValue extends StatelessWidget {
 }
 
 class _SourcePanel extends StatelessWidget {
-  const _SourcePanel({required this.item, required this.onOpenSource});
+  const _SourcePanel({
+    required this.item,
+    required this.showOcr,
+    required this.onOpenSource,
+  });
   final WeakPoint item;
+  final bool showOcr;
   final VoidCallback onOpenSource;
   @override
   Widget build(BuildContext context) => SectionCard(
@@ -626,13 +639,14 @@ class _SourcePanel extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 14),
-        ExpansionTile(
-          tilePadding: EdgeInsets.zero,
-          title: const Text('OCR text'),
-          children: [
-            Align(alignment: Alignment.centerLeft, child: Text(item.ocrText)),
-          ],
-        ),
+        if (showOcr)
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            title: const Text('Nội dung OCR'),
+            children: [
+              Align(alignment: Alignment.centerLeft, child: Text(item.ocrText)),
+            ],
+          ),
         const SizedBox(height: 12),
         Text(
           '${item.notebookTitle} · Trang ${item.page}\nĐã lưu ${_relativeDate(item.createdAt)}',

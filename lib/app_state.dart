@@ -55,6 +55,8 @@ class AppState extends ChangeNotifier {
   String studentName = 'Eryk';
   String jlpt = 'N3';
   String explanationLanguage = 'Tiếng Việt';
+  TranslationStyle translationStyle = TranslationStyle.balanced;
+  bool showOcrInAiResults = false;
   String selectedModelId = defaultAiModelId;
   String selectedModelName = defaultAiModelName;
 
@@ -125,6 +127,11 @@ class AppState extends ChangeNotifier {
     jlpt = prefs.getString('jlpt') ?? 'N3';
     explanationLanguage =
         prefs.getString('explanationLanguage') ?? 'Tiếng Việt';
+    translationStyle = TranslationStyle.values.firstWhere(
+      (style) => style.name == prefs.getString('translationStyle'),
+      orElse: () => TranslationStyle.balanced,
+    );
+    showOcrInAiResults = prefs.getBool('showOcrInAiResults') ?? false;
     final storedModelId = prefs.getString('selectedModelId');
     final storedModelName = prefs.getString('selectedModelName');
     selectedModelId = storedModelId?.trim().isNotEmpty == true
@@ -2004,6 +2011,8 @@ class AppState extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('jlpt', jlpt);
     await prefs.setString('explanationLanguage', explanationLanguage);
+    await prefs.setString('translationStyle', translationStyle.name);
+    await prefs.setBool('showOcrInAiResults', showOcrInAiResults);
     await prefs.setString('selectedModelId', selectedModelId);
     await prefs.setString('selectedModelName', selectedModelName);
     await prefs.setBool('useAiVision', useAiVision);

@@ -335,21 +335,31 @@ class _EditorScreenState extends State<EditorScreen>
                         Expanded(
                           child: Stack(
                             children: [
-                              Positioned.fill(
-                                child: GestureDetector(
-                                  behavior: HitTestBehavior.translucent,
-                                  // Finger swipes change pages even while the
-                                  // Pencil is selected. Pencil events are not
-                                  // part of this gesture recognizer, and
-                                  // drawWithFinger users still have the
-                                  // explicit two-finger canvas navigation.
-                                  onHorizontalDragEnd:
-                                      pageLocked || widget.state.drawWithFinger
-                                      ? null
-                                      : _onPageSwipe,
-                                  child: _buildWorkspace(),
+                              Positioned.fill(child: _buildWorkspace()),
+                              if (!pageLocked)
+                                Positioned(
+                                  left: 0,
+                                  top: 0,
+                                  bottom: 0,
+                                  child: _PageEdgeNavigator(
+                                    key: const ValueKey('previous-page-edge'),
+                                    direction: AxisDirection.left,
+                                    tooltip: 'Trang trước',
+                                    onActivate: _goToPreviousPage,
+                                  ),
                                 ),
-                              ),
+                              if (!pageLocked)
+                                Positioned(
+                                  right: 0,
+                                  top: 0,
+                                  bottom: 0,
+                                  child: _PageEdgeNavigator(
+                                    key: const ValueKey('next-page-edge'),
+                                    direction: AxisDirection.right,
+                                    tooltip: 'Trang sau',
+                                    onActivate: _goToNextPage,
+                                  ),
+                                ),
                               if (processing)
                                 Positioned(
                                   right: 28,
@@ -400,6 +410,7 @@ class _EditorScreenState extends State<EditorScreen>
                                     onConfirmEdit: _confirmResultEdit,
                                     onDrag: _moveResult,
                                     onResize: _resizeResult,
+                                    showOcr: widget.state.showOcrInAiResults,
                                   ),
                                 ),
                               if (_quickDictionaryOpen)
@@ -614,6 +625,11 @@ class _EditorScreenState extends State<EditorScreen>
           ...widget.state.toolbarTools.map(_toolbarButton),
           const SizedBox(width: 8),
           IconButton(
+            tooltip: 'Cài đặt kết quả AI',
+            onPressed: _showAiOutputSettings,
+            icon: const Icon(Icons.settings_suggest_outlined),
+          ),
+          IconButton(
             tooltip: 'Tùy chỉnh công cụ',
             onPressed: _showToolbarCustomization,
             icon: const Icon(Icons.tune_rounded),
@@ -636,6 +652,81 @@ class _EditorScreenState extends State<EditorScreen>
       _ => tool == value,
     };
     return _ToolButton(tool: value, selected: selected, onTap: callback);
+  }
+
+  Future<void> _showAiOutputSettings() async {
+    var style = widget.state.translationStyle;
+    var showOcr = widget.state.showOcrInAiResults;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Cài đặt kết quả AI'),
+          content: SizedBox(
+            width: 540,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Phong cách dịch',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 10),
+                SegmentedButton<TranslationStyle>(
+                  segments: TranslationStyle.values
+                      .map(
+                        (value) => ButtonSegment(
+                          value: value,
+                          label: Text(value.label),
+                        ),
+                      )
+                      .toList(),
+                  selected: {style},
+                  onSelectionChanged: (values) => setDialogState(() {
+                    style = values.first;
+                  }),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  style.helper,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                ),
+                const Divider(height: 30),
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  value: showOcr,
+                  onChanged: (value) => setDialogState(() => showOcr = value),
+                  title: const Text('Hiện nội dung OCR trong kết quả'),
+                  subtitle: const Text(
+                    'Tắt để chỉ xem bản dịch hoặc lời giải. Lưu ý phục dựng OCR vẫn được giữ ở cuối.',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Lưu'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (accepted != true || !mounted) return;
+    setState(() {
+      widget.state.translationStyle = style;
+      widget.state.showOcrInAiResults = showOcr;
+    });
+    await widget.state.saveAiSettings(key: '');
   }
 
   Future<void> _showToolbarCustomization() async {
@@ -706,19 +797,19 @@ class _EditorScreenState extends State<EditorScreen>
     EditorTool.weakness => 'Điểm yếu',
   };
 
-  void _onPageSwipe(DragEndDetails details) {
-    final velocity = details.primaryVelocity ?? 0;
-    if (velocity.abs() < 420) return;
-    if (velocity < 0) {
-      if (widget.state.openPage < widget.notebook.pages) {
-        widget.state.goToPage(widget.state.openPage + 1);
-      } else {
-        _askCreatePage();
-      }
-    } else if (widget.state.openPage > 1) {
+  void _goToPreviousPage() {
+    if (widget.state.openPage > 1) {
       widget.state.goToPage(widget.state.openPage - 1);
     } else {
       showAppSnack(context, 'Đây là trang đầu tiên');
+    }
+  }
+
+  void _goToNextPage() {
+    if (widget.state.openPage < widget.notebook.pages) {
+      widget.state.goToPage(widget.state.openPage + 1);
+    } else {
+      unawaited(_askCreatePage());
     }
   }
 
@@ -1613,6 +1704,7 @@ class _EditorScreenState extends State<EditorScreen>
           text: recognized,
           jlpt: widget.state.jlpt,
           language: widget.state.explanationLanguage,
+          translationStyle: widget.state.translationStyle,
         );
         if (!mounted || requestSerial != _aiRequestSerial) return;
         setState(
@@ -1641,6 +1733,7 @@ class _EditorScreenState extends State<EditorScreen>
           text: recognized,
           jlpt: widget.state.jlpt,
           language: widget.state.explanationLanguage,
+          translationStyle: widget.state.translationStyle,
         );
         if (!mounted || requestSerial != _aiRequestSerial) return;
         setState(
@@ -1724,6 +1817,7 @@ class _EditorScreenState extends State<EditorScreen>
             'Nội dung đang xem:\n${current.source}\n\nGiải thích hiện tại:\n${current.body}\n\nCâu hỏi bổ sung của người học:\n$cleanQuestion',
         jlpt: widget.state.jlpt,
         language: widget.state.explanationLanguage,
+        translationStyle: widget.state.translationStyle,
       );
       if (!mounted || serial != _aiRequestSerial) return;
       setState(
@@ -3607,7 +3701,8 @@ class _PageRail extends StatefulWidget {
 }
 
 class _PageRailState extends State<_PageRail> {
-  final Map<int, GlobalKey> _pageKeys = {};
+  static const _pageItemExtent = 150.0;
+  final ScrollController _scrollController = ScrollController();
 
   int get currentPage => widget.currentPage;
   int get pageCount => widget.pageCount;
@@ -3634,21 +3729,26 @@ class _PageRailState extends State<_PageRail> {
 
   void _scheduleRevealCurrentPage() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final target = _pageKeys[currentPage]?.currentContext;
-      if (target != null) {
-        Scrollable.ensureVisible(
-          target,
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
-          alignment: .35,
-        );
-      }
+      if (!mounted || !_scrollController.hasClients) return;
+      final position = _scrollController.position;
+      final target =
+          ((currentPage - 1) * _pageItemExtent -
+                  position.viewportDimension * .35)
+              .clamp(0.0, position.maxScrollExtent)
+              .toDouble();
+      _scrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
     });
   }
 
-  GlobalKey _keyForPage(int page) =>
-      _pageKeys.putIfAbsent(page, () => GlobalKey());
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => Container(
@@ -3671,6 +3771,12 @@ class _PageRailState extends State<_PageRail> {
                 ),
               ),
               IconButton(
+                onPressed: _scheduleRevealCurrentPage,
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Tìm trang hiện tại',
+                icon: const Icon(Icons.my_location_rounded, size: 19),
+              ),
+              IconButton(
                 onPressed: onClose,
                 visualDensity: VisualDensity.compact,
                 icon: const Icon(Icons.chevron_left),
@@ -3680,12 +3786,13 @@ class _PageRailState extends State<_PageRail> {
         ),
         Expanded(
           child: ListView.builder(
+            controller: _scrollController,
+            itemExtent: _pageItemExtent,
             itemCount: pageCount,
             itemBuilder: (context, index) {
               final page = index + 1;
               final active = page == currentPage;
               return Padding(
-                key: _keyForPage(page),
                 padding: const EdgeInsets.fromLTRB(14, 5, 14, 7),
                 child: Material(
                   color: Colors.transparent,
@@ -3758,6 +3865,56 @@ class _PageRailState extends State<_PageRail> {
           ),
         ),
       ],
+    ),
+  );
+}
+
+class _PageEdgeNavigator extends StatelessWidget {
+  const _PageEdgeNavigator({
+    super.key,
+    required this.direction,
+    required this.tooltip,
+    required this.onActivate,
+  });
+
+  final AxisDirection direction;
+  final String tooltip;
+  final VoidCallback onActivate;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: '$tooltip · chạm hoặc vuốt ở mép ngoài',
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      supportedDevices: const {PointerDeviceKind.touch},
+      onTap: onActivate,
+      onHorizontalDragEnd: (details) {
+        if ((details.primaryVelocity ?? 0).abs() >= 180) onActivate();
+      },
+      child: SizedBox(
+        width: 42,
+        child: Center(
+          child: Container(
+            width: 24,
+            height: 52,
+            decoration: BoxDecoration(
+              color: Theme.of(
+                context,
+              ).colorScheme.surface.withValues(alpha: .8),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            ),
+            child: Icon(
+              direction == AxisDirection.left
+                  ? Icons.chevron_left_rounded
+                  : Icons.chevron_right_rounded,
+              size: 20,
+            ),
+          ),
+        ),
+      ),
     ),
   );
 }
@@ -4502,6 +4659,7 @@ class _ResultCard extends StatelessWidget {
     required this.onConfirmEdit,
     required this.onDrag,
     required this.onResize,
+    required this.showOcr,
   });
   final _SmartResult result;
   final double width;
@@ -4516,6 +4674,7 @@ class _ResultCard extends StatelessWidget {
   final VoidCallback onConfirmEdit;
   final ValueChanged<Offset> onDrag;
   final ValueChanged<Offset> onResize;
+  final bool showOcr;
   @override
   Widget build(BuildContext context) {
     final screen = MediaQuery.sizeOf(context);
@@ -4622,15 +4781,27 @@ class _ResultCard extends StatelessWidget {
                           ),
                       ],
                     ),
-                  const SizedBox(height: 12),
-                  Text(
-                    result.source,
-                    style: TextStyle(
-                      fontSize: result.dictionaryEntry != null ? 18 : 13,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      height: 1.55,
+                  if (result.dictionaryEntry != null || showOcr) ...[
+                    const SizedBox(height: 12),
+                    if (result.dictionaryEntry == null)
+                      const Text(
+                        'NỘI DUNG OCR',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.grey,
+                          letterSpacing: .7,
+                        ),
+                      ),
+                    Text(
+                      result.source,
+                      style: TextStyle(
+                        fontSize: result.dictionaryEntry != null ? 18 : 13,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        height: 1.55,
+                      ),
                     ),
-                  ),
+                  ],
                   const Divider(height: 24),
                   Text(
                     result.body,

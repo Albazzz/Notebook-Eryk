@@ -387,6 +387,27 @@ void main() {
     expect(state.strokesFor('n3', 1), hasLength(1));
   });
 
+  testWidgets('chỉ điều hướng trang từ hai vùng mép ngoài', (tester) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    state.open(state.notebooks.first, page: 1);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('next-page-edge')));
+    await tester.pump();
+    expect(state.openPage, 2);
+
+    await tester.tap(find.byKey(const ValueKey('previous-page-edge')));
+    await tester.pump();
+    expect(state.openPage, 1);
+  });
+
   testWidgets('một ngón viết tay và hai ngón điều hướng', (tester) async {
     tester.view.physicalSize = const Size(1180, 820);
     tester.view.devicePixelRatio = 1;

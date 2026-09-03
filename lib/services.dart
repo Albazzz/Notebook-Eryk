@@ -400,12 +400,14 @@ class OpenRouterService {
     required String jlpt,
     required String language,
     String? weaknessKind,
+    TranslationStyle translationStyle = TranslationStyle.balanced,
   }) async {
     final instruction = _promptFor(
       task,
       jlpt: jlpt,
       language: language,
       weaknessKind: weaknessKind,
+      translationStyle: translationStyle,
     );
     final normalizedModelId = modelId.trim();
     if (normalizedModelId.isEmpty) {
@@ -417,6 +419,7 @@ class OpenRouterService {
       jlpt,
       language,
       weaknessKind ?? '',
+      translationStyle.name,
       text.trim(),
     ].join('|');
     final cached = _completionCache[cacheKey];
@@ -437,7 +440,9 @@ class OpenRouterService {
         'max_tokens': switch (task) {
           AiTask.dictionary => 220,
           AiTask.explain => 1050,
-          _ => 700,
+          AiTask.translate => 1200,
+          AiTask.solve => 900,
+          AiTask.createWeakPoint => 1000,
         },
       }),
     );
@@ -482,11 +487,18 @@ Bạn là giáo viên tiếng Nhật. Hãy phân tích đúng nội dung ngườ
 có thể gồm câu hỏi, các lựa chọn và đáp án. Chỉ tạo điểm yếu thuộc các loại
 được yêu cầu: $selected. Nếu câu hỏi hỏi về một từ hoặc kanji, hãy lấy chính
 từ/kanji xuất hiện trong câu hỏi hoặc đáp án và giải thích nghĩa trong đúng
-ngữ cảnh đó. Không tự lấy từ bên ngoài và không đoán khi chữ không rõ.
+ngữ cảnh đó. Bỏ qua các nét ghi chú hoặc chữ rác rời rạc nằm ngoài đoạn chính.
+Nếu OCR sai hoặc thiếu 1–2 chữ nhưng ngữ cảnh đủ rõ, hãy phục dựng phương án hợp
+lý nhất và ghi câu đã phục dựng cùng phần còn chưa chắc vào warning. Không âm
+thầm sửa OCR và không lấy thêm nội dung ngoài vùng chọn.
+Nếu đầu vào đã có dòng "Lưu ý OCR:", đó là metadata: dùng nó để kiểm tra và ghi
+warning, không coi là một phần của câu tiếng Nhật.
 Một câu có nhiều mẫu ngữ pháp hoặc nhiều từ đáng học thì tạo nhiều item riêng.
-Với grammar: title là mẫu ngữ pháp, có meaning, conjugation, examples.
+Với grammar: title chỉ là mẫu ngữ pháp (ví dụ のに), meaning là nghĩa thật ngắn;
+conjugation và examples chứa phần học chi tiết. Nếu có mẫu dễ nhầm trong chính
+đề hoặc thường gặp ở cùng trình độ, reminder so sánh khác biệt trong một câu.
 Với vocabulary: title là từ khóa trong câu, có reading, meaning, hanViet nếu
-chắc chắn và sourceSentence là câu chứa từ đó.
+chắc chắn và sourceSentence là câu chứa từ đó. meaning chỉ ghi nghĩa ngắn gọn.
 Với kanji: title là chữ kanji, có reading, meaning và sourceSentence.
 Trả về DUY NHẤT JSON object: {
   "items": [
@@ -593,7 +605,7 @@ Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
         {
           'role': 'system',
           'content':
-              'Bạn là OCR tiếng Nhật. Chỉ đọc đúng chữ nhìn thấy trong ảnh, giữ nguyên kanji/kana và xuống dòng. Trả về DUY NHẤT JSON object dạng {"text":"...","warning":""}. Không suy đoán phần bị cắt hoặc mờ.',
+              'Bạn là OCR tiếng Nhật. Đọc đoạn nội dung chính, giữ nguyên kanji/kana và xuống dòng; bỏ qua nét viết tay, số trang hoặc chữ rác rời rạc ở ngoài đoạn chính. Nếu chỉ thiếu hoặc sai 1–2 chữ và ngữ cảnh đủ rõ, phục dựng phương án hợp lý nhất rồi ghi rõ câu đã phục dựng và phần chưa chắc trong warning. Không âm thầm đoán phần bị cắt lớn. Trả về DUY NHẤT JSON object dạng {"text":"...","warning":""}.',
         },
         {
           'role': 'user',
@@ -612,7 +624,9 @@ Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
         },
       ],
       'temperature': 0,
-      'max_tokens': 220,
+      // A full reading passage can easily exceed 220 tokens once JSON
+      // escaping and an uncertainty note are included.
+      'max_tokens': 1400,
     });
     late _HttpResult response;
     for (var attempt = 0; attempt < 2; attempt++) {
@@ -669,15 +683,24 @@ Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
     required String jlpt,
     required String language,
     String? weaknessKind,
+    required TranslationStyle translationStyle,
   }) {
     const shared = '''
-Bạn là giáo viên tiếng Nhật chính xác và súc tích. Chỉ phân tích nội dung người dùng đã chủ động khoanh; không suy đoán phần nằm ngoài vùng chọn. Không trò chuyện, không chào hỏi, không dùng Markdown và không thêm lời dẫn. Nếu OCR có vẻ sai, ghi rõ trong trường warning thay vì tự bịa nội dung. Trả về DUY NHẤT một JSON object hợp lệ, không đặt trong code fence.''';
+Bạn là giáo viên tiếng Nhật chính xác và súc tích. Chỉ phân tích nội dung người dùng đã chủ động khoanh. Bỏ qua note viết tay, số trang hoặc chữ rác rời rạc không thuộc đoạn chính. Nếu OCR sai hoặc thiếu 1–2 chữ nhưng ngữ cảnh đủ rõ, hãy phục dựng cả cụm/câu hợp lý nhất để hoàn thành nhiệm vụ; trong warning bắt buộc ghi "Đã phục dựng: ..." và nêu phần còn chưa chắc. Nếu đầu vào đã có dòng "Lưu ý OCR:", đó là metadata: đưa thông tin cần thiết vào warning, không dịch hoặc phân tích nó như nội dung tiếng Nhật. Không âm thầm sửa OCR và không suy đoán phần bị mất lớn. Không trò chuyện, không chào hỏi, không dùng Markdown và không thêm lời dẫn. Trả về DUY NHẤT một JSON object hợp lệ, không đặt trong code fence.''';
+    final translationInstruction = switch (translationStyle) {
+      TranslationStyle.literal =>
+        'Phong cách: sát nghĩa. Bám sát từ ngữ, quan hệ ngữ pháp và trật tự câu gốc tối đa; không lược ý.',
+      TranslationStyle.balanced =>
+        'Phong cách: tự nhiên vừa phải. Giữ đầy đủ ý và sắc thái, chỉ điều chỉnh cấu trúc khi cần để dễ đọc.',
+      TranslationStyle.fluent =>
+        'Phong cách: mượt mà. Ưu tiên cách diễn đạt tự nhiên trong ngôn ngữ đích, được đổi trật tự nhưng không thêm hoặc bỏ ý.',
+    };
     final taskPrompt = switch (task) {
       AiTask.translate =>
         '''
 Nhiệm vụ: dịch nguyên văn sang $language cho người học $jlpt.
 Schema bắt buộc: {"translation":"...","nuance":"...","warning":""}.
-Giữ tên riêng; câu dịch tự nhiên; nuance tối đa 1 câu.''',
+Giữ tên riêng; nuance tối đa 1 câu. $translationInstruction''',
       AiTask.explain =>
         '''
 Nhiệm vụ: giải thích tiếng Nhật bằng $language ở độ khó phù hợp $jlpt.
@@ -694,7 +717,7 @@ Giải thích vì sao đúng và vì sao từng lựa chọn còn lại không p
         '''
 Nhiệm vụ: tạo bản nháp điểm yếu bằng $language cho người học $jlpt.
 Loại người dùng đã chọn: ${weaknessKind ?? 'grammar'}.
-Nếu là grammar, bắt buộc ghi nghĩa, cách chia/cấu trúc và ít nhất một ví dụ.
+Nếu là grammar, title chỉ ghi mẫu ngữ pháp, meaning thật ngắn; conjugation và examples chứa chi tiết. reminder so sánh ngắn với mẫu dễ nhầm nếu có.
 Nếu là vocabulary hoặc kanji, bắt buộc ghi cách đọc, nghĩa và Hán Việt nếu có; không được đoán nếu OCR không rõ.
 Schema bắt buộc: {"title":"...","type":"Ngữ pháp|Từ vựng|Kanji|Đọc hiểu|Khác","meaning":"...","reading":"...","hanViet":"...","conjugation":"...","examples":["..."],"reminder":"...","note":"...","tags":["$jlpt"],"warning":""}.''',
       AiTask.dictionary =>
@@ -710,17 +733,17 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
     final data = _decodeJsonObject(raw);
     if (data == null) return _cleanAiText(raw);
     try {
-      final warning = (data['warning'] as String? ?? '').trim();
+      final warning = _displayText(data['warning']);
       final suffix = warning.isEmpty ? '' : '\n\nLưu ý OCR: $warning';
       return switch (task) {
         AiTask.translate =>
-          '${data['translation'] ?? ''}${_optionalLine('Sắc thái', data['nuance'])}$suffix',
+          '${_displayText(data['translation'])}${_optionalLine('Sắc thái', data['nuance'])}$suffix',
         AiTask.explain => _formatExplanation(data) + suffix,
         AiTask.solve => _formatSolution(data) + suffix,
         AiTask.createWeakPoint =>
-          '${data['title'] ?? ''}\n\nNghĩa\n${data['meaning'] ?? data['content'] ?? ''}\n\nCách đọc\n${data['reading'] ?? ''}\n\nHán Việt\n${data['hanViet'] ?? ''}\n\nCách chia\n${data['conjugation'] ?? ''}\n\nVí dụ\n${(data['examples'] as List<dynamic>? ?? const []).join('\n')}\n\nĐiểm cần nhớ\n${data['reminder'] ?? ''}\n\nGhi chú\n${data['note'] ?? ''}$suffix',
+          '${_displayText(data['title'])}\n\nNghĩa\n${_displayText(data['meaning'] ?? data['content'])}\n\nCách đọc\n${_displayText(data['reading'])}\n\nHán Việt\n${_displayText(data['hanViet'])}\n\nCách chia\n${_displayText(data['conjugation'])}\n\nVí dụ\n${_displayText((data['examples'] as List<dynamic>? ?? const []).join('\n'))}\n\nĐiểm cần nhớ\n${_displayText(data['reminder'])}\n\nGhi chú\n${_displayText(data['note'])}$suffix',
         AiTask.dictionary =>
-          '${data['word'] ?? ''}${_optionalLine('Cách đọc', data['reading'])}\n\nNghĩa\n${data['meaning'] ?? ''}${_optionalLine('Từ loại', data['partOfSpeech'])}${_optionalLine('JLPT', data['jlpt'])}${_optionalLine('Hán Việt', data['hanViet'])}${_optionalLine('Ví dụ', data['example'])}${_optionalLine('Dịch ví dụ', data['exampleMeaning'])}$suffix',
+          '${_displayText(data['word'])}${_optionalLine('Cách đọc', data['reading'])}\n\nNghĩa\n${_displayText(data['meaning'])}${_optionalLine('Từ loại', data['partOfSpeech'])}${_optionalLine('JLPT', data['jlpt'])}${_optionalLine('Hán Việt', data['hanViet'])}${_optionalLine('Ví dụ', data['example'])}${_optionalLine('Dịch ví dụ', data['exampleMeaning'])}$suffix',
       };
     } catch (_) {
       // Keep the result useful when a selected model ignores the JSON contract.
@@ -736,11 +759,18 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
   /// code fence. Find and decode the first balanced JSON object so the user
   /// never sees the transport/schema payload in the result card.
   Map<String, dynamic>? _decodeJsonObject(String raw) {
-    final source = raw.trim();
-    try {
-      final decoded = jsonDecode(source);
-      if (decoded is Map) return Map<String, dynamic>.from(decoded);
-    } catch (_) {}
+    final candidates = <String>{
+      raw.trim(),
+      _repairJsonControlCharacters(_normalizeJsonPunctuation(raw.trim())),
+    };
+    for (final candidate in candidates) {
+      try {
+        final decoded = jsonDecode(candidate);
+        if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      } catch (_) {}
+    }
+
+    final source = candidates.last;
 
     for (var start = 0; start < source.length; start++) {
       if (source.codeUnitAt(start) != 0x7b) continue; // {
@@ -786,13 +816,71 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
     );
     text = text.replaceFirst(RegExp(r'\s*```$'), '');
     final data = _decodeJsonObject(text);
-    if (data == null) return text;
+    if (data == null) {
+      final normalized = _displayText(_normalizeJsonPunctuation(text));
+      if (!RegExp(r'^\s*\{').hasMatch(normalized) ||
+          !normalized.contains(':')) {
+        return normalized;
+      }
+      // Salvage readable values from a truncated JSON-like reply, but never
+      // leak transport keys such as {"translation": into the result card.
+      final values = RegExp(r':\s*"(.*?)(?="\s*[,}]|$)', dotAll: true)
+          .allMatches(normalized)
+          .map((match) => _displayText(match.group(1)))
+          .where((value) => value.isNotEmpty)
+          .toList(growable: false);
+      return values.isEmpty
+          ? 'AI trả về kết quả chưa hoàn chỉnh. Hãy thử lại.'
+          : values.join('\n\n');
+    }
     final readable = data.values
         .whereType<String>()
-        .map((value) => value.trim())
+        .map(_displayText)
         .where((value) => value.isNotEmpty)
         .join('\n\n');
-    return readable.isEmpty ? text : readable;
+    return readable.isEmpty ? _displayText(text) : readable;
+  }
+
+  String _normalizeJsonPunctuation(String value) => value
+      .replaceAll('\u201c', '"')
+      .replaceAll('\u201d', '"')
+      .replaceAll('\u201e', '"')
+      .replaceAll('\ufeff', '');
+
+  String _repairJsonControlCharacters(String value) {
+    final output = StringBuffer();
+    var quoted = false;
+    var escaped = false;
+    for (final codePoint in value.runes) {
+      final character = String.fromCharCode(codePoint);
+      if (quoted && (character == '\n' || character == '\r')) {
+        output.write(character == '\n' ? r'\n' : r'\r');
+        continue;
+      }
+      output.write(character);
+      if (escaped) {
+        escaped = false;
+      } else if (character == '\\') {
+        escaped = true;
+      } else if (character == '"') {
+        quoted = !quoted;
+      }
+    }
+    return output.toString().replaceAllMapped(
+      RegExp(r',\s*([}\]])'),
+      (match) => match.group(1)!,
+    );
+  }
+
+  String _displayText(Object? value) {
+    var text = value?.toString().trim() ?? '';
+    // Some models double-escape line breaks inside an otherwise valid JSON
+    // response. Flutter renders those backslashes literally unless decoded.
+    text = text
+        .replaceAll(r'\r\n', '\n')
+        .replaceAll(r'\n', '\n')
+        .replaceAll(r'\r', '\n');
+    return text.replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
   }
 
   String _formatExplanation(Map<String, dynamic> data) {
@@ -812,7 +900,7 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
     if (structures.isNotEmpty) buffer.write('\n\nCấu trúc chính');
     for (final rawItem in structures) {
       if (rawItem is! Map) {
-        final text = rawItem.toString().trim();
+        final text = _displayText(rawItem);
         if (text.isNotEmpty) buffer.write('\n$text');
         continue;
       }
@@ -836,7 +924,7 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
     if (segments.isNotEmpty) buffer.write('\n\nTách câu');
     for (final rawItem in segments) {
       if (rawItem is! Map) {
-        final text = rawItem.toString().trim();
+        final text = _displayText(rawItem);
         if (text.isNotEmpty) buffer.write('\n$text');
         continue;
       }
@@ -874,7 +962,7 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
     }
     for (final rawItem in choices) {
       if (rawItem is! Map) {
-        final text = rawItem.toString().trim();
+        final text = _displayText(rawItem);
         if (text.isNotEmpty) buffer.write('\n$text');
         continue;
       }
@@ -899,7 +987,9 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
   String _firstText(Map<String, dynamic> data, List<String> keys) {
     for (final key in keys) {
       final value = data[key];
-      if (value is String && value.trim().isNotEmpty) return value.trim();
+      if (value is String && value.trim().isNotEmpty) {
+        return _displayText(value);
+      }
       if (value is num || value is bool) return value.toString();
     }
     return '';
@@ -910,7 +1000,9 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
       final value = data[key];
       if (value is List && value.isNotEmpty) return value;
       if (value is Map) return [value];
-      if (value is String && value.trim().isNotEmpty) return [value.trim()];
+      if (value is String && value.trim().isNotEmpty) {
+        return [_displayText(value)];
+      }
     }
     return const [];
   }
@@ -920,21 +1012,21 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
 
   String _formatSolution(Map<String, dynamic> data) {
     final buffer = StringBuffer(
-      'Đáp án\n${data['answer'] ?? ''}\n\nVì sao?\n${data['reason'] ?? ''}',
+      'Đáp án\n${_displayText(data['answer'])}\n\nVì sao?\n${_displayText(data['reason'])}',
     );
     final choices = data['choices'] as List<dynamic>? ?? const [];
     if (choices.isNotEmpty) buffer.write('\n\nPhân tích lựa chọn');
     for (final rawItem in choices) {
       final item = rawItem as Map<String, dynamic>;
       buffer.write(
-        '\n${item['label'] ?? ''}${item['correct'] == true ? ' ✓' : ''}: ${item['reason'] ?? ''}',
+        '\n${_displayText(item['label'])}${item['correct'] == true ? ' ✓' : ''}: ${_displayText(item['reason'])}',
       );
     }
     return buffer.toString();
   }
 
   String _optionalLine(String label, Object? value) {
-    final text = value?.toString().trim() ?? '';
+    final text = _displayText(value);
     return text.isEmpty ? '' : '\n\n$label\n$text';
   }
 
