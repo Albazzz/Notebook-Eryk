@@ -494,34 +494,53 @@ class _FolderRowState extends State<_FolderRow> {
                       ),
                       if (folder.isPinned)
                         const Icon(Icons.star, size: 14, color: Colors.amber),
-                      if (hovering || active)
-                        PopupMenuButton<String>(
-                          padding: EdgeInsets.zero,
-                          icon: const Icon(Icons.more_horiz, size: 19),
-                          onSelected: (value) => _handleMenu(context, value),
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(
-                              value: 'new',
-                              child: Text('New subfolder'),
+                      PopupMenuButton<String>(
+                        tooltip: 'Tùy chọn folder',
+                        padding: EdgeInsets.zero,
+                        icon: const Icon(Icons.more_horiz, size: 19),
+                        onSelected: (value) => _handleMenu(context, value),
+                        itemBuilder: (_) => [
+                          const PopupMenuItem(
+                            value: 'new',
+                            child: Text('Tạo folder con'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'rename',
+                            child: Text('Đổi tên'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'appearance',
+                            child: Text('Đổi màu / biểu tượng'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'move',
+                            child: Text('Di chuyển'),
+                          ),
+                          PopupMenuItem(
+                            value: 'pin',
+                            child: Text(folder.isPinned ? 'Bỏ ghim' : 'Ghim'),
+                          ),
+                          PopupMenuItem(
+                            value: 'delete',
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.delete_outline_rounded,
+                                  color: Theme.of(context).colorScheme.error,
+                                  size: 19,
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  'Xóa folder',
+                                  style: TextStyle(
+                                    color: Theme.of(context).colorScheme.error,
+                                  ),
+                                ),
+                              ],
                             ),
-                            PopupMenuItem(
-                              value: 'rename',
-                              child: Text('Rename'),
-                            ),
-                            PopupMenuItem(
-                              value: 'appearance',
-                              child: Text('Change color/icon'),
-                            ),
-                            PopupMenuItem(value: 'move', child: Text('Move')),
-                            PopupMenuItem(value: 'pin', child: Text('Pin')),
-                            PopupMenuItem(
-                              value: 'delete',
-                              child: Text('Delete'),
-                            ),
-                          ],
-                        )
-                      else
-                        const SizedBox(width: 44),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -629,20 +648,20 @@ class _FolderRowState extends State<_FolderRow> {
         builder: (dialogContext) => AlertDialog(
           title: const Text('Xóa folder?'),
           content: const Text(
-            'Bạn muốn xóa cả folder và ghi chú bên trong hay chỉ xóa folder?',
+            'Bạn muốn chuyển cả folder và ghi chú bên trong vào Thùng rác, hay chỉ xóa folder và giữ ghi chú?',
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext, 'cancel'),
-              child: const Text('Cancel'),
+              child: const Text('Hủy'),
             ),
             TextButton(
               onPressed: () => Navigator.pop(dialogContext, 'parent'),
-              child: const Text('Move notes to parent'),
+              child: const Text('Giữ ghi chú'),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(dialogContext, 'trash'),
-              child: const Text('Move to Trash'),
+              child: const Text('Chuyển vào Thùng rác'),
             ),
           ],
         ),
@@ -660,7 +679,7 @@ class _FolderRowState extends State<_FolderRow> {
         showAppSnack(
           context,
           'Đã thay đổi folder',
-          actionLabel: 'Undo',
+          actionLabel: 'Hoàn tác',
           onAction: widget.state.undoFolderAction,
         );
       }

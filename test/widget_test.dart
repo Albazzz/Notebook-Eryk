@@ -23,6 +23,28 @@ void main() {
     expect(find.text('Tạo mới'), findsOneWidget);
   });
 
+  testWidgets('folder luôn có thao tác xóa trên iPad', (tester) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    state.createFolder('JLPT');
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Tùy chọn folder'));
+    await tester.pumpAndSettle();
+    expect(find.text('Xóa folder'), findsOneWidget);
+
+    await tester.tap(find.text('Xóa folder'));
+    await tester.pumpAndSettle();
+    expect(find.text('Giữ ghi chú'), findsOneWidget);
+    expect(find.text('Chuyển vào Thùng rác'), findsOneWidget);
+  });
+
   testWidgets('chọn nhiều trên iPad dọc không ép tiêu đề thành cột', (
     tester,
   ) async {

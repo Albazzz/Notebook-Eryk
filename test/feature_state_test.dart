@@ -10,6 +10,20 @@ import 'package:path_provider_platform_interface/path_provider_platform_interfac
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('autosave batches pen changes without lifecycle backup', () async {
+    final stateSource = await File('lib/app_state.dart').readAsString();
+    final appSource = await File('lib/app.dart').readAsString();
+
+    expect(stateSource, contains('Timer(_persistenceDebounce'));
+    expect(
+      stateSource,
+      contains('await Isolate.run(() => jsonEncode(snapshot))'),
+    );
+    expect(stateSource, contains('encoded.length <= _preferencesMirrorLimit'));
+    expect(stateSource, isNot(contains('_persistStrokes()')));
+    expect(appSource, isNot(contains('flushPersistence(snapshot: true)')));
+  });
+
   test('Luna chỉ nhận text sau OCR, không nhận lại ảnh đã khoanh', () async {
     final editorSource = await File(
       'lib/screens/editor_screen.dart',

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -35,6 +36,8 @@ class AppState extends ChangeNotifier {
   static const _savedModelsStorageName = 'ai_saved_models';
   static const _libraryStorageName = 'notebook_library_v2';
   static const _backupDirectoryName = 'Backups';
+  static const _persistenceDebounce = Duration(seconds: 1);
+  static const _preferencesMirrorLimit = 512 * 1024;
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   final OpenRouterService aiService = OpenRouterService();
   final DictionaryRepository dictionary = LocalDictionaryRepository();
@@ -77,6 +80,7 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _persistenceTimer?.cancel();
     aiService.dispose();
     super.dispose();
   }
@@ -102,7 +106,7 @@ class AppState extends ChangeNotifier {
   List<WeakPoint> weakPoints = [];
   Future<void>? _persistenceInFlight;
   Future<File>? _backupInFlight;
-  bool _persistenceScheduled = false;
+  Timer? _persistenceTimer;
   bool _storageReady = false;
   bool _libraryNeedsRecoveryPersistence = false;
   String? lastBackupError;
@@ -670,10 +674,12 @@ class AppState extends ChangeNotifier {
 
   void schedulePersistence() {
     if (!autoSave || !_storageReady) return;
-    if (_persistenceScheduled) return;
-    _persistenceScheduled = true;
-    scheduleMicrotask(() {
-      _persistenceScheduled = false;
+    // Writing a full notebook after every pen stroke makes the UI stutter as
+    // soon as a notebook has meaningful content. Coalesce a burst of edits,
+    // while lifecycle persistence below still flushes immediately.
+    _persistenceTimer?.cancel();
+    _persistenceTimer = Timer(_persistenceDebounce, () {
+      _persistenceTimer = null;
       unawaited(_flushScheduledPersistence());
     });
   }
@@ -689,6 +695,8 @@ class AppState extends ChangeNotifier {
 
   Future<void> flushPersistence({bool snapshot = false}) async {
     if (!_storageReady) return;
+    _persistenceTimer?.cancel();
+    _persistenceTimer = null;
     final running = _persistenceInFlight;
     if (running != null) {
       try {
@@ -707,28 +715,34 @@ class AppState extends ChangeNotifier {
       if (identical(_persistenceInFlight, operation)) {
         _persistenceInFlight = null;
       }
-      if (_persistenceScheduled) schedulePersistence();
     }
   }
 
   Future<void> _persistLibrary() async {
-    final encoded = jsonEncode(_librarySnapshot());
+    final snapshot = _librarySnapshot();
+    // JSON encoding a long handwriting history is CPU-bound. Run that work
+    // outside the UI isolate so Pencil input and scrolling remain responsive.
+    final encoded = await Isolate.run(() => jsonEncode(snapshot));
     final directory = await getApplicationSupportDirectory();
     final target = File('${directory.path}/notebook_library_v2.json');
     final temporary = File('${target.path}.tmp');
     final previous = File('${target.path}.previous');
     await temporary.writeAsString(encoded, flush: true);
-    if (await temporary.length() != utf8.encode(encoded).length ||
-        await temporary.readAsString() != encoded) {
+    if (await temporary.length() == 0) {
       throw const FileSystemException(
         'Temporary library file verification failed',
       );
     }
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final mirrored = await prefs.setString(_libraryStorageName, encoded);
-      if (!mirrored) {
-        debugPrint('[NoteEryk][Storage] preferences mirror was not accepted');
+      // The file plus its previous atomic version is the durable source of
+      // truth. Mirroring a large library into UserDefaults doubles iPad I/O
+      // and can block the app, so retain the mirror only for small notebooks.
+      if (encoded.length <= _preferencesMirrorLimit) {
+        final prefs = await SharedPreferences.getInstance();
+        final mirrored = await prefs.setString(_libraryStorageName, encoded);
+        if (!mirrored) {
+          debugPrint('[NoteEryk][Storage] preferences mirror was not accepted');
+        }
       }
     } catch (error) {
       debugPrint('[NoteEryk][Storage] preferences mirror failed: $error');
@@ -1912,24 +1926,10 @@ class AppState extends ChangeNotifier {
     final resolvedPage =
         page ?? (openNotebook?.id == notebookId ? openPage : 1);
     strokes[_strokeKey(notebookId, resolvedPage)] = List.of(value);
-    notifyListeners();
-    if (autoSave) {
-      _persistStrokes();
-      schedulePersistence();
-    }
-  }
-
-  Future<void> _persistStrokes() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      'strokes',
-      jsonEncode(
-        strokes.map(
-          (key, value) =>
-              MapEntry(key, value.map((stroke) => stroke.toJson()).toList()),
-        ),
-      ),
-    );
+    // The editor already repaints itself after creating or erasing a stroke.
+    // Avoid rebuilding the entire application and writing the same strokes
+    // separately on every pointer event; persistence is batched below.
+    if (autoSave) schedulePersistence();
   }
 
   void pinNote(String notebookId, PinnedNote note) {

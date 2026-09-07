@@ -50,18 +50,18 @@ class _NihongoNotebookAppState extends State<NihongoNotebookApp>
       _checkSharedFiles();
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
-      // iPadOS may terminate a suspended app without a final callback. The
-      // debounced autosave handles normal edits; this also creates a portable
-      // session snapshot while the process is still alive.
-      unawaited(_persistSessionSnapshot());
+      // iPadOS may terminate a suspended app without a final callback. Flush
+      // outstanding edits, but do not generate a full backup archive every
+      // time the app is briefly moved to the background.
+      unawaited(_persistSessionChanges());
     }
   }
 
-  Future<void> _persistSessionSnapshot() async {
+  Future<void> _persistSessionChanges() async {
     try {
-      await widget.state.flushPersistence(snapshot: true);
+      await widget.state.flushPersistence();
     } catch (error, stackTrace) {
-      debugPrint('[NoteEryk][Storage] session snapshot failed: $error');
+      debugPrint('[NoteEryk][Storage] session persistence failed: $error');
       debugPrintStack(stackTrace: stackTrace);
     }
   }
