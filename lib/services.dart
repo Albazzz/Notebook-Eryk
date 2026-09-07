@@ -377,6 +377,95 @@ class OpenRouterService {
     ],
   };
 
+  Map<String, dynamic> _chatCompletionPayload({
+    required String modelId,
+    required String instruction,
+    required Object userContent,
+    required double temperature,
+    required int maxTokens,
+    required _StructuredOutputSpec spec,
+    required bool compatibilityMode,
+  }) => {
+    'model': modelId,
+    'messages': [
+      {
+        'role': 'system',
+        'content': compatibilityMode
+            ? '$instruction\n\n${_jsonCompatibilityInstruction(spec)}'
+            : instruction,
+      },
+      {'role': 'user', 'content': userContent},
+    ],
+    'temperature': temperature,
+    'max_tokens': maxTokens,
+    if (!compatibilityMode) ..._structuredRequestOptions(spec),
+  };
+
+  String _jsonCompatibilityInstruction(_StructuredOutputSpec spec) =>
+      '''Compatibility mode: Return only one valid JSON object, with no Markdown
+or prose outside that object. It must conform exactly to this JSON Schema:
+${jsonEncode(spec.schema)}''';
+
+  /// Tries Strict Structured Outputs first. Some OpenRouter routes advertise a
+  /// model but reject `response_format` or `require_parameters`; retrying in
+  /// compatibility mode keeps that route usable while schema validation still
+  /// protects the UI from arbitrary prose.
+  Future<Map<String, dynamic>?> _requestValidatedObject({
+    required String apiKey,
+    required String modelId,
+    required String instruction,
+    required Object userContent,
+    required double temperature,
+    required int maxTokens,
+    required _StructuredOutputSpec spec,
+    required String operation,
+    bool retryRateLimit = false,
+  }) async {
+    var compatibilityMode = false;
+    var attempts = 0;
+    while (attempts < 2) {
+      final response = await _request(
+        'POST',
+        '/chat/completions',
+        apiKey,
+        body: jsonEncode(
+          _chatCompletionPayload(
+            modelId: modelId,
+            instruction: instruction,
+            userContent: userContent,
+            temperature: temperature,
+            maxTokens: maxTokens,
+            spec: spec,
+            compatibilityMode: compatibilityMode,
+          ),
+        ),
+      );
+      if (response.statusCode == 429 && retryRateLimit) {
+        if (attempts == 0) {
+          attempts++;
+          await Future<void>.delayed(
+            response.retryAfter ?? const Duration(seconds: 2),
+          );
+          continue;
+        }
+        throw HttpException('$operation đang giới hạn lượt (429)');
+      }
+      if (!compatibilityMode && _isStructuredOutputUnsupported(response)) {
+        compatibilityMode = true;
+        attempts = 0;
+        debugPrint(
+          '[NoteEryk][AI] $operation switched to JSON compatibility mode',
+        );
+        continue;
+      }
+      _throwIfRequestFailed(response, operation: operation);
+      final result = _validatedResponseObject(response.body, spec.schema);
+      if (result != null) return result;
+      attempts++;
+    }
+    return null;
+  }
+
   @visibleForTesting
   Map<String, dynamic> structuredRequestOptionsForTesting(AiTask task) =>
       _structuredRequestOptions(_outputSpecFor(task));
@@ -651,36 +740,24 @@ class OpenRouterService {
     final cached = _completionCache[cacheKey];
     if (cached != null) return cached;
     final spec = _outputSpecFor(task);
-    final body = jsonEncode({
-      'model': normalizedModelId,
-      'messages': [
-        {'role': 'system', 'content': instruction},
-        {'role': 'user', 'content': text},
-      ],
-      'temperature': 0.25,
+    final resultObject = await _requestValidatedObject(
+      apiKey: apiKey,
+      modelId: normalizedModelId,
+      instruction: instruction,
+      userContent: text,
+      temperature: 0.25,
       // Dictionary responses are intentionally short; limiting output
       // reduces latency and leaves less room for speculative explanations.
-      'max_tokens': switch (task) {
+      maxTokens: switch (task) {
         AiTask.dictionary => 220,
         AiTask.explain => 1050,
         AiTask.translate => 1200,
         AiTask.solve => 900,
         AiTask.createWeakPoint => 1000,
       },
-      ..._structuredRequestOptions(spec),
-    });
-    Map<String, dynamic>? resultObject;
-    for (var attempt = 0; attempt < 2; attempt++) {
-      final response = await _request(
-        'POST',
-        '/chat/completions',
-        apiKey,
-        body: body,
-      );
-      _throwIfRequestFailed(response, operation: 'Yêu cầu AI');
-      resultObject = _validatedResponseObject(response.body, spec.schema);
-      if (resultObject != null) break;
-    }
+      spec: spec,
+      operation: 'Yêu cầu AI',
+    );
     if (resultObject == null) {
       throw const FormatException(
         'AI trả về dữ liệu không đúng cấu trúc sau 2 lần thử',
@@ -731,31 +808,16 @@ Với kanji: title là chữ kanji, có reading, meaning và sourceSentence.
   ''';
     final normalizedModelId = modelId.trim();
     if (normalizedModelId.isEmpty) throw ArgumentError('Chưa chọn model AI');
-    final body = jsonEncode({
-      'model': normalizedModelId,
-      'messages': [
-        {'role': 'system', 'content': instruction},
-        {'role': 'user', 'content': text},
-      ],
-      'temperature': 0.15,
-      'max_tokens': 1400,
-      ..._structuredRequestOptions(_weakPointDraftsSpec),
-    });
-    Map<String, dynamic>? object;
-    for (var attempt = 0; attempt < 2; attempt++) {
-      final response = await _request(
-        'POST',
-        '/chat/completions',
-        apiKey,
-        body: body,
-      );
-      _throwIfRequestFailed(response, operation: 'Yêu cầu AI tạo điểm yếu');
-      object = _validatedResponseObject(
-        response.body,
-        _weakPointDraftsSpec.schema,
-      );
-      if (object != null) break;
-    }
+    final object = await _requestValidatedObject(
+      apiKey: apiKey,
+      modelId: normalizedModelId,
+      instruction: instruction,
+      userContent: text,
+      temperature: 0.15,
+      maxTokens: 1400,
+      spec: _weakPointDraftsSpec,
+      operation: 'Yêu cầu AI tạo điểm yếu',
+    );
     if (object == null) {
       throw const FormatException(
         'AI trả về bản nháp điểm yếu không đúng cấu trúc sau 2 lần thử',
@@ -813,59 +875,30 @@ Với kanji: title là chữ kanji, có reading, meaning và sourceSentence.
     required String modelId,
     required List<int> bytes,
   }) async {
-    final body = jsonEncode({
-      'model': modelId,
-      'messages': [
+    const instruction =
+        'Bạn là OCR tiếng Nhật. Đọc đoạn nội dung chính, giữ nguyên kanji/kana và xuống dòng; bỏ qua nét viết tay, số trang hoặc chữ rác rời rạc ở ngoài đoạn chính. Nếu chỉ thiếu hoặc sai 1–2 chữ và ngữ cảnh đủ rõ, phục dựng phương án hợp lý nhất rồi ghi rõ câu đã phục dựng và phần chưa chắc trong warning. Không âm thầm đoán phần bị cắt lớn.';
+    final data = await _requestValidatedObject(
+      apiKey: apiKey,
+      modelId: modelId,
+      instruction: instruction,
+      userContent: [
         {
-          'role': 'system',
-          'content':
-              'Bạn là OCR tiếng Nhật. Đọc đoạn nội dung chính, giữ nguyên kanji/kana và xuống dòng; bỏ qua nét viết tay, số trang hoặc chữ rác rời rạc ở ngoài đoạn chính. Nếu chỉ thiếu hoặc sai 1–2 chữ và ngữ cảnh đủ rõ, phục dựng phương án hợp lý nhất rồi ghi rõ câu đã phục dựng và phần chưa chắc trong warning. Không âm thầm đoán phần bị cắt lớn.',
+          'type': 'text',
+          'text': 'Đọc toàn bộ chữ Nhật trong vùng ảnh đã khoanh.',
         },
         {
-          'role': 'user',
-          'content': [
-            {
-              'type': 'text',
-              'text': 'Đọc toàn bộ chữ Nhật trong vùng ảnh đã khoanh.',
-            },
-            {
-              'type': 'image_url',
-              'image_url': {
-                'url': 'data:image/png;base64,${base64Encode(bytes)}',
-              },
-            },
-          ],
+          'type': 'image_url',
+          'image_url': {'url': 'data:image/png;base64,${base64Encode(bytes)}'},
         },
       ],
-      'temperature': 0,
+      temperature: 0,
       // A full reading passage can easily exceed 220 tokens once JSON
       // escaping and an uncertainty note are included.
-      'max_tokens': 1400,
-      ..._structuredRequestOptions(_ocrSpec),
-    });
-    Map<String, dynamic>? data;
-    for (var attempt = 0; attempt < 2; attempt++) {
-      final response = await _request(
-        'POST',
-        '/chat/completions',
-        apiKey,
-        body: body,
-      );
-      if (response.statusCode == 429) {
-        if (attempt == 0) {
-          await Future<void>.delayed(
-            response.retryAfter ?? const Duration(seconds: 2),
-          );
-          continue;
-        }
-        throw const HttpException(
-          'Model nhận diện ảnh đang giới hạn lượt (429)',
-        );
-      }
-      _throwIfRequestFailed(response, operation: 'Nhận diện ảnh');
-      data = _validatedResponseObject(response.body, _ocrSpec.schema);
-      if (data != null) break;
-    }
+      maxTokens: 1400,
+      spec: _ocrSpec,
+      operation: 'Nhận diện ảnh',
+      retryRateLimit: true,
+    );
     if (data == null) {
       throw const FormatException(
         'AI trả về OCR không đúng cấu trúc sau 2 lần thử',
@@ -993,16 +1026,20 @@ Chỉ tra đúng từ/cụm từ người dùng đã khoanh. Nếu có nhiều c
     required String operation,
   }) {
     if (response.statusCode >= 200 && response.statusCode < 300) return;
-    final detail = response.body.toLowerCase();
-    if (detail.contains('response_format') ||
-        detail.contains('structured output') ||
-        detail.contains('require_parameters') ||
-        detail.contains('no endpoints found')) {
+    if (_isStructuredOutputUnsupported(response)) {
       throw HttpException(
         '$operation thất bại: model hoặc provider không hỗ trợ Structured Outputs',
       );
     }
     throw HttpException('$operation thất bại (${response.statusCode})');
+  }
+
+  bool _isStructuredOutputUnsupported(_HttpResult response) {
+    final detail = response.body.toLowerCase();
+    return detail.contains('response_format') ||
+        detail.contains('structured output') ||
+        detail.contains('require_parameters') ||
+        detail.contains('no endpoints found');
   }
 
   bool _matchesSchema(Object? value, Map<String, dynamic> schema) {

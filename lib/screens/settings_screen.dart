@@ -1386,6 +1386,44 @@ class _PrivacySettings extends StatelessWidget {
     );
   }
 
+  Future<void> _cleanupStorage(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Dọn dung lượng thừa?'),
+        content: const Text(
+          'Note Eryk sẽ xóa ảnh/PDF trong thư mục nội bộ không còn được vở nào dùng và giữ lại 2 backup mới nhất. Tệp đang dùng sẽ không bị xóa.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Dọn ngay'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    try {
+      final result = await state.cleanupUnusedStorage();
+      if (!context.mounted) return;
+      final megabytes = result.bytes / (1024 * 1024);
+      showAppSnack(
+        context,
+        result.files == 0
+            ? 'Không có dung lượng thừa cần dọn'
+            : 'Đã dọn ${result.files} tệp · ${megabytes.toStringAsFixed(1)} MB',
+      );
+    } catch (error) {
+      if (context.mounted) {
+        showAppSnack(context, 'Không thể dọn dung lượng: $error');
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1443,6 +1481,23 @@ class _PrivacySettings extends StatelessWidget {
                     onPressed: () => _import(context),
                   ),
                 ],
+              ),
+            ),
+            const Divider(),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.cleaning_services_outlined),
+              title: const Text(
+                'Dọn dung lượng thừa',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+              subtitle: const Text(
+                'Xóa bản sao tài liệu không còn được vở nào sử dụng',
+              ),
+              trailing: IconButton(
+                tooltip: 'Dọn dung lượng thừa',
+                icon: const Icon(Icons.auto_delete_outlined),
+                onPressed: () => _cleanupStorage(context),
               ),
             ),
           ],

@@ -10,6 +10,21 @@ import 'package:path_provider_platform_interface/path_provider_platform_interfac
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test(
+    'AI falls back when an OpenRouter route rejects structured output',
+    () async {
+      final serviceSource = await File('lib/services.dart').readAsString();
+
+      expect(
+        serviceSource,
+        contains('_isStructuredOutputUnsupported(response)'),
+      );
+      expect(serviceSource, contains('compatibilityMode = true'));
+      expect(serviceSource, contains('_jsonCompatibilityInstruction(spec)'));
+      expect(serviceSource, contains('if (!compatibilityMode)'));
+    },
+  );
+
   test('autosave batches pen changes without lifecycle backup', () async {
     final stateSource = await File('lib/app_state.dart').readAsString();
     final appSource = await File('lib/app.dart').readAsString();
@@ -23,6 +38,24 @@ void main() {
     expect(stateSource, isNot(contains('_persistStrokes()')));
     expect(appSource, isNot(contains('flushPersistence(snapshot: true)')));
   });
+
+  test(
+    'storage cleanup keeps referenced files and limits generated backups',
+    () async {
+      final stateSource = await File('lib/app_state.dart').readAsString();
+      final settingsSource = await File(
+        'lib/screens/settings_screen.dart',
+      ).readAsString();
+
+      expect(stateSource, contains('cleanupUnusedStorage'));
+      expect(stateSource, contains('_maxRetainedBackups = 2'));
+      expect(
+        stateSource,
+        contains('referenced.contains(entity.absolute.path)'),
+      );
+      expect(settingsSource, contains('Dọn dung lượng thừa'));
+    },
+  );
 
   test('Luna chỉ nhận text sau OCR, không nhận lại ảnh đã khoanh', () async {
     final editorSource = await File(

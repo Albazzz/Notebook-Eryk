@@ -36,6 +36,7 @@ class AppState extends ChangeNotifier {
   static const _savedModelsStorageName = 'ai_saved_models';
   static const _libraryStorageName = 'notebook_library_v2';
   static const _backupDirectoryName = 'Backups';
+  static const _maxRetainedBackups = 2;
   static const _persistenceDebounce = Duration(seconds: 1);
   static const _preferencesMirrorLimit = 512 * 1024;
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
@@ -869,7 +870,7 @@ class AppState extends ChangeNotifier {
             ..sort(
               (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
             );
-      for (final old in snapshots.skip(5)) {
+      for (final old in snapshots.skip(_maxRetainedBackups)) {
         try {
           await old.delete();
         } catch (error) {
@@ -886,6 +887,78 @@ class AppState extends ChangeNotifier {
 
   Future<bool> _isUsableBackupFile(File file) async =>
       await file.exists() && await file.length() > 0;
+
+  /// Removes only app-managed files that are no longer referenced by the
+  /// current library, plus old generated backups. Original PDFs and any file
+  /// still referenced by a notebook are always retained.
+  Future<({int files, int bytes})> cleanupUnusedStorage() async {
+    final referenced = _attachmentPaths()
+        .where((path) => path.trim().isNotEmpty)
+        .map((path) => File(path).absolute.path)
+        .toSet();
+    var removedFiles = 0;
+    var removedBytes = 0;
+
+    Future<void> cleanDirectory(Directory directory) async {
+      if (!await directory.exists()) return;
+      await for (final entity in directory.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is! File || referenced.contains(entity.absolute.path)) {
+          continue;
+        }
+        try {
+          final length = await entity.length();
+          await entity.delete();
+          removedFiles++;
+          removedBytes += length;
+        } catch (error) {
+          debugPrint(
+            '[NoteEryk][Storage] orphan cleanup skipped ${entity.path}: $error',
+          );
+        }
+      }
+    }
+
+    final documents = await getApplicationDocumentsDirectory();
+    final support = await getApplicationSupportDirectory();
+    await cleanDirectory(
+      Directory('${documents.path}${Platform.pathSeparator}imports'),
+    );
+    await cleanDirectory(
+      Directory('${support.path}${Platform.pathSeparator}imports'),
+    );
+    await cleanDirectory(
+      Directory('${support.path}${Platform.pathSeparator}pdf_backgrounds'),
+    );
+
+    final backups = Directory(
+      '${documents.path}${Platform.pathSeparator}$_backupDirectoryName',
+    );
+    if (await backups.exists()) {
+      final snapshots =
+          backups
+              .listSync()
+              .whereType<File>()
+              .where((file) => file.path.endsWith('.noteeryk'))
+              .toList()
+            ..sort(
+              (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+            );
+      for (final old in snapshots.skip(_maxRetainedBackups)) {
+        try {
+          final length = await old.length();
+          await old.delete();
+          removedFiles++;
+          removedBytes += length;
+        } catch (error) {
+          debugPrint('[NoteEryk][Storage] old backup cleanup skipped: $error');
+        }
+      }
+    }
+    return (files: removedFiles, bytes: removedBytes);
+  }
 
   Future<void> _validateCurrentPageFilesForBackup() async {
     final missing = <String>[];
