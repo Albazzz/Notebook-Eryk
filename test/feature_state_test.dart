@@ -22,6 +22,16 @@ void main() {
       expect(serviceSource, contains('compatibilityMode = true'));
       expect(serviceSource, contains('_jsonCompatibilityInstruction(spec)'));
       expect(serviceSource, contains('if (!compatibilityMode)'));
+      expect(
+        serviceSource,
+        contains('Do not spend the second attempt repeating the same payload'),
+      );
+      expect(
+        serviceSource,
+        contains(
+          'if (response.statusCode >= 200 && response.statusCode < 300)',
+        ),
+      );
     },
   );
 

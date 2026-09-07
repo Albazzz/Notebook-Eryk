@@ -462,6 +462,11 @@ ${jsonEncode(spec.schema)}''';
       final result = _validatedResponseObject(response.body, spec.schema);
       if (result != null) return result;
       attempts++;
+      // A route can accept Structured Outputs but still return a malformed
+      // object. Do not spend the second attempt repeating the same payload;
+      // ask for plain JSON instead, which is more widely supported and still
+      // checked against the schema below.
+      if (!compatibilityMode) compatibilityMode = true;
     }
     return null;
   }
@@ -1035,6 +1040,7 @@ Chỉ tra đúng từ/cụm từ người dùng đã khoanh. Nếu có nhiều c
   }
 
   bool _isStructuredOutputUnsupported(_HttpResult response) {
+    if (response.statusCode >= 200 && response.statusCode < 300) return false;
     final detail = response.body.toLowerCase();
     return detail.contains('response_format') ||
         detail.contains('structured output') ||
