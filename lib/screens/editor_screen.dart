@@ -327,6 +327,18 @@ class _EditorScreenState extends State<EditorScreen>
                       thumbnailPathForPage: (page) => widget.state
                           .imagesForPage(widget.notebook.id, page)
                           .firstOrNull,
+                      thumbnailDataForPage:
+                          widget.notebook.isPdf &&
+                              widget.state.sourceDocuments[widget
+                                      .notebook
+                                      .id] !=
+                                  null
+                          ? (page) => widget.state.renderPdfPage(
+                              widget.notebook.id,
+                              page,
+                              width: 300,
+                            )
+                          : null,
                     ),
                   Expanded(
                     child: Column(
@@ -1148,6 +1160,12 @@ class _EditorScreenState extends State<EditorScreen>
       final document = pw.Document();
       for (var page = 1; page <= widget.notebook.pages; page++) {
         if (!mounted) return;
+        final sourcePdf = widget.state.sourceDocuments[widget.notebook.id];
+        if (sourcePdf != null && sourcePdf.toLowerCase().endsWith('.pdf')) {
+          // Ensure the on-demand PDF background is decoded before capturing a
+          // page that also contains movable images.
+          await widget.state.renderPdfPage(widget.notebook.id, page);
+        }
         // Image.file resolves asynchronously. Without preloading, rapid
         // page-by-page capture can paint the synchronous ink strokes before
         // the imported PDF background has decoded, producing white backups.
@@ -1260,6 +1278,27 @@ class _EditorScreenState extends State<EditorScreen>
                                               widget.notebook.paperLineOpacity,
                                         ),
                                       ),
+                                      if (widget.notebook.isPdf &&
+                                          widget.state.sourceDocuments[widget
+                                                  .notebook
+                                                  .id] !=
+                                              null &&
+                                          !widget.state
+                                              .imagePlacementsForPage(
+                                                widget.notebook.id,
+                                                widget.state.openPage,
+                                              )
+                                              .any(
+                                                (placement) =>
+                                                    placement.isBackground,
+                                              ))
+                                        Positioned.fill(
+                                          child: _PdfPageBackground(
+                                            state: widget.state,
+                                            notebookId: widget.notebook.id,
+                                            page: widget.state.openPage,
+                                          ),
+                                        ),
                                       if (widget.state
                                           .imagePlacementsForPage(
                                             widget.notebook.id,
@@ -3702,6 +3741,7 @@ class _PageRail extends StatefulWidget {
     required this.onAddPage,
     required this.onClose,
     required this.thumbnailPathForPage,
+    this.thumbnailDataForPage,
   });
   final int currentPage;
   final int pageCount;
@@ -3709,6 +3749,7 @@ class _PageRail extends StatefulWidget {
   final VoidCallback onAddPage;
   final VoidCallback onClose;
   final String? Function(int page) thumbnailPathForPage;
+  final Future<Uint8List?> Function(int page)? thumbnailDataForPage;
 
   @override
   State<_PageRail> createState() => _PageRailState();
@@ -3725,6 +3766,15 @@ class _PageRailState extends State<_PageRail> {
   VoidCallback get onClose => widget.onClose;
   String? Function(int page) get thumbnailPathForPage =>
       widget.thumbnailPathForPage;
+  Future<Uint8List?> Function(int page)? get thumbnailDataForPage =>
+      widget.thumbnailDataForPage;
+  final Map<int, Future<Uint8List?>> _thumbnailFutures = {};
+
+  Future<Uint8List?>? _thumbnailData(int page) {
+    final loader = thumbnailDataForPage;
+    if (loader == null) return null;
+    return _thumbnailFutures.putIfAbsent(page, () => loader(page));
+  }
 
   @override
   void initState() {
@@ -3835,19 +3885,7 @@ class _PageRailState extends State<_PageRail> {
                                   width: active ? 2.5 : 1,
                                 ),
                               ),
-                              child: thumbnailPathForPage(page) == null
-                                  ? const SizedBox.shrink()
-                                  : ClipRRect(
-                                      borderRadius: BorderRadius.circular(5),
-                                      child: Image.file(
-                                        File(thumbnailPathForPage(page)!),
-                                        fit: BoxFit.contain,
-                                        errorBuilder: (_, _, _) => const Icon(
-                                          Icons.broken_image_outlined,
-                                          size: 18,
-                                        ),
-                                      ),
-                                    ),
+                              child: _buildThumbnail(page),
                             ),
                             const SizedBox(height: 4),
                             Text(
@@ -3881,6 +3919,34 @@ class _PageRailState extends State<_PageRail> {
       ],
     ),
   );
+
+  Widget _buildThumbnail(int page) {
+    final path = thumbnailPathForPage(page);
+    if (path != null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(5),
+        child: Image.file(
+          File(path),
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) =>
+              const Icon(Icons.broken_image_outlined, size: 18),
+        ),
+      );
+    }
+    final future = _thumbnailData(page);
+    if (future == null) return const SizedBox.shrink();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(5),
+      child: FutureBuilder<Uint8List?>(
+        future: future,
+        builder: (_, snapshot) {
+          final bytes = snapshot.data;
+          if (bytes == null) return const SizedBox.shrink();
+          return Image.memory(bytes, fit: BoxFit.contain);
+        },
+      ),
+    );
+  }
 }
 
 class _PageEdgeNavigator extends StatelessWidget {
@@ -3930,6 +3996,63 @@ class _PageEdgeNavigator extends StatelessWidget {
         ),
       ),
     ),
+  );
+}
+
+class _PdfPageBackground extends StatefulWidget {
+  const _PdfPageBackground({
+    required this.state,
+    required this.notebookId,
+    required this.page,
+  });
+  final AppState state;
+  final String notebookId;
+  final int page;
+
+  @override
+  State<_PdfPageBackground> createState() => _PdfPageBackgroundState();
+}
+
+class _PdfPageBackgroundState extends State<_PdfPageBackground> {
+  late Future<Uint8List?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PdfPageBackground oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.state != widget.state ||
+        oldWidget.notebookId != widget.notebookId ||
+        oldWidget.page != widget.page) {
+      _future = _load();
+    }
+  }
+
+  Future<Uint8List?> _load() =>
+      widget.state.renderPdfPage(widget.notebookId, widget.page);
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<Uint8List?>(
+    future: _future,
+    builder: (context, snapshot) {
+      final bytes = snapshot.data;
+      if (bytes != null) {
+        return Image.memory(
+          bytes,
+          fit: BoxFit.fill,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.high,
+        );
+      }
+      if (snapshot.hasError) {
+        return const Center(child: Icon(Icons.broken_image_outlined));
+      }
+      return const ColoredBox(color: Colors.white);
+    },
   );
 }
 

@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -971,7 +970,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final firstDocument = documents.firstOrNull;
     final isPdf = firstDocument != null && _extension(firstDocument) == 'pdf';
     String? copiedDocument;
-    var pdfPages = <String>[];
+    var pdfPageCount = 0;
     try {
       if (firstDocument != null) {
         copiedDocument = await _copyImportedFile(firstDocument);
@@ -1007,11 +1006,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           );
           await WidgetsBinding.instance.endOfFrame;
           try {
-            pdfPages = await _renderPdfPages(
-              copiedDocument,
-              onProgress: (current, total) =>
-                  progress.value = 'Đang xử lý trang $current/$total…',
-            );
+            pdfPageCount = await _pdfPageCount(copiedDocument);
           } finally {
             final dialogContext = progressContext;
             if (dialogContext != null && dialogContext.mounted) {
@@ -1019,7 +1014,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             }
             progress.dispose();
           }
-          if (pdfPages.isEmpty) {
+          if (pdfPageCount == 0) {
             throw const FormatException('PDF không có trang nào');
           }
         }
@@ -1044,7 +1039,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (!mounted) return false;
     final type = firstDocument == null ? 'Vở ghi' : (isPdf ? 'PDF' : 'Word');
     final pageCount = isPdf
-        ? pdfPages.length + importedImages.length
+        ? pdfPageCount + importedImages.length
         : importedImages.isEmpty
         ? 1
         : (imageMode == 'pages' ? importedImages.length : 1);
@@ -1064,11 +1059,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
       widget.state.attachSourceDocument(notebook.id, copiedDocument);
     }
     if (isPdf) {
-      for (var index = 0; index < pdfPages.length; index++) {
-        widget.state.attachImages(notebook.id, index + 1, [pdfPages[index]]);
-      }
       for (var index = 0; index < importedImages.length; index++) {
-        widget.state.attachImages(notebook.id, pdfPages.length + index + 1, [
+        widget.state.attachImages(notebook.id, pdfPageCount + index + 1, [
           importedImages[index],
         ]);
       }
@@ -1090,67 +1082,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
     showAppSnack(
       context,
       isPdf
-          ? 'Đã nhập ${notebook.title} · ${pdfPages.length} trang PDF'
+          ? 'Đã nhập ${notebook.title} · $pdfPageCount trang PDF'
           : 'Đã nhập ${notebook.title}',
     );
     return true;
   }
 
-  Future<List<String>> _renderPdfPages(
-    String sourcePath, {
-    void Function(int current, int total)? onProgress,
-  }) async {
+  Future<int> _pdfPageCount(String sourcePath) async {
     final document = await pdfx.PdfDocument.openFile(sourcePath);
-    final directory = await getApplicationDocumentsDirectory();
-    final targetDirectory = Directory(
-      '${directory.path}${Platform.pathSeparator}imports${Platform.pathSeparator}pdf_${DateTime.now().microsecondsSinceEpoch}',
-    );
-    await targetDirectory.create(recursive: true);
-    final renderedPaths = List<String?>.filled(document.pagesCount, null);
-    var completed = 0;
-    try {
-      // iPad can render several PDF pages concurrently. A group of three is
-      // fast on iPad Gen 11 without creating a large memory spike on long PDFs.
-      const batchSize = 3;
-      for (var start = 1; start <= document.pagesCount; start += batchSize) {
-        final end = math.min(start + batchSize - 1, document.pagesCount);
-        await Future.wait([
-          for (var pageNumber = start; pageNumber <= end; pageNumber++)
-            () async {
-              final page = await document.getPage(pageNumber);
-              try {
-                const targetWidth = 1200.0;
-                final image = await page.render(
-                  width: targetWidth,
-                  height: targetWidth * page.height / page.width,
-                  format: pdfx.PdfPageImageFormat.jpeg,
-                  quality: 90,
-                  backgroundColor: '#FFFFFF',
-                );
-                if (image == null) {
-                  throw FormatException('Không render được trang $pageNumber');
-                }
-                final target =
-                    '${targetDirectory.path}${Platform.pathSeparator}page_${pageNumber.toString().padLeft(4, '0')}.jpg';
-                await File(target).writeAsBytes(image.bytes);
-                renderedPaths[pageNumber - 1] = target;
-                completed++;
-                onProgress?.call(completed, document.pagesCount);
-              } finally {
-                await page.close();
-              }
-            }(),
-        ]);
-      }
-    } catch (_) {
-      if (await targetDirectory.exists()) {
-        await targetDirectory.delete(recursive: true);
-      }
-      rethrow;
-    } finally {
-      await document.close();
-    }
-    return renderedPaths.whereType<String>().toList();
+    final count = document.pagesCount;
+    await document.close();
+    return count;
   }
 
   Future<String> _copyImportedFile(String source) async {

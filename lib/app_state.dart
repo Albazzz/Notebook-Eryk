@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -82,6 +83,13 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _persistenceTimer?.cancel();
+    for (final document in _pdfDocuments.values) {
+      unawaited(document.close());
+    }
+    _pdfDocuments.clear();
+    _pdfPageCache.clear();
+    _pdfPageInFlight.clear();
+    _pdfPageCacheOrder.clear();
     aiService.dispose();
     super.dispose();
   }
@@ -107,6 +115,10 @@ class AppState extends ChangeNotifier {
   List<WeakPoint> weakPoints = [];
   Future<void>? _persistenceInFlight;
   Future<File>? _backupInFlight;
+  final Map<String, pdfx.PdfDocument> _pdfDocuments = {};
+  final Map<String, Uint8List> _pdfPageCache = {};
+  final Map<String, Future<Uint8List?>> _pdfPageInFlight = {};
+  final List<String> _pdfPageCacheOrder = [];
   Timer? _persistenceTimer;
   bool _storageReady = false;
   bool _libraryNeedsRecoveryPersistence = false;
@@ -201,7 +213,6 @@ class AppState extends ChangeNotifier {
     await _loadLibrary(prefs);
     final relocatedAttachments = await _repairRelocatedAttachmentPaths();
     final repairedAttachments = _ensureLegacyImagePlacements();
-    final regeneratedPdfPages = await _repairMissingPdfBackgrounds();
     _storageReady = true;
     if (_libraryNeedsRecoveryPersistence) {
       try {
@@ -210,9 +221,7 @@ class AppState extends ChangeNotifier {
       } catch (error) {
         debugPrint('[NoteEryk][Storage] recovery persistence failed: $error');
       }
-    } else if (relocatedAttachments ||
-        repairedAttachments ||
-        regeneratedPdfPages) {
+    } else if (relocatedAttachments || repairedAttachments) {
       schedulePersistence();
     }
     notifyListeners();
@@ -557,92 +566,6 @@ class AppState extends ChangeNotifier {
     return changed;
   }
 
-  /// Rebuild missing raster page backgrounds from the original PDF. The
-  /// source PDF is part of modern .noteeryk backups, so this also repairs
-  /// snapshots made by builds that forgot to include rendered page images.
-  Future<bool> _repairMissingPdfBackgrounds() async {
-    var changed = false;
-    for (final notebook in notebooks.where((item) => item.isPdf)) {
-      final sourcePath = sourceDocuments[notebook.id];
-      if (sourcePath == null || !await File(sourcePath).exists()) continue;
-      final pagesNeedingRepair = <int>[];
-      for (var pageNumber = 1; pageNumber <= notebook.pages; pageNumber++) {
-        if (blankPages.contains('${notebook.id}:$pageNumber')) continue;
-        final prefix = '${notebook.id}:$pageNumber:';
-        final hasUsableBackground = imagePlacements.values.any(
-          (placement) =>
-              placement.id.startsWith(prefix) &&
-              placement.isBackground &&
-              File(placement.path).existsSync(),
-        );
-        if (!hasUsableBackground) pagesNeedingRepair.add(pageNumber);
-      }
-      if (pagesNeedingRepair.isEmpty) continue;
-      pdfx.PdfDocument? document;
-      try {
-        document = await pdfx.PdfDocument.openFile(sourcePath);
-        final repairDirectory = Directory(
-          '${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}pdf_backgrounds${Platform.pathSeparator}${notebook.id}',
-        );
-        await repairDirectory.create(recursive: true);
-        for (final pageNumber in pagesNeedingRepair) {
-          if (pageNumber > document.pagesCount) continue;
-          final prefix = '${notebook.id}:$pageNumber:';
-          final pagePaths = pageImages
-              .putIfAbsent(notebook.id, () => {})
-              .putIfAbsent(pageNumber, () => []);
-
-          final page = await document.getPage(pageNumber);
-          try {
-            const width = 1200.0;
-            final rendered = await page.render(
-              width: width,
-              height: width * page.height / page.width,
-              format: pdfx.PdfPageImageFormat.jpeg,
-              quality: 90,
-              backgroundColor: '#FFFFFF',
-            );
-            if (rendered == null) continue;
-            final target = File(
-              '${repairDirectory.path}${Platform.pathSeparator}page_${pageNumber.toString().padLeft(4, '0')}.jpg',
-            );
-            await target.writeAsBytes(rendered.bytes, flush: true);
-            final missingPaths = pagePaths
-                .where((path) => !File(path).existsSync())
-                .toSet();
-            pagePaths.removeWhere(missingPaths.contains);
-            imagePlacements.removeWhere(
-              (_, placement) =>
-                  placement.id.startsWith(prefix) &&
-                  missingPaths.contains(placement.path),
-            );
-            if (!pagePaths.contains(target.path)) {
-              pagePaths.insert(0, target.path);
-            }
-            final id =
-                '${prefix}repaired:${DateTime.now().microsecondsSinceEpoch}:${_imagePlacementSequence++}';
-            imagePlacements[id] = PageImagePlacement(
-              id: id,
-              path: target.path,
-              rect: const Rect.fromLTWH(0, 0, 1, 1),
-              isBackground: true,
-            );
-            changed = true;
-          } finally {
-            await page.close();
-          }
-        }
-      } catch (error) {
-        debugPrint(
-          '[NoteEryk][Storage] PDF background repair failed for ${notebook.id}: $error',
-        );
-      } finally {
-        await document?.close();
-      }
-    }
-    return changed;
-  }
-
   Map<String, Object?> _librarySnapshot() => {
     'version': 2,
     'updatedAt': DateTime.now().toIso8601String(),
@@ -789,7 +712,6 @@ class AppState extends ChangeNotifier {
 
   Future<File> _exportBackupSnapshot() async {
     _ensureLegacyImagePlacements();
-    await _repairMissingPdfBackgrounds();
     await _validateCurrentPageFilesForBackup();
     final documents = await getApplicationDocumentsDirectory();
     final backups = Directory('${documents.path}/$_backupDirectoryName');
@@ -889,15 +811,21 @@ class AppState extends ChangeNotifier {
       await file.exists() && await file.length() > 0;
 
   /// Removes only app-managed files that are no longer referenced by the
-  /// current library, plus old generated backups. Original PDFs and any file
-  /// still referenced by a notebook are always retained.
+  /// current library, plus old generated backups. PDF page rasters are first
+  /// detached when their original PDF is available; the editor renders those
+  /// pages on demand without lowering source quality.
   Future<({int files, int bytes})> cleanupUnusedStorage() async {
+    if (!_storageReady) return (files: 0, bytes: 0);
+    final migratedPdf = await _migratePdfBackgroundsToOnDemand();
+    final refreshedBackups = migratedPdf
+        ? await _refreshBackupsAfterPdfMigration()
+        : (files: 0, bytes: 0);
     final referenced = _attachmentPaths()
         .where((path) => path.trim().isNotEmpty)
         .map((path) => File(path).absolute.path)
         .toSet();
-    var removedFiles = 0;
-    var removedBytes = 0;
+    var removedFiles = refreshedBackups.files;
+    var removedBytes = refreshedBackups.bytes;
 
     Future<void> cleanDirectory(Directory directory) async {
       if (!await directory.exists()) return;
@@ -958,6 +886,107 @@ class AppState extends ChangeNotifier {
       }
     }
     return (files: removedFiles, bytes: removedBytes);
+  }
+
+  Future<({int files, int bytes})> _refreshBackupsAfterPdfMigration() async {
+    try {
+      // Create one fresh backup from the PDF-native library first. Only after
+      // it succeeds are the old raster-heavy backups removed.
+      final fresh = await exportBackupSnapshot();
+      final backups = Directory(
+        '${(await getApplicationDocumentsDirectory()).path}${Platform.pathSeparator}$_backupDirectoryName',
+      );
+      var files = 0;
+      var bytes = 0;
+      for (final candidate in backups.listSync().whereType<File>().where(
+        (file) => file.path.endsWith('.noteeryk'),
+      )) {
+        if (candidate.path == fresh.path) continue;
+        final length = await candidate.length();
+        await candidate.delete();
+        files++;
+        bytes += length;
+      }
+      return (files: files, bytes: bytes);
+    } catch (error) {
+      debugPrint(
+        '[NoteEryk][Storage] PDF-native backup refresh skipped: $error',
+      );
+      return (files: 0, bytes: 0);
+    }
+  }
+
+  bool _isGeneratedPdfBackgroundPath(String path) {
+    final normalized = path.replaceAll('\\', '/').toLowerCase();
+    return normalized.contains('/imports/pdf_') ||
+        normalized.contains('/pdf_backgrounds/');
+  }
+
+  Future<bool> _migratePdfBackgroundsToOnDemand() async {
+    final originalPageImages = pageImages.map(
+      (notebookId, pages) => MapEntry(
+        notebookId,
+        pages.map((page, paths) => MapEntry(page, List<String>.of(paths))),
+      ),
+    );
+    final originalPlacements = Map<String, PageImagePlacement>.of(
+      imagePlacements,
+    );
+    final removablePaths = <String>{};
+    for (final notebook in notebooks.where((item) => item.isPdf)) {
+      final sourcePath = sourceDocuments[notebook.id];
+      if (sourcePath == null ||
+          !sourcePath.toLowerCase().endsWith('.pdf') ||
+          !await File(sourcePath).exists()) {
+        continue;
+      }
+      final pages = pageImages[notebook.id];
+      if (pages != null) {
+        for (final paths in pages.values) {
+          removablePaths.addAll(paths.where(_isGeneratedPdfBackgroundPath));
+        }
+      }
+      for (final placement in imagePlacements.values) {
+        if (placement.id.startsWith('${notebook.id}:') &&
+            placement.isBackground &&
+            _isGeneratedPdfBackgroundPath(placement.path)) {
+          removablePaths.add(placement.path);
+        }
+      }
+    }
+    if (removablePaths.isEmpty) return false;
+
+    // Never detach a path that is also used by a movable image layer.
+    final floatingPaths = imagePlacements.values
+        .where((placement) => !placement.isBackground)
+        .map((placement) => placement.path)
+        .toSet();
+    removablePaths.removeWhere(floatingPaths.contains);
+    if (removablePaths.isEmpty) return false;
+
+    for (final pages in pageImages.values) {
+      for (final paths in pages.values) {
+        paths.removeWhere(removablePaths.contains);
+      }
+    }
+    imagePlacements.removeWhere(
+      (_, placement) => removablePaths.contains(placement.path),
+    );
+    notifyListeners();
+    try {
+      await flushPersistence();
+      return true;
+    } catch (error) {
+      pageImages
+        ..clear()
+        ..addAll(originalPageImages);
+      imagePlacements
+        ..clear()
+        ..addAll(originalPlacements);
+      notifyListeners();
+      debugPrint('[NoteEryk][Storage] PDF migration rolled back: $error');
+      return false;
+    }
   }
 
   Future<void> _validateCurrentPageFilesForBackup() async {
@@ -1210,7 +1239,6 @@ class AppState extends ChangeNotifier {
       try {
         _applyLibrarySnapshot(library);
         _ensureLegacyImagePlacements();
-        await _repairMissingPdfBackgrounds();
         await flushPersistence();
       } catch (_) {
         _applyLibrarySnapshot(currentSnapshot);
@@ -1901,6 +1929,81 @@ class AppState extends ChangeNotifier {
 
   List<String> imagesForPage(String notebookId, int page) =>
       pageImages[notebookId]?[page] ?? const [];
+
+  /// Renders only the visible PDF page. The PDF remains the source of truth;
+  /// rendered bytes are an in-memory LRU cache and never become attachments.
+  Future<Uint8List?> renderPdfPage(
+    String notebookId,
+    int pageNumber, {
+    double width = 1800,
+  }) async {
+    final sourcePath = sourceDocuments[notebookId];
+    if (sourcePath == null ||
+        !sourcePath.toLowerCase().endsWith('.pdf') ||
+        pageNumber < 1) {
+      return null;
+    }
+    final key = '$sourcePath|$pageNumber|${width.round()}';
+    final cached = _pdfPageCache[key];
+    if (cached != null) {
+      _touchPdfPageCache(key);
+      return cached;
+    }
+    final running = _pdfPageInFlight[key];
+    if (running != null) return running;
+
+    final operation = _renderPdfPage(
+      sourcePath: sourcePath,
+      pageNumber: pageNumber,
+      width: width,
+    );
+    _pdfPageInFlight[key] = operation;
+    try {
+      final rendered = await operation;
+      if (rendered != null) {
+        _pdfPageCache[key] = rendered;
+        _touchPdfPageCache(key);
+        while (_pdfPageCacheOrder.length > 4) {
+          final oldest = _pdfPageCacheOrder.removeAt(0);
+          _pdfPageCache.remove(oldest);
+        }
+      }
+      return rendered;
+    } finally {
+      _pdfPageInFlight.remove(key);
+    }
+  }
+
+  void _touchPdfPageCache(String key) {
+    _pdfPageCacheOrder.remove(key);
+    _pdfPageCacheOrder.add(key);
+  }
+
+  Future<Uint8List?> _renderPdfPage({
+    required String sourcePath,
+    required int pageNumber,
+    required double width,
+  }) async {
+    pdfx.PdfDocument? document = _pdfDocuments[sourcePath];
+    if (document == null) {
+      document = await pdfx.PdfDocument.openFile(sourcePath);
+      _pdfDocuments[sourcePath] = document;
+    }
+    if (pageNumber > document.pagesCount) return null;
+    final page = await document.getPage(pageNumber);
+    try {
+      final rendered = await page.render(
+        width: width,
+        height: width * page.height / page.width,
+        format: pdfx.PdfPageImageFormat.jpeg,
+        quality: 100,
+        backgroundColor: '#FFFFFF',
+      );
+      return rendered == null ? null : Uint8List.fromList(rendered.bytes);
+    } finally {
+      await page.close();
+    }
+  }
 
   void attachImages(
     String notebookId,

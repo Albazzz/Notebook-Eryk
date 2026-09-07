@@ -1392,7 +1392,7 @@ class _PrivacySettings extends StatelessWidget {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Dọn dung lượng thừa?'),
         content: const Text(
-          'Note Eryk sẽ xóa ảnh/PDF trong thư mục nội bộ không còn được vở nào dùng và giữ lại 2 backup mới nhất. Tệp đang dùng sẽ không bị xóa.',
+          'Note Eryk sẽ chuyển PDF sang chế độ dùng PDF gốc, xóa ảnh trang đã tạo trước đó, tạo một backup mới gọn hơn và dọn các bản sao cũ. Chất lượng PDF và nét viết được giữ nguyên.',
         ),
         actions: [
           TextButton(
@@ -1492,7 +1492,7 @@ class _PrivacySettings extends StatelessWidget {
                 style: TextStyle(fontWeight: FontWeight.w800),
               ),
               subtitle: const Text(
-                'Xóa bản sao tài liệu không còn được vở nào sử dụng',
+                'Dùng PDF gốc, không lưu ảnh của mọi trang trên ổ đĩa',
               ),
               trailing: IconButton(
                 tooltip: 'Dọn dung lượng thừa',

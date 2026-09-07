@@ -49,6 +49,9 @@ void main() {
 
       expect(stateSource, contains('cleanupUnusedStorage'));
       expect(stateSource, contains('_maxRetainedBackups = 2'));
+      expect(stateSource, contains('_migratePdfBackgroundsToOnDemand'));
+      expect(stateSource, contains('renderPdfPage'));
+      expect(stateSource, contains('quality: 100'));
       expect(
         stateSource,
         contains('referenced.contains(entity.absolute.path)'),
