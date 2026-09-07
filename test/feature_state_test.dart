@@ -10,30 +10,19 @@ import 'package:path_provider_platform_interface/path_provider_platform_interfac
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  test(
-    'AI falls back when an OpenRouter route rejects structured output',
-    () async {
-      final serviceSource = await File('lib/services.dart').readAsString();
+  test('AI always validates strict structured output', () async {
+    final serviceSource = await File('lib/services.dart').readAsString();
 
-      expect(
-        serviceSource,
-        contains('_isStructuredOutputUnsupported(response)'),
-      );
-      expect(serviceSource, contains('compatibilityMode = true'));
-      expect(serviceSource, contains('_jsonCompatibilityInstruction(spec)'));
-      expect(serviceSource, contains('if (!compatibilityMode)'));
-      expect(
-        serviceSource,
-        contains('Do not spend the second attempt repeating the same payload'),
-      );
-      expect(
-        serviceSource,
-        contains(
-          'if (response.statusCode >= 200 && response.statusCode < 300)',
-        ),
-      );
-    },
-  );
+    expect(serviceSource, contains('_isStructuredOutputUnsupported(response)'));
+    expect(serviceSource, contains('Every AI response must pass'));
+    expect(serviceSource, contains("..._structuredRequestOptions(spec)"));
+    expect(serviceSource, isNot(contains('compatibilityMode')));
+    expect(serviceSource, contains("'max_completion_tokens': maxTokens"));
+    expect(
+      serviceSource,
+      contains("if (!gpt5Family) 'temperature': temperature"),
+    );
+  });
 
   test('autosave batches pen changes without lifecycle backup', () async {
     final stateSource = await File('lib/app_state.dart').readAsString();

@@ -384,32 +384,28 @@ class OpenRouterService {
     required double temperature,
     required int maxTokens,
     required _StructuredOutputSpec spec,
-    required bool compatibilityMode,
-  }) => {
-    'model': modelId,
-    'messages': [
-      {
-        'role': 'system',
-        'content': compatibilityMode
-            ? '$instruction\n\n${_jsonCompatibilityInstruction(spec)}'
-            : instruction,
-      },
-      {'role': 'user', 'content': userContent},
-    ],
-    'temperature': temperature,
-    'max_tokens': maxTokens,
-    if (!compatibilityMode) ..._structuredRequestOptions(spec),
-  };
+  }) {
+    // GPT-5/Luna endpoints expose max_completion_tokens and may reject
+    // temperature. Omitting that unsupported parameter lets OpenRouter route
+    // the request to a provider that can enforce the schema.
+    final gpt5Family = modelId.toLowerCase().contains('gpt-5');
+    return {
+      'model': modelId,
+      'messages': [
+        {'role': 'system', 'content': instruction},
+        {'role': 'user', 'content': userContent},
+      ],
+      if (!gpt5Family) 'temperature': temperature,
+      if (gpt5Family) 'max_completion_tokens': maxTokens,
+      if (!gpt5Family) 'max_tokens': maxTokens,
+      ..._structuredRequestOptions(spec),
+    };
+  }
 
-  String _jsonCompatibilityInstruction(_StructuredOutputSpec spec) =>
-      '''Compatibility mode: Return only one valid JSON object, with no Markdown
-or prose outside that object. It must conform exactly to this JSON Schema:
-${jsonEncode(spec.schema)}''';
-
-  /// Tries Strict Structured Outputs first. Some OpenRouter routes advertise a
-  /// model but reject `response_format` or `require_parameters`; retrying in
-  /// compatibility mode keeps that route usable while schema validation still
-  /// protects the UI from arbitrary prose.
+  /// Every AI response must pass the same strict JSON Schema validation. A
+  /// second request is allowed for transient malformed/truncated output, but
+  /// it uses the strict contract again; plain-text fallback is deliberately
+  /// forbidden so the UI can never receive an unvalidated object.
   Future<Map<String, dynamic>?> _requestValidatedObject({
     required String apiKey,
     required String modelId,
@@ -421,9 +417,12 @@ ${jsonEncode(spec.schema)}''';
     required String operation,
     bool retryRateLimit = false,
   }) async {
-    var compatibilityMode = false;
     var attempts = 0;
+    var rateLimitRetries = 0;
     while (attempts < 2) {
+      final attemptMaxTokens = attempts == 0
+          ? maxTokens
+          : (maxTokens * 3 ~/ 2).clamp(maxTokens, maxTokens + 1600);
       final response = await _request(
         'POST',
         '/chat/completions',
@@ -434,15 +433,14 @@ ${jsonEncode(spec.schema)}''';
             instruction: instruction,
             userContent: userContent,
             temperature: temperature,
-            maxTokens: maxTokens,
+            maxTokens: attemptMaxTokens,
             spec: spec,
-            compatibilityMode: compatibilityMode,
           ),
         ),
       );
       if (response.statusCode == 429 && retryRateLimit) {
-        if (attempts == 0) {
-          attempts++;
+        if (rateLimitRetries == 0) {
+          rateLimitRetries++;
           await Future<void>.delayed(
             response.retryAfter ?? const Duration(seconds: 2),
           );
@@ -450,23 +448,10 @@ ${jsonEncode(spec.schema)}''';
         }
         throw HttpException('$operation đang giới hạn lượt (429)');
       }
-      if (!compatibilityMode && _isStructuredOutputUnsupported(response)) {
-        compatibilityMode = true;
-        attempts = 0;
-        debugPrint(
-          '[NoteEryk][AI] $operation switched to JSON compatibility mode',
-        );
-        continue;
-      }
       _throwIfRequestFailed(response, operation: operation);
       final result = _validatedResponseObject(response.body, spec.schema);
       if (result != null) return result;
       attempts++;
-      // A route can accept Structured Outputs but still return a malformed
-      // object. Do not spend the second attempt repeating the same payload;
-      // ask for plain JSON instead, which is more widely supported and still
-      // checked against the schema below.
-      if (!compatibilityMode) compatibilityMode = true;
     }
     return null;
   }
