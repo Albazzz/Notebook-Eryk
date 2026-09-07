@@ -51,6 +51,7 @@ class AppState extends ChangeNotifier {
   bool drawWithFinger = false;
   bool palmRejection = true;
   bool doubleTapEraser = true;
+  bool autoReturnToPenAfterAssistiveTool = false;
   double paperLineOpacity = .09;
   String studentName = 'Eryk';
   String jlpt = 'N3';
@@ -119,6 +120,8 @@ class AppState extends ChangeNotifier {
     drawWithFinger = prefs.getBool('drawWithFinger') ?? false;
     palmRejection = prefs.getBool('palmRejection') ?? true;
     doubleTapEraser = prefs.getBool('doubleTapEraser') ?? true;
+    autoReturnToPenAfterAssistiveTool =
+        prefs.getBool('autoReturnToPenAfterAssistiveTool') ?? false;
     paperLineOpacity = (prefs.getDouble('paperLineOpacity') ?? .09).clamp(
       .03,
       .35,
@@ -1981,6 +1984,10 @@ class AppState extends ChangeNotifier {
     await prefs.setBool('drawWithFinger', drawWithFinger);
     await prefs.setBool('palmRejection', palmRejection);
     await prefs.setBool('doubleTapEraser', doubleTapEraser);
+    await prefs.setBool(
+      'autoReturnToPenAfterAssistiveTool',
+      autoReturnToPenAfterAssistiveTool,
+    );
     await prefs.setDouble('paperLineOpacity', paperLineOpacity);
     await prefs.setStringList(
       'editorToolbarTools',
@@ -2002,6 +2009,16 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     unawaited(saveGeneralSettings());
   }
+
+  bool shouldReturnToPenAfter(EditorTool tool) =>
+      autoReturnToPenAfterAssistiveTool &&
+      const {
+        EditorTool.dictionary,
+        EditorTool.aiDictionary,
+        EditorTool.translate,
+        EditorTool.explain,
+        EditorTool.weakness,
+      }.contains(tool);
 
   Future<void> saveAiSettings({required String key}) async {
     if (key.isNotEmpty && key != _apiKey) {

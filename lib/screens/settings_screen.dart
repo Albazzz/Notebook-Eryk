@@ -328,6 +328,23 @@ class _PencilSettings extends StatelessWidget {
                 state.saveGeneralSettings();
               },
             ),
+            const Divider(),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text(
+                'Tự về bút thư pháp',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: const Text(
+                'Sau khi dùng công cụ khoanh vùng như AI, Tra từ hoặc Điểm yếu, tự chuyển về bút để viết tiếp',
+              ),
+              secondary: const Icon(Icons.edit_note_rounded),
+              value: state.autoReturnToPenAfterAssistiveTool,
+              onChanged: (value) {
+                state.autoReturnToPenAfterAssistiveTool = value;
+                state.saveGeneralSettings();
+              },
+            ),
           ],
         ),
       ),

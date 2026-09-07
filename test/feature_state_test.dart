@@ -19,6 +19,13 @@ void main() {
     expect(editorSource, isNot(contains('imagePath: resolvedImage')));
   });
 
+  test('prompt không còn tự ép JSON bằng văn bản', () async {
+    final serviceSource = await File('lib/services.dart').readAsString();
+
+    expect(serviceSource, isNot(contains('Schema bắt buộc:')));
+    expect(serviceSource, isNot(contains('Trả về DUY NHẤT JSON')));
+  });
+
   test('giải thích giữ đủ phần dù model trả cấu trúc hơi khác schema', () {
     final service = OpenRouterService();
     addTearDown(service.dispose);
@@ -88,6 +95,51 @@ void main() {
     expect(formatted, 'Bản dịch chưa đóng');
     expect(formatted, isNot(contains('translation')));
     expect(formatted, isNot(contains('{')));
+  });
+
+  test('mọi luồng AI dùng JSON Schema strict ở tầng OpenRouter', () {
+    final service = OpenRouterService();
+    addTearDown(service.dispose);
+
+    void verifySchema(Map<String, dynamic> schema) {
+      if (schema['type'] == 'object') {
+        expect(schema['additionalProperties'], isFalse);
+        final properties = Map<String, dynamic>.from(
+          schema['properties'] as Map,
+        );
+        expect((schema['required'] as List).toSet(), properties.keys.toSet());
+        for (final property in properties.values.whereType<Map>()) {
+          verifySchema(Map<String, dynamic>.from(property));
+        }
+      } else if (schema['type'] == 'array' && schema['items'] is Map) {
+        verifySchema(Map<String, dynamic>.from(schema['items'] as Map));
+      }
+    }
+
+    void verifyOptions(Map<String, dynamic> options) {
+      expect(options['stream'], isFalse);
+      expect((options['provider'] as Map)['require_parameters'], isTrue);
+      expect(
+        (options['plugins'] as List).single,
+        containsPair('id', 'response-healing'),
+      );
+      final responseFormat = Map<String, dynamic>.from(
+        options['response_format'] as Map,
+      );
+      expect(responseFormat['type'], 'json_schema');
+      final jsonSchema = Map<String, dynamic>.from(
+        responseFormat['json_schema'] as Map,
+      );
+      expect(jsonSchema['strict'], isTrue);
+      expect(jsonSchema['name'], isNotEmpty);
+      verifySchema(Map<String, dynamic>.from(jsonSchema['schema'] as Map));
+    }
+
+    for (final task in AiTask.values) {
+      verifyOptions(service.structuredRequestOptionsForTesting(task));
+    }
+    verifyOptions(service.weakPointDraftRequestOptionsForTesting());
+    verifyOptions(service.ocrRequestOptionsForTesting());
   });
 
   test(
@@ -283,6 +335,27 @@ void main() {
     expect(state.modelIds[AiModelSlot.explain], model.id);
     expect(state.modelIds[AiModelSlot.solve], isNull);
   });
+
+  test(
+    'tùy chọn tự về bút chỉ áp dụng cho công cụ hỗ trợ và được lưu',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final state = AppState();
+      addTearDown(state.dispose);
+
+      expect(state.shouldReturnToPenAfter(EditorTool.translate), isFalse);
+      state.autoReturnToPenAfterAssistiveTool = true;
+
+      expect(state.shouldReturnToPenAfter(EditorTool.translate), isTrue);
+      expect(state.shouldReturnToPenAfter(EditorTool.dictionary), isTrue);
+      expect(state.shouldReturnToPenAfter(EditorTool.pen), isFalse);
+      expect(state.shouldReturnToPenAfter(EditorTool.highlighter), isFalse);
+
+      await state.saveGeneralSettings();
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('autoReturnToPenAfterAssistiveTool'), isTrue);
+    },
+  );
 
   test('tách bản nháp điểm yếu theo loại và giữ câu gốc', () {
     final draft = WeakPointDraft.fromJson({

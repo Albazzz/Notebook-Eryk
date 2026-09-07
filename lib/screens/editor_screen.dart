@@ -1665,6 +1665,8 @@ class _EditorScreenState extends State<EditorScreen>
   Future<void> _processSelection() async {
     if (selectionStart == null || selectionEnd == null) return;
     final requestSerial = ++_aiRequestSerial;
+    final selectionTool = tool;
+    var completed = false;
     setState(() {
       processing = true;
       error = null;
@@ -1679,7 +1681,7 @@ class _EditorScreenState extends State<EditorScreen>
       _latestCropPath = crop.path;
       _deleteTemporaryCropIfUnused(previousCrop, except: crop.path);
       _latestOcrText = recognized;
-      if (tool == EditorTool.dictionary) {
+      if (selectionTool == EditorTool.dictionary) {
         var entry = await widget.state.dictionary.lookupNormalized(recognized);
         // A tiny crop can be difficult for on-device OCR. Only after the
         // deterministic dictionary lookup misses do we spend time on the
@@ -1696,7 +1698,8 @@ class _EditorScreenState extends State<EditorScreen>
         final resolvedEntry = entry;
         if (!mounted) return;
         setState(() => result = _SmartResult.dictionary(resolvedEntry));
-      } else if (tool == EditorTool.aiDictionary) {
+        completed = true;
+      } else if (selectionTool == EditorTool.aiDictionary) {
         final response = await widget.state.aiService.complete(
           apiKey: widget.state.apiKey,
           modelId: widget.state.modelIdFor(AiTask.dictionary),
@@ -1709,21 +1712,23 @@ class _EditorScreenState extends State<EditorScreen>
         if (!mounted || requestSerial != _aiRequestSerial) return;
         setState(
           () => result = _SmartResult.ai(
-            tool: tool,
+            tool: selectionTool,
             source: recognized,
             body: response,
           ),
         );
-      } else if (tool == EditorTool.weakness) {
+        completed = true;
+      } else if (selectionTool == EditorTool.weakness) {
         if (!mounted) return;
         await _openWeaknessDraft(
           ocrText: recognized,
           sourceImagePath: crop.path,
           requestSerial: requestSerial,
         );
+        completed = true;
         return;
       } else {
-        final task = tool == EditorTool.translate
+        final task = selectionTool == EditorTool.translate
             ? AiTask.translate
             : AiTask.explain;
         final response = await widget.state.aiService.complete(
@@ -1738,11 +1743,12 @@ class _EditorScreenState extends State<EditorScreen>
         if (!mounted || requestSerial != _aiRequestSerial) return;
         setState(
           () => result = _SmartResult.ai(
-            tool: tool,
+            tool: selectionTool,
             source: recognized,
             body: response,
           ),
         );
+        completed = true;
       }
     } catch (exception) {
       if (mounted && requestSerial == _aiRequestSerial) {
@@ -1750,7 +1756,14 @@ class _EditorScreenState extends State<EditorScreen>
       }
     } finally {
       if (mounted && requestSerial == _aiRequestSerial) {
-        setState(() => processing = false);
+        setState(() {
+          processing = false;
+          if (completed && widget.state.shouldReturnToPenAfter(selectionTool)) {
+            tool = EditorTool.pen;
+            selectionStart = null;
+            selectionEnd = null;
+          }
+        });
       }
     }
   }
@@ -2042,6 +2055,7 @@ class _EditorScreenState extends State<EditorScreen>
     }
     return value
         .replaceFirst('Exception: ', '')
+        .replaceFirst('HttpException: ', '')
         .replaceFirst('FormatException: ', '');
   }
 

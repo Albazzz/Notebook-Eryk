@@ -348,6 +348,13 @@ class AppleVisionJapaneseOcrService implements OcrService {
 
 enum AiTask { translate, explain, solve, createWeakPoint, dictionary }
 
+class _StructuredOutputSpec {
+  const _StructuredOutputSpec(this.name, this.schema);
+
+  final String name;
+  final Map<String, dynamic> schema;
+}
+
 class OpenRouterService {
   static const _baseUrl = 'https://openrouter.ai/api/v1';
   final HttpClient _client = HttpClient()
@@ -355,6 +362,225 @@ class OpenRouterService {
   final Map<String, String> _completionCache = {};
   final Map<String, String> _visionOcrCache = {};
   final Map<String, Future<String>> _visionOcrInFlight = {};
+
+  Map<String, dynamic> _structuredRequestOptions(
+    _StructuredOutputSpec spec,
+  ) => {
+    'stream': false,
+    'provider': {'require_parameters': true},
+    'response_format': {
+      'type': 'json_schema',
+      'json_schema': {'name': spec.name, 'strict': true, 'schema': spec.schema},
+    },
+    'plugins': [
+      {'id': 'response-healing'},
+    ],
+  };
+
+  @visibleForTesting
+  Map<String, dynamic> structuredRequestOptionsForTesting(AiTask task) =>
+      _structuredRequestOptions(_outputSpecFor(task));
+
+  @visibleForTesting
+  Map<String, dynamic> weakPointDraftRequestOptionsForTesting() =>
+      _structuredRequestOptions(_weakPointDraftsSpec);
+
+  @visibleForTesting
+  Map<String, dynamic> ocrRequestOptionsForTesting() =>
+      _structuredRequestOptions(_ocrSpec);
+
+  Map<String, dynamic> _stringProperty(
+    String description, {
+    List<String>? values,
+  }) => {'type': 'string', 'description': description, 'enum': ?values};
+
+  Map<String, dynamic> _booleanProperty(String description) => {
+    'type': 'boolean',
+    'description': description,
+  };
+
+  Map<String, dynamic> _stringArrayProperty(String description) => {
+    'type': 'array',
+    'description': description,
+    'items': {'type': 'string'},
+  };
+
+  Map<String, dynamic> _objectSchema(Map<String, dynamic> properties) => {
+    'type': 'object',
+    'properties': properties,
+    'required': properties.keys.toList(growable: false),
+    'additionalProperties': false,
+  };
+
+  Map<String, dynamic> _objectArrayProperty(
+    String description,
+    Map<String, dynamic> properties,
+  ) => {
+    'type': 'array',
+    'description': description,
+    'items': _objectSchema(properties),
+  };
+
+  _StructuredOutputSpec _outputSpecFor(AiTask task) => switch (task) {
+    AiTask.translate => _StructuredOutputSpec(
+      'translation_result',
+      _objectSchema({
+        'translation': _stringProperty(
+          'Bản dịch đầy đủ, chính xác theo ngôn ngữ và phong cách được yêu cầu.',
+        ),
+        'nuance': _stringProperty(
+          'Một câu ngắn về sắc thái đáng chú ý; để chuỗi rỗng nếu không có.',
+        ),
+        'warning': _stringProperty(
+          'Cảnh báo về OCR hoặc phần đã phục dựng; để chuỗi rỗng nếu không có.',
+        ),
+      }),
+    ),
+    AiTask.explain => _StructuredOutputSpec(
+      'explanation_result',
+      _objectSchema({
+        'meaning': _stringProperty('Nghĩa tổng quát của nội dung tiếng Nhật.'),
+        'structures':
+            _objectArrayProperty('Tối đa ba cấu trúc ngữ pháp chính.', {
+              'pattern': _stringProperty('Mẫu hoặc cấu trúc ngữ pháp.'),
+              'meaning': _stringProperty('Nghĩa ngắn của cấu trúc.'),
+              'usage': _stringProperty('Cách dùng hoặc cách kết hợp.'),
+            }),
+        'segments': _objectArrayProperty(
+          'Tối đa sáu đoạn dùng để tách và giải nghĩa câu.',
+          {
+            'japanese': _stringProperty('Đoạn tiếng Nhật nguyên văn.'),
+            'meaning': _stringProperty('Nghĩa của đoạn bằng ngôn ngữ yêu cầu.'),
+          },
+        ),
+        'choiceAnalysis': _objectArrayProperty(
+          'Phân tích từng lựa chọn; để mảng rỗng nếu không phải câu trắc nghiệm.',
+          {
+            'label': _stringProperty('Nhãn lựa chọn, ví dụ A hoặc B.'),
+            'correct': _booleanProperty(
+              'Lựa chọn này có phải đáp án đúng không.',
+            ),
+            'reason': _stringProperty('Lý do ngắn vì sao đúng hoặc sai.'),
+          },
+        ),
+        'warning': _stringProperty(
+          'Cảnh báo về OCR hoặc phần đã phục dựng; để chuỗi rỗng nếu không có.',
+        ),
+      }),
+    ),
+    AiTask.solve => _StructuredOutputSpec(
+      'solution_result',
+      _objectSchema({
+        'answer': _stringProperty('Đáp án cuối cùng.'),
+        'reason': _stringProperty('Giải thích ngắn gọn cho đáp án.'),
+        'choices': _objectArrayProperty('Phân tích từng lựa chọn.', {
+          'label': _stringProperty('Nhãn lựa chọn, ví dụ A hoặc B.'),
+          'correct': _booleanProperty(
+            'Lựa chọn này có phải đáp án đúng không.',
+          ),
+          'reason': _stringProperty('Lý do ngắn vì sao đúng hoặc sai.'),
+        }),
+        'warning': _stringProperty(
+          'Cảnh báo về OCR hoặc phần đã phục dựng; để chuỗi rỗng nếu không có.',
+        ),
+      }),
+    ),
+    AiTask.createWeakPoint => _StructuredOutputSpec(
+      'weak_point_result',
+      _objectSchema({
+        'title': _stringProperty('Tiêu đề ngắn của điểm yếu.'),
+        'type': _stringProperty(
+          'Loại điểm yếu.',
+          values: const ['Ngữ pháp', 'Từ vựng', 'Kanji', 'Đọc hiểu', 'Khác'],
+        ),
+        'meaning': _stringProperty('Nghĩa hoặc nội dung chính cần học.'),
+        'reading': _stringProperty(
+          'Cách đọc; để chuỗi rỗng nếu không áp dụng.',
+        ),
+        'hanViet': _stringProperty(
+          'Hán Việt; để chuỗi rỗng nếu không áp dụng.',
+        ),
+        'conjugation': _stringProperty(
+          'Cách chia hoặc cấu trúc; để chuỗi rỗng nếu không áp dụng.',
+        ),
+        'examples': _stringArrayProperty('Các ví dụ ngắn, chính xác.'),
+        'reminder': _stringProperty('Điểm cần nhớ hoặc mẫu dễ nhầm.'),
+        'note': _stringProperty('Ghi chú bổ sung; để chuỗi rỗng nếu không có.'),
+        'tags': _stringArrayProperty('Các nhãn, bao gồm trình độ JLPT.'),
+        'warning': _stringProperty(
+          'Cảnh báo về OCR hoặc phần đã phục dựng; để chuỗi rỗng nếu không có.',
+        ),
+      }),
+    ),
+    AiTask.dictionary => _StructuredOutputSpec(
+      'dictionary_result',
+      _objectSchema({
+        'word': _stringProperty('Từ hoặc cụm từ tiếng Nhật cần tra.'),
+        'reading': _stringProperty('Cách đọc bằng kana.'),
+        'meaning': _stringProperty('Nghĩa ngắn gọn trong ngữ cảnh.'),
+        'partOfSpeech': _stringProperty('Từ loại.'),
+        'jlpt': _stringProperty('Trình độ JLPT nếu xác định được.'),
+        'hanViet': _stringProperty('Hán Việt; để chuỗi rỗng nếu không có.'),
+        'example': _stringProperty('Câu ví dụ tiếng Nhật ngắn.'),
+        'exampleMeaning': _stringProperty('Nghĩa của câu ví dụ.'),
+        'warning': _stringProperty(
+          'Cảnh báo về OCR hoặc phần đã phục dựng; để chuỗi rỗng nếu không có.',
+        ),
+      }),
+    ),
+  };
+
+  _StructuredOutputSpec get _weakPointDraftsSpec => _StructuredOutputSpec(
+    'weak_point_drafts',
+    _objectSchema({
+      'items': _objectArrayProperty(
+        'Một mục độc lập cho mỗi điểm cần học trong vùng đã khoanh.',
+        {
+          'title': _stringProperty('Tiêu đề ngắn của điểm yếu.'),
+          'kind': _stringProperty(
+            'Loại điểm yếu.',
+            values: const [
+              'grammar',
+              'vocabulary',
+              'kanji',
+              'reading',
+              'other',
+            ],
+          ),
+          'meaning': _stringProperty('Nghĩa hoặc nội dung chính cần học.'),
+          'reading': _stringProperty(
+            'Cách đọc; để chuỗi rỗng nếu không áp dụng.',
+          ),
+          'hanViet': _stringProperty(
+            'Hán Việt; để chuỗi rỗng nếu không áp dụng.',
+          ),
+          'conjugation': _stringProperty(
+            'Cách chia hoặc cấu trúc; để chuỗi rỗng nếu không áp dụng.',
+          ),
+          'examples': _stringArrayProperty('Các ví dụ ngắn, chính xác.'),
+          'sourceSentence': _stringProperty('Câu nguồn chứa điểm cần học.'),
+          'reminder': _stringProperty('Điểm cần nhớ hoặc mẫu dễ nhầm.'),
+          'note': _stringProperty(
+            'Ghi chú bổ sung; để chuỗi rỗng nếu không có.',
+          ),
+          'tags': _stringArrayProperty('Các nhãn, bao gồm trình độ JLPT.'),
+        },
+      ),
+      'warning': _stringProperty(
+        'Cảnh báo chung về OCR hoặc phần đã phục dựng; để chuỗi rỗng nếu không có.',
+      ),
+    }),
+  );
+
+  _StructuredOutputSpec get _ocrSpec => _StructuredOutputSpec(
+    'japanese_ocr_result',
+    _objectSchema({
+      'text': _stringProperty('Toàn bộ nội dung tiếng Nhật đã nhận dạng.'),
+      'warning': _stringProperty(
+        'Phần đã phục dựng hoặc chưa chắc chắn; để chuỗi rỗng nếu không có.',
+      ),
+    }),
+  );
 
   Future<void> testConnection(String apiKey) async {
     final response = await _request('GET', '/key', apiKey);
@@ -424,44 +650,43 @@ class OpenRouterService {
     ].join('|');
     final cached = _completionCache[cacheKey];
     if (cached != null) return cached;
-    final response = await _request(
-      'POST',
-      '/chat/completions',
-      apiKey,
-      body: jsonEncode({
-        'model': normalizedModelId,
-        'messages': [
-          {'role': 'system', 'content': instruction},
-          {'role': 'user', 'content': text},
-        ],
-        'temperature': 0.25,
-        // Dictionary responses are intentionally short; limiting output
-        // reduces latency and leaves less room for speculative explanations.
-        'max_tokens': switch (task) {
-          AiTask.dictionary => 220,
-          AiTask.explain => 1050,
-          AiTask.translate => 1200,
-          AiTask.solve => 900,
-          AiTask.createWeakPoint => 1000,
-        },
-      }),
-    );
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw HttpException('Yêu cầu AI thất bại (${response.statusCode})');
+    final spec = _outputSpecFor(task);
+    final body = jsonEncode({
+      'model': normalizedModelId,
+      'messages': [
+        {'role': 'system', 'content': instruction},
+        {'role': 'user', 'content': text},
+      ],
+      'temperature': 0.25,
+      // Dictionary responses are intentionally short; limiting output
+      // reduces latency and leaves less room for speculative explanations.
+      'max_tokens': switch (task) {
+        AiTask.dictionary => 220,
+        AiTask.explain => 1050,
+        AiTask.translate => 1200,
+        AiTask.solve => 900,
+        AiTask.createWeakPoint => 1000,
+      },
+      ..._structuredRequestOptions(spec),
+    });
+    Map<String, dynamic>? resultObject;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final response = await _request(
+        'POST',
+        '/chat/completions',
+        apiKey,
+        body: body,
+      );
+      _throwIfRequestFailed(response, operation: 'Yêu cầu AI');
+      resultObject = _validatedResponseObject(response.body, spec.schema);
+      if (resultObject != null) break;
     }
-    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-    final choices = decoded['choices'] as List<dynamic>?;
-    if (choices == null || choices.isEmpty) {
-      throw const FormatException('AI không trả về nội dung');
+    if (resultObject == null) {
+      throw const FormatException(
+        'AI trả về dữ liệu không đúng cấu trúc sau 2 lần thử',
+      );
     }
-    final message =
-        (choices.first as Map<String, dynamic>)['message']
-            as Map<String, dynamic>;
-    final content = message['content'] as String? ?? '';
-    if (content.trim().isEmpty) {
-      throw const FormatException('AI không trả về nội dung');
-    }
-    final formatted = _formatStructuredResult(task, content);
+    final formatted = _formatStructuredResult(task, jsonEncode(resultObject));
     // Keep the cache bounded; repeated OCR/AI taps then return instantly.
     if (_completionCache.length >= 60) {
       _completionCache.remove(_completionCache.keys.first);
@@ -500,52 +725,41 @@ conjugation và examples chứa phần học chi tiết. Nếu có mẫu dễ nh
 Với vocabulary: title là từ khóa trong câu, có reading, meaning, hanViet nếu
 chắc chắn và sourceSentence là câu chứa từ đó. meaning chỉ ghi nghĩa ngắn gọn.
 Với kanji: title là chữ kanji, có reading, meaning và sourceSentence.
-Trả về DUY NHẤT JSON object: {
-  "items": [
-    {
-      "title":"...", "kind":"grammar|vocabulary|kanji|reading|other",
-      "meaning":"...", "reading":"", "hanViet":"", "conjugation":"",
-      "examples":[], "sourceSentence":"", "reminder":"", "note":"",
-      "tags":["$jlpt"]
-    }
-  ],
-  "warning":""
-}
-Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
-''';
+  Tạo một item riêng cho mỗi điểm cần học; nếu không có điểm phù hợp thì để danh
+  sách items rỗng. Luôn giữ tag trình độ $jlpt trong từng item.
+  Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
+  ''';
     final normalizedModelId = modelId.trim();
     if (normalizedModelId.isEmpty) throw ArgumentError('Chưa chọn model AI');
-    final response = await _request(
-      'POST',
-      '/chat/completions',
-      apiKey,
-      body: jsonEncode({
-        'model': normalizedModelId,
-        'messages': [
-          {'role': 'system', 'content': instruction},
-          {'role': 'user', 'content': text},
-        ],
-        'temperature': 0.15,
-        'max_tokens': 1400,
-      }),
-    );
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw HttpException(
-        'Yêu cầu AI tạo điểm yếu thất bại (${response.statusCode})',
+    final body = jsonEncode({
+      'model': normalizedModelId,
+      'messages': [
+        {'role': 'system', 'content': instruction},
+        {'role': 'user', 'content': text},
+      ],
+      'temperature': 0.15,
+      'max_tokens': 1400,
+      ..._structuredRequestOptions(_weakPointDraftsSpec),
+    });
+    Map<String, dynamic>? object;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final response = await _request(
+        'POST',
+        '/chat/completions',
+        apiKey,
+        body: body,
       );
+      _throwIfRequestFailed(response, operation: 'Yêu cầu AI tạo điểm yếu');
+      object = _validatedResponseObject(
+        response.body,
+        _weakPointDraftsSpec.schema,
+      );
+      if (object != null) break;
     }
-    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-    final choices = decoded['choices'] as List<dynamic>?;
-    if (choices == null || choices.isEmpty) {
-      throw const FormatException('AI không trả về bản nháp điểm yếu');
-    }
-    final message =
-        (choices.first as Map<String, dynamic>)['message']
-            as Map<String, dynamic>;
-    final raw = message['content'] as String? ?? '';
-    final object = _decodeJsonObject(raw);
     if (object == null) {
-      throw const FormatException('AI trả về dữ liệu điểm yếu không hợp lệ');
+      throw const FormatException(
+        'AI trả về bản nháp điểm yếu không đúng cấu trúc sau 2 lần thử',
+      );
     }
     final items = object['items'] as List<dynamic>? ?? const [];
     return items
@@ -605,7 +819,7 @@ Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
         {
           'role': 'system',
           'content':
-              'Bạn là OCR tiếng Nhật. Đọc đoạn nội dung chính, giữ nguyên kanji/kana và xuống dòng; bỏ qua nét viết tay, số trang hoặc chữ rác rời rạc ở ngoài đoạn chính. Nếu chỉ thiếu hoặc sai 1–2 chữ và ngữ cảnh đủ rõ, phục dựng phương án hợp lý nhất rồi ghi rõ câu đã phục dựng và phần chưa chắc trong warning. Không âm thầm đoán phần bị cắt lớn. Trả về DUY NHẤT JSON object dạng {"text":"...","warning":""}.',
+              'Bạn là OCR tiếng Nhật. Đọc đoạn nội dung chính, giữ nguyên kanji/kana và xuống dòng; bỏ qua nét viết tay, số trang hoặc chữ rác rời rạc ở ngoài đoạn chính. Nếu chỉ thiếu hoặc sai 1–2 chữ và ngữ cảnh đủ rõ, phục dựng phương án hợp lý nhất rồi ghi rõ câu đã phục dựng và phần chưa chắc trong warning. Không âm thầm đoán phần bị cắt lớn.',
         },
         {
           'role': 'user',
@@ -627,47 +841,40 @@ Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
       // A full reading passage can easily exceed 220 tokens once JSON
       // escaping and an uncertainty note are included.
       'max_tokens': 1400,
+      ..._structuredRequestOptions(_ocrSpec),
     });
-    late _HttpResult response;
+    Map<String, dynamic>? data;
     for (var attempt = 0; attempt < 2; attempt++) {
-      response = await _request(
+      final response = await _request(
         'POST',
         '/chat/completions',
         apiKey,
         body: body,
       );
-      if (response.statusCode != 429 || attempt == 1) break;
-      await Future<void>.delayed(
-        response.retryAfter ?? const Duration(seconds: 2),
-      );
-    }
-    if (response.statusCode < 200 || response.statusCode >= 300) {
       if (response.statusCode == 429) {
+        if (attempt == 0) {
+          await Future<void>.delayed(
+            response.retryAfter ?? const Duration(seconds: 2),
+          );
+          continue;
+        }
         throw const HttpException(
           'Model nhận diện ảnh đang giới hạn lượt (429)',
         );
       }
-      throw HttpException('Nhận diện ảnh thất bại (${response.statusCode})');
+      _throwIfRequestFailed(response, operation: 'Nhận diện ảnh');
+      data = _validatedResponseObject(response.body, _ocrSpec.schema);
+      if (data != null) break;
     }
-    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-    final choices = decoded['choices'] as List<dynamic>?;
-    if (choices == null || choices.isEmpty) {
-      throw const FormatException('AI không trả về nội dung OCR');
+    if (data == null) {
+      throw const FormatException(
+        'AI trả về OCR không đúng cấu trúc sau 2 lần thử',
+      );
     }
-    final message =
-        (choices.first as Map<String, dynamic>)['message']
-            as Map<String, dynamic>;
-    final raw = message['content'] as String? ?? '';
-    try {
-      final data = _decodeJsonObject(raw);
-      if (data == null) throw const FormatException('OCR không đúng JSON');
-      final text = (data['text'] as String? ?? '').trim();
-      if (text.isEmpty) throw const FormatException('OCR trống');
-      final warning = (data['warning'] as String? ?? '').trim();
-      return warning.isEmpty ? text : '$text\n\nLưu ý OCR: $warning';
-    } catch (_) {
-      return _cleanAiText(raw);
-    }
+    final text = (data['text'] as String).trim();
+    if (text.isEmpty) throw const FormatException('OCR trống');
+    final warning = (data['warning'] as String).trim();
+    return warning.isEmpty ? text : '$text\n\nLưu ý OCR: $warning';
   }
 
   int _byteFingerprint(List<int> bytes) {
@@ -686,7 +893,7 @@ Ngôn ngữ trả lời: $language. Trình độ: $jlpt.
     required TranslationStyle translationStyle,
   }) {
     const shared = '''
-Bạn là giáo viên tiếng Nhật chính xác và súc tích. Chỉ phân tích nội dung người dùng đã chủ động khoanh. Bỏ qua note viết tay, số trang hoặc chữ rác rời rạc không thuộc đoạn chính. Nếu OCR sai hoặc thiếu 1–2 chữ nhưng ngữ cảnh đủ rõ, hãy phục dựng cả cụm/câu hợp lý nhất để hoàn thành nhiệm vụ; trong warning bắt buộc ghi "Đã phục dựng: ..." và nêu phần còn chưa chắc. Nếu đầu vào đã có dòng "Lưu ý OCR:", đó là metadata: đưa thông tin cần thiết vào warning, không dịch hoặc phân tích nó như nội dung tiếng Nhật. Không âm thầm sửa OCR và không suy đoán phần bị mất lớn. Không trò chuyện, không chào hỏi, không dùng Markdown và không thêm lời dẫn. Trả về DUY NHẤT một JSON object hợp lệ, không đặt trong code fence.''';
+Bạn là giáo viên tiếng Nhật chính xác và súc tích. Chỉ phân tích nội dung người dùng đã chủ động khoanh. Bỏ qua note viết tay, số trang hoặc chữ rác rời rạc không thuộc đoạn chính. Nếu OCR sai hoặc thiếu 1–2 chữ nhưng ngữ cảnh đủ rõ, hãy phục dựng cả cụm/câu hợp lý nhất để hoàn thành nhiệm vụ; trong warning bắt buộc ghi "Đã phục dựng: ..." và nêu phần còn chưa chắc. Nếu đầu vào đã có dòng "Lưu ý OCR:", đó là metadata: đưa thông tin cần thiết vào warning, không dịch hoặc phân tích nó như nội dung tiếng Nhật. Không âm thầm sửa OCR và không suy đoán phần bị mất lớn. Không trò chuyện, không chào hỏi và không thêm lời dẫn.''';
     final translationInstruction = switch (translationStyle) {
       TranslationStyle.literal =>
         'Phong cách: sát nghĩa. Bám sát từ ngữ, quan hệ ngữ pháp và trật tự câu gốc tối đa; không lược ý.',
@@ -699,32 +906,27 @@ Bạn là giáo viên tiếng Nhật chính xác và súc tích. Chỉ phân tí
       AiTask.translate =>
         '''
 Nhiệm vụ: dịch nguyên văn sang $language cho người học $jlpt.
-Schema bắt buộc: {"translation":"...","nuance":"...","warning":""}.
 Giữ tên riêng; nuance tối đa 1 câu. $translationInstruction''',
       AiTask.explain =>
         '''
 Nhiệm vụ: giải thích tiếng Nhật bằng $language ở độ khó phù hợp $jlpt.
-Schema bắt buộc: {"meaning":"...","structures":[{"pattern":"...","meaning":"...","usage":"..."}],"segments":[{"japanese":"...","meaning":"..."}],"choiceAnalysis":[{"label":"A","correct":false,"reason":"..."}],"warning":""}.
 Chỉ chọn tối đa 3 cấu trúc chính và tối đa 6 đoạn tách câu.
 Với một câu hoàn chỉnh, meaning, structures và segments đều bắt buộc có nội dung; không được chỉ trả meaning. Mỗi cấu trúc phải có pattern, meaning và usage. Mỗi đoạn phải giữ nguyên japanese rồi mới giải nghĩa.
 Nếu nội dung là câu hỏi có các lựa chọn, xác định đáp án đúng rồi giải thích thật đơn giản vì sao đúng và vì sao từng lựa chọn còn lại sai. Mỗi reason tối đa 2 câu. Nếu không có lựa chọn, trả choiceAnalysis là [].''',
       AiTask.solve =>
         '''
 Nhiệm vụ: giải bài bằng $language, phù hợp $jlpt.
-Schema bắt buộc: {"answer":"...","reason":"...","choices":[{"label":"A","correct":false,"reason":"..."}],"warning":""}.
 Giải thích vì sao đúng và vì sao từng lựa chọn còn lại không phù hợp.''',
       AiTask.createWeakPoint =>
         '''
 Nhiệm vụ: tạo bản nháp điểm yếu bằng $language cho người học $jlpt.
 Loại người dùng đã chọn: ${weaknessKind ?? 'grammar'}.
 Nếu là grammar, title chỉ ghi mẫu ngữ pháp, meaning thật ngắn; conjugation và examples chứa chi tiết. reminder so sánh ngắn với mẫu dễ nhầm nếu có.
-Nếu là vocabulary hoặc kanji, bắt buộc ghi cách đọc, nghĩa và Hán Việt nếu có; không được đoán nếu OCR không rõ.
-Schema bắt buộc: {"title":"...","type":"Ngữ pháp|Từ vựng|Kanji|Đọc hiểu|Khác","meaning":"...","reading":"...","hanViet":"...","conjugation":"...","examples":["..."],"reminder":"...","note":"...","tags":["$jlpt"],"warning":""}.''',
+Nếu là vocabulary hoặc kanji, bắt buộc ghi cách đọc, nghĩa và Hán Việt nếu có; không được đoán nếu OCR không rõ.''',
       AiTask.dictionary =>
         '''
 Nhiệm vụ: tra từ tiếng Nhật bằng AI cho người học $jlpt, trả lời bằng $language.
-Chỉ tra đúng từ/cụm từ người dùng đã khoanh. Nếu có nhiều cách đọc hoặc nghĩa, chọn cách thông dụng nhất và ghi các nghĩa ngắn gọn. Không tự bịa khi OCR không rõ; ghi lý do trong warning.
-Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech":"...","jlpt":"...","hanViet":"...","example":"...","exampleMeaning":"...","warning":""}.''',
+Chỉ tra đúng từ/cụm từ người dùng đã khoanh. Nếu có nhiều cách đọc hoặc nghĩa, chọn cách thông dụng nhất và ghi các nghĩa ngắn gọn. Không tự bịa khi OCR không rõ; ghi lý do trong warning.''',
     };
     return '$shared\n$taskPrompt';
   }
@@ -754,6 +956,101 @@ Schema bắt buộc: {"word":"...","reading":"...","meaning":"...","partOfSpeech
   @visibleForTesting
   String formatStructuredResultForTesting(AiTask task, String raw) =>
       _formatStructuredResult(task, raw);
+
+  String _responseContent(String responseBody) {
+    final decoded = jsonDecode(responseBody) as Map<String, dynamic>;
+    final choices = decoded['choices'] as List<dynamic>?;
+    if (choices == null || choices.isEmpty || choices.first is! Map) {
+      throw const FormatException('AI không trả về nội dung');
+    }
+    final message = (choices.first as Map)['message'];
+    if (message is! Map) {
+      throw const FormatException('AI không trả về nội dung');
+    }
+    final content = message['content'];
+    if (content is! String || content.trim().isEmpty) {
+      throw const FormatException('AI không trả về nội dung');
+    }
+    return content;
+  }
+
+  Map<String, dynamic>? _validatedResponseObject(
+    String responseBody,
+    Map<String, dynamic> schema,
+  ) {
+    try {
+      final candidate = _decodeJsonObject(_responseContent(responseBody));
+      return _matchesSchema(candidate, schema) ? candidate : null;
+    } on FormatException {
+      return null;
+    } on TypeError {
+      return null;
+    }
+  }
+
+  void _throwIfRequestFailed(
+    _HttpResult response, {
+    required String operation,
+  }) {
+    if (response.statusCode >= 200 && response.statusCode < 300) return;
+    final detail = response.body.toLowerCase();
+    if (detail.contains('response_format') ||
+        detail.contains('structured output') ||
+        detail.contains('require_parameters') ||
+        detail.contains('no endpoints found')) {
+      throw HttpException(
+        '$operation thất bại: model hoặc provider không hỗ trợ Structured Outputs',
+      );
+    }
+    throw HttpException('$operation thất bại (${response.statusCode})');
+  }
+
+  bool _matchesSchema(Object? value, Map<String, dynamic> schema) {
+    final allowedValues = schema['enum'];
+    if (allowedValues is List && !allowedValues.contains(value)) return false;
+    switch (schema['type']) {
+      case 'string':
+        return value is String;
+      case 'boolean':
+        return value is bool;
+      case 'number':
+        return value is num;
+      case 'integer':
+        return value is int;
+      case 'array':
+        if (value is! List) return false;
+        final items = schema['items'];
+        if (items is! Map) return true;
+        final itemSchema = Map<String, dynamic>.from(items);
+        return value.every((item) => _matchesSchema(item, itemSchema));
+      case 'object':
+        if (value is! Map) return false;
+        final propertiesValue = schema['properties'];
+        if (propertiesValue is! Map) return false;
+        final properties = Map<String, dynamic>.from(propertiesValue);
+        final required = (schema['required'] as List<dynamic>? ?? const [])
+            .map((item) => item.toString())
+            .toSet();
+        if (!required.every(value.containsKey)) return false;
+        if (schema['additionalProperties'] == false &&
+            value.keys.any((key) => !properties.containsKey(key))) {
+          return false;
+        }
+        for (final entry in value.entries) {
+          final propertySchema = properties[entry.key];
+          if (propertySchema is Map &&
+              !_matchesSchema(
+                entry.value,
+                Map<String, dynamic>.from(propertySchema),
+              )) {
+            return false;
+          }
+        }
+        return true;
+      default:
+        return false;
+    }
+  }
 
   /// Models occasionally wrap the required object in prose or a markdown
   /// code fence. Find and decode the first balanced JSON object so the user
