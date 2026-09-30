@@ -126,6 +126,12 @@ class AppState extends ChangeNotifier {
   final Map<String, String> sourceDocuments = {};
   List<WeakPoint> weakPoints = [];
   final ReviewScheduler reviewScheduler = const ReviewScheduler();
+  Set<FlashcardField> flashcardFrontFields = {FlashcardField.word};
+  Set<FlashcardField> flashcardBackFields = {
+    FlashcardField.meaning,
+    FlashcardField.reading,
+    FlashcardField.hanViet,
+  };
 
   /// Source crops of deleted weak points, kept until the undo window closes.
   final Map<String, Timer> _pendingCropDeletes = {};
@@ -173,6 +179,14 @@ class AppState extends ChangeNotifier {
     );
     aiService.reasoningEffort = reasoningEffort;
     showOcrInAiResults = prefs.getBool('showOcrInAiResults') ?? false;
+    flashcardFrontFields = _loadFlashcardFields(prefs, 'flashcardFrontFields', {
+      FlashcardField.word,
+    });
+    flashcardBackFields = _loadFlashcardFields(prefs, 'flashcardBackFields', {
+      FlashcardField.meaning,
+      FlashcardField.reading,
+      FlashcardField.hanViet,
+    });
     final storedModelId = prefs.getString('selectedModelId');
     final storedModelName = prefs.getString('selectedModelName');
     selectedModelId = storedModelId?.trim().isNotEmpty == true
@@ -2379,6 +2393,45 @@ class AppState extends ChangeNotifier {
     );
     await prefs.setString('jlpt', jlpt);
     notifyListeners();
+  }
+
+  Set<FlashcardField> _loadFlashcardFields(
+    SharedPreferences prefs,
+    String key,
+    Set<FlashcardField> fallback,
+  ) {
+    final saved = prefs.getStringList(key);
+    if (saved == null) return Set.of(fallback);
+    final parsed = FlashcardField.values
+        .where((field) => saved.contains(field.name))
+        .toSet();
+    return parsed.isEmpty ? Set.of(fallback) : parsed;
+  }
+
+  void setFlashcardFields({
+    required bool front,
+    required Set<FlashcardField> fields,
+  }) {
+    if (fields.isEmpty) return;
+    if (front) {
+      flashcardFrontFields = Set.of(fields);
+    } else {
+      flashcardBackFields = Set.of(fields);
+    }
+    notifyListeners();
+    unawaited(saveFlashcardSettings());
+  }
+
+  Future<void> saveFlashcardSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      'flashcardFrontFields',
+      flashcardFrontFields.map((field) => field.name).toList(),
+    );
+    await prefs.setStringList(
+      'flashcardBackFields',
+      flashcardBackFields.map((field) => field.name).toList(),
+    );
   }
 
   void setToolbarTools(Set<EditorTool> tools) {

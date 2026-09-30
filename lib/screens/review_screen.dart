@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -7,6 +9,7 @@ import '../services.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/quick_check_sheet.dart';
+import 'settings_screen.dart';
 
 /// Ôn flashcard từ điểm yếu theo lịch lặp lại ngắt quãng.
 class ReviewScreen extends StatefulWidget {
@@ -20,13 +23,13 @@ class ReviewScreen extends StatefulWidget {
   State<ReviewScreen> createState() => _ReviewScreenState();
 }
 
-class _ReviewScreenState extends State<ReviewScreen> {
+class _ReviewScreenState extends State<ReviewScreen>
+    with SingleTickerProviderStateMixin {
   late List<WeakPoint> _queue;
   int _index = 0;
   bool _revealed = false;
   bool _started = false;
-  FlashcardFront _front = FlashcardFront.word;
-  HanVietSide _hanVietSide = HanVietSide.back;
+  late final AnimationController _flipController;
   late Set<String> _selectedIds;
   int _reviewed = 0;
   int _again = 0;
@@ -39,11 +42,43 @@ class _ReviewScreenState extends State<ReviewScreen> {
   @override
   void initState() {
     super.initState();
+    _flipController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 560),
+    );
     _queue = List.of(widget.initialQueue ?? state.dueWeakPoints);
     _selectedIds = _queue.map((point) => point.id).toSet();
   }
 
   WeakPoint? get _current => _index < _queue.length ? _queue[_index] : null;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _flipController.duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 560);
+  }
+
+  @override
+  void dispose() {
+    _flipController.dispose();
+    super.dispose();
+  }
+
+  void _flipCard() {
+    if (_flipController.isAnimating) return;
+    if (_revealed) {
+      setState(() => _revealed = false);
+      _flipController.reverse();
+    } else {
+      _flipController.forward().then((_) {
+        if (mounted && _flipController.isCompleted) {
+          setState(() => _revealed = true);
+        }
+      });
+    }
+  }
 
   void _rate(ReviewRating rating) {
     final point = _current;
@@ -57,6 +92,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
       }
       _index++;
       _revealed = false;
+      _flipController.value = 0;
     });
   }
 
@@ -69,21 +105,51 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
   void _startWith(Iterable<WeakPoint> points) {
     final cards = points
-        .where((point) => canShowFlashcard(point, _front))
+        .where(
+          (point) => canShowConfiguredFlashcard(
+            point,
+            state.flashcardFrontFields,
+            state.flashcardBackFields,
+          ),
+        )
         .toList();
     if (cards.isEmpty) {
-      showAppSnack(context, 'Không có thẻ phù hợp với mặt trước đã chọn');
+      showAppSnack(context, 'Không có thẻ đủ dữ liệu theo cài đặt mặt thẻ');
       return;
     }
     setState(() {
       _queue = cards;
       _index = 0;
       _revealed = false;
+      _flipController.value = 0;
       _started = true;
       _reviewed = 0;
       _again = 0;
       _forgotten.clear();
     });
+  }
+
+  Future<void> _showFlashcardSettings() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: FractionallySizedBox(
+          heightFactor: .82,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 720),
+                child: FlashcardSettingsPanel(state: state),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
   }
 
   List<WeakPoint> _practiceCandidates() {
@@ -186,7 +252,13 @@ class _ReviewScreenState extends State<ReviewScreen> {
         .where((point) => _selectedIds.contains(point.id))
         .toList();
     final missing = selected
-        .where((point) => !canShowFlashcard(point, _front))
+        .where(
+          (point) => !canShowConfiguredFlashcard(
+            point,
+            state.flashcardFrontFields,
+            state.flashcardBackFields,
+          ),
+        )
         .toList();
     final forgotten = eligible.where((point) => point.needsRevisit).toList();
     return Center(
@@ -200,47 +272,20 @@ class _ReviewScreenState extends State<ReviewScreen> {
               style: Theme.of(context).textTheme.headlineMedium,
             ),
             const SizedBox(height: 12),
-            Text('Mặt trước', style: Theme.of(context).textTheme.titleMedium),
-            Wrap(
-              spacing: 8,
-              children: [
-                ChoiceChip(
-                  label: const Text('Từ / mẫu'),
-                  selected: _front == FlashcardFront.word,
-                  onSelected: (_) =>
-                      setState(() => _front = FlashcardFront.word),
-                ),
-                ChoiceChip(
-                  label: const Text('Nghĩa'),
-                  selected: _front == FlashcardFront.meaning,
-                  onSelected: (_) =>
-                      setState(() => _front = FlashcardFront.meaning),
-                ),
-                ChoiceChip(
-                  label: const Text('Kanji'),
-                  selected: _front == FlashcardFront.kanji,
-                  onSelected: (_) =>
-                      setState(() => _front = FlashcardFront.kanji),
-                ),
-              ],
+            Text(
+              'Mặt trước: ${state.flashcardFrontFields.map((field) => field.label).join(', ')}',
             ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<HanVietSide>(
-              initialValue: _hanVietSide,
-              decoration: const InputDecoration(labelText: 'Hiển thị Hán Việt'),
-              items: const [
-                DropdownMenuItem(
-                  value: HanVietSide.front,
-                  child: Text('Mặt trước'),
-                ),
-                DropdownMenuItem(
-                  value: HanVietSide.back,
-                  child: Text('Mặt sau'),
-                ),
-                DropdownMenuItem(value: HanVietSide.hidden, child: Text('Ẩn')),
-              ],
-              onChanged: (value) =>
-                  setState(() => _hanVietSide = value ?? _hanVietSide),
+            const SizedBox(height: 4),
+            Text(
+              'Mặt sau: ${state.flashcardBackFields.map((field) => field.label).join(', ')}',
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: _showFlashcardSettings,
+                icon: const Icon(Icons.tune_rounded),
+                label: const Text('Tùy chỉnh mặt thẻ'),
+              ),
             ),
             const SizedBox(height: 20),
             Row(
@@ -269,7 +314,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
-                  '${missing.length} mục không có ${_front == FlashcardFront.kanji ? 'Kanji' : 'nội dung cho mặt trước'} sẽ được bỏ qua.',
+                  '${missing.length} mục thiếu dữ liệu theo cài đặt mặt thẻ sẽ được bỏ qua.',
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ),
@@ -372,169 +417,54 @@ class _ReviewScreenState extends State<ReviewScreen> {
   );
 
   Widget _buildCard(WeakPoint point) {
-    final face = buildConfiguredFlashcard(
-      point,
-      front: _front,
-      hanVietSide: _hanVietSide,
-    );
-    final scheme = Theme.of(context).colorScheme;
-    final frontSize = face.front.characters.length <= 8
-        ? 44.0
-        : face.front.characters.length <= 30
-        ? 26.0
-        : 19.0;
+    final front = flashcardSideContent(point, state.flashcardFrontFields);
+    final back = flashcardSideContent(point, state.flashcardBackFields);
     return Column(
       children: [
         LinearProgressIndicator(
           value: _queue.isEmpty ? 0 : _index / _queue.length,
         ),
         Expanded(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 760),
-              child: GestureDetector(
-                onTap: () => setState(() => _revealed = !_revealed),
-                child: Card(
-                  margin: const EdgeInsets.all(20),
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(28),
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 240),
-                      transitionBuilder: (child, animation) =>
-                          RotationTransition(
-                            turns: Tween<double>(
-                              begin: .5,
-                              end: 1,
-                            ).animate(animation),
-                            child: child,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final height = math.min(
+                440.0,
+                math.max(120.0, constraints.maxHeight - 32),
+              );
+              return Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 760),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: height,
+                    child: AnimatedBuilder(
+                      animation: _flipController,
+                      builder: (context, _) {
+                        final angle = _flipController.value * math.pi;
+                        final showingBack = angle > math.pi / 2;
+                        return Transform(
+                          key: const ValueKey('flashcard-rotation'),
+                          alignment: Alignment.center,
+                          transform: Matrix4.identity()
+                            ..setEntry(3, 2, .0012)
+                            ..rotateY(angle),
+                          child: Transform(
+                            alignment: Alignment.center,
+                            transform: Matrix4.rotationY(
+                              showingBack ? math.pi : 0,
+                            ),
+                            child: _cardFace(
+                              showingBack ? back : front,
+                              showingBack: showingBack,
+                            ),
                           ),
-                      child: Column(
-                        key: ValueKey('${point.id}-$_revealed'),
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            children: [
-                              _Badge(label: point.kind.label),
-                              const SizedBox(width: 8),
-                              if (point.isNewCard)
-                                const _Badge(
-                                  label: 'Mới',
-                                  color: AppColors.quickCheck,
-                                )
-                              else if (point.lapses > 0)
-                                _Badge(
-                                  label: 'Quên ${point.lapses} lần',
-                                  color: AppColors.wrong,
-                                ),
-                              const Spacer(),
-                              Flexible(
-                                child: Text(
-                                  '${point.notebookTitle} · Tr. ${point.page}',
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: scheme.onSurfaceVariant,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 18),
-                          if (!_revealed)
-                            Text(
-                              face.prompt,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: scheme.onSurfaceVariant),
-                            ),
-                          if (!_revealed) const SizedBox(height: 14),
-                          if (!_revealed)
-                            SelectableText(
-                              face.front,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: frontSize,
-                                fontWeight: FontWeight.w700,
-                                height: 1.4,
-                              ),
-                            ),
-                          if (face.frontHint.isNotEmpty && !_revealed) ...[
-                            const SizedBox(height: 12),
-                            Text(
-                              face.frontHint,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: scheme.onSurfaceVariant,
-                                height: 1.5,
-                              ),
-                            ),
-                          ],
-                          if (_revealed)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 16),
-                              child: Text(
-                                'Mặt sau · chạm để lật lại',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ),
-                          if (!_revealed) const Divider(height: 36),
-                          if (!_revealed)
-                            Center(
-                              child: FilledButton.tonal(
-                                onPressed: () =>
-                                    setState(() => _revealed = true),
-                                child: const Text('Lật thẻ'),
-                              ),
-                            )
-                          else ...[
-                            SelectableText(
-                              face.answer,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w800,
-                                color: AppColors.correct,
-                              ),
-                            ),
-                            const SizedBox(height: 18),
-                            for (final (label, value) in face.details)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 14),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      label.toUpperCase(),
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        letterSpacing: .8,
-                                        fontWeight: FontWeight.w800,
-                                        color: label == 'Chỗ dễ nhầm'
-                                            ? AppColors.weakness
-                                            : Colors.grey,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    SelectableText(
-                                      value,
-                                      style: const TextStyle(
-                                        fontSize: 15,
-                                        height: 1.5,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                          ],
-                        ],
-                      ),
+                        );
+                      },
                     ),
                   ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
         ),
         if (_revealed)
@@ -556,6 +486,83 @@ class _ReviewScreenState extends State<ReviewScreen> {
             ),
           ),
       ],
+    );
+  }
+
+  Widget _cardFace(
+    List<(FlashcardField, String)> contents, {
+    required bool showingBack,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        key: const ValueKey('flashcard-tap'),
+        onTap: _flipCard,
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  showingBack ? 'Mặt sau' : 'Mặt trước',
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, constraints) => SingleChildScrollView(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: constraints.maxHeight,
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          for (final (index, entry) in contents.indexed) ...[
+                            if (index > 0) const SizedBox(height: 18),
+                            if (index > 0)
+                              Text(
+                                entry.$1.label,
+                                style: TextStyle(
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            Text(
+                              entry.$2,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: index == 0
+                                    ? (entry.$2.characters.length <= 8
+                                          ? 42
+                                          : 26)
+                                    : 17,
+                                fontWeight: index == 0
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
+                                height: 1.4,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Text(
+                showingBack ? 'Chạm để xem lại mặt trước' : 'Chạm để lật thẻ',
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -587,23 +594,4 @@ class _ReviewScreenState extends State<ReviewScreen> {
       ),
     );
   }
-}
-
-class _Badge extends StatelessWidget {
-  const _Badge({required this.label, this.color = AppColors.weakness});
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-    decoration: BoxDecoration(
-      color: color.withValues(alpha: .12),
-      borderRadius: BorderRadius.circular(20),
-    ),
-    child: Text(
-      label,
-      style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w800),
-    ),
-  );
 }

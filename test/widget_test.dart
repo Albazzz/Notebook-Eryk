@@ -6,6 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:noteeryk/app.dart';
 import 'package:noteeryk/app_state.dart';
 import 'package:noteeryk/models.dart';
+import 'package:noteeryk/review.dart';
+import 'package:noteeryk/screens/settings_screen.dart';
 import 'package:noteeryk/widgets/quick_check_sheet.dart';
 
 void main() {
@@ -476,6 +478,33 @@ void main() {
 }
 
 void _quickCheckTests() {
+  testWidgets('cài đặt chọn nội dung riêng cho hai mặt flashcard', (
+    tester,
+  ) async {
+    final state = AppState();
+    addTearDown(state.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: FlashcardSettingsPanel(state: state),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.widgetWithText(FilterChip, 'Kanji').first);
+    await tester.pump();
+    expect(state.flashcardFrontFields, contains(FlashcardField.kanji));
+    await tester.tap(find.widgetWithText(FilterChip, 'Từ / mẫu').first);
+    await tester.pump();
+    expect(state.flashcardFrontFields, {FlashcardField.kanji});
+    expect(
+      state.flashcardBackFields,
+      containsAll([FlashcardField.meaning, FlashcardField.hanViet]),
+    );
+  });
+
   testWidgets('sổ điểm yếu: ôn flashcard, vuốt xóa và hoàn tác', (
     tester,
   ) async {
@@ -533,12 +562,36 @@ void _quickCheckTests() {
     await tester.tap(find.text('Bắt đầu · 2 thẻ'));
     await tester.pumpAndSettle();
     expect(find.text('Ôn tập · 1/2'), findsOneWidget);
-    await tester.tap(find.text('Lật thẻ'));
+    await tester.tap(find.byKey(const ValueKey('flashcard-tap')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 280));
+    final halfway = tester.widget<Transform>(
+      find.byKey(const ValueKey('flashcard-rotation')),
+    );
+    expect(halfway.transform.storage[0].abs(), lessThan(.05));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('flashcard-tap')),
+        matching: find.text('nhận thức'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('flashcard-tap')));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('flashcard-tap')),
+        matching: find.text('認識'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('flashcard-tap')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Đã nhớ'));
     await tester.pumpAndSettle();
     expect(find.text('Ôn tập · 2/2'), findsOneWidget);
-    await tester.tap(find.text('Lật thẻ'));
+    await tester.tap(find.byKey(const ValueKey('flashcard-tap')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Đã nhớ'));
     await tester.pumpAndSettle();

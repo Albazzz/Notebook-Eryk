@@ -136,41 +136,70 @@ void main() {
     expect(card.needsRevisit, isFalse);
   });
 
-  test('flashcard respects selected front and Han Viet side', () {
-    final point = WeakPoint(
-      id: 'kanji',
-      title: '認識する',
-      kind: WeaknessKind.vocabulary,
-      content: 'nhận thức',
-      reminder: '',
-      note: '',
-      tags: const [],
-      notebookId: 'n',
-      notebookTitle: 'Vở',
-      page: 1,
-      ocrText: '',
-      createdAt: DateTime(2026),
-      hanViet: 'NHẬN THỨC',
+  test(
+    'flashcard uses selected fields on each side and skips missing Kanji',
+    () {
+      final point = WeakPoint(
+        id: 'kanji',
+        title: '認識する',
+        kind: WeaknessKind.vocabulary,
+        content: 'nhận thức',
+        reminder: '',
+        note: '',
+        tags: const [],
+        notebookId: 'n',
+        notebookTitle: 'Vở',
+        page: 1,
+        ocrText: '',
+        createdAt: DateTime(2026),
+        hanViet: 'NHẬN THỨC',
+      );
+      expect(kanjiOnCard(point), '認識');
+      const front = {FlashcardField.kanji, FlashcardField.hanViet};
+      const back = {FlashcardField.meaning, FlashcardField.word};
+      expect(flashcardSideContent(point, front), [
+        (FlashcardField.kanji, '認識'),
+        (FlashcardField.hanViet, 'NHẬN THỨC'),
+      ]);
+      expect(flashcardSideContent(point, back), [
+        (FlashcardField.word, '認識する'),
+        (FlashcardField.meaning, 'nhận thức'),
+      ]);
+      expect(canShowConfiguredFlashcard(point, front, back), isTrue);
+      point.title = 'たべる';
+      expect(canShowConfiguredFlashcard(point, front, back), isFalse);
+    },
+  );
+
+  test('flashcard face settings are saved', () async {
+    final root = await Directory.systemTemp.createTemp('noteeryk_cards_');
+    addTearDown(() => root.delete(recursive: true));
+    final originalProvider = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _TestPathProvider(root.path);
+    addTearDown(() => PathProviderPlatform.instance = originalProvider);
+    SharedPreferences.setMockInitialValues({});
+    final state = AppState();
+    addTearDown(state.dispose);
+    state.setFlashcardFields(
+      front: true,
+      fields: {FlashcardField.meaning, FlashcardField.hanViet},
     );
-    expect(kanjiOnCard(point), '認識');
-    final front = buildConfiguredFlashcard(
-      point,
-      front: FlashcardFront.kanji,
-      hanVietSide: HanVietSide.front,
+    state.setFlashcardFields(front: false, fields: {FlashcardField.word});
+    await state.saveFlashcardSettings();
+    final prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getStringList('flashcardFrontFields'),
+      containsAll(['meaning', 'hanViet']),
     );
-    expect(front.front, '認識');
-    expect(front.frontHint, 'NHẬN THỨC');
-    expect(front.details.where((entry) => entry.$1 == 'Hán Việt'), isEmpty);
-    final back = buildConfiguredFlashcard(
-      point,
-      front: FlashcardFront.meaning,
-      hanVietSide: HanVietSide.back,
-    );
-    expect(back.front, 'nhận thức');
-    expect(back.answer, '認識する');
-    expect(back.details, contains(('Hán Việt', 'NHẬN THỨC')));
-    point.title = 'たべる';
-    expect(canShowFlashcard(point, FlashcardFront.kanji), isFalse);
+    expect(prefs.getStringList('flashcardBackFields'), ['word']);
+    final reopened = AppState();
+    addTearDown(reopened.dispose);
+    await reopened.initialize();
+    expect(reopened.flashcardFrontFields, {
+      FlashcardField.meaning,
+      FlashcardField.hanViet,
+    });
+    expect(reopened.flashcardBackFields, {FlashcardField.word});
   });
 
   test('grammar flashcard blanks the pattern in the source sentence', () {

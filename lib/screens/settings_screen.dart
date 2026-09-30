@@ -4,11 +4,12 @@ import 'package:file_picker/file_picker.dart';
 
 import '../app_state.dart';
 import '../models.dart';
+import '../review.dart';
 import '../shared_import_service.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
-enum _SettingsSection { general, pencil, ai, privacy, about }
+enum _SettingsSection { general, flashcards, pencil, ai, privacy, about }
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key, required this.state});
@@ -67,6 +68,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _content() => switch (section) {
     _SettingsSection.general => _GeneralSettings(state: widget.state),
+    _SettingsSection.flashcards => FlashcardSettingsPanel(state: widget.state),
     _SettingsSection.pencil => _PencilSettings(state: widget.state),
     _SettingsSection.ai => _AiSettings(state: widget.state),
     _SettingsSection.privacy => _PrivacySettings(state: widget.state),
@@ -87,6 +89,7 @@ class _SectionTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final (icon, label) = switch (section) {
       _SettingsSection.general => (Icons.tune_rounded, 'Chung'),
+      _SettingsSection.flashcards => (Icons.style_outlined, 'Flashcard'),
       _SettingsSection.pencil => (Icons.edit_outlined, 'Apple Pencil'),
       _SettingsSection.ai => (Icons.auto_awesome_outlined, 'AI'),
       _SettingsSection.privacy => (Icons.shield_outlined, 'Dữ liệu & riêng tư'),
@@ -102,6 +105,83 @@ class _SectionTile extends StatelessWidget {
         leading: Icon(icon),
         title: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
         onTap: onTap,
+      ),
+    );
+  }
+}
+
+class FlashcardSettingsPanel extends StatelessWidget {
+  const FlashcardSettingsPanel({super.key, required this.state});
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: state,
+    builder: (context, _) => Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Flashcard', style: Theme.of(context).textTheme.headlineMedium),
+        const SizedBox(height: 8),
+        const Text(
+          'Chọn thông tin xuất hiện trên mỗi mặt. Thay đổi được lưu cho các lần ôn sau.',
+        ),
+        const SizedBox(height: 18),
+        _sideSettings(context, front: true),
+        const SizedBox(height: 16),
+        _sideSettings(context, front: false),
+        const SizedBox(height: 12),
+        Text(
+          'Thẻ thiếu dữ liệu ở mặt trước hoặc mặt sau sẽ được báo và bỏ qua. Nếu chọn Kanji cho mặt trước, thẻ không có Kanji cũng được bỏ qua.',
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _sideSettings(BuildContext context, {required bool front}) {
+    final selected = front
+        ? state.flashcardFrontFields
+        : state.flashcardBackFields;
+    return SectionCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            front ? 'Mặt trước' : 'Mặt sau',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            front
+                ? 'Thông tin để tự nhớ trước khi lật thẻ.'
+                : 'Thông tin bạn muốn xem sau khi lật thẻ.',
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final field in FlashcardField.values)
+                FilterChip(
+                  label: Text(field.label),
+                  selected: selected.contains(field),
+                  onSelected: selected.length == 1 && selected.contains(field)
+                      ? null
+                      : (value) {
+                          final next = Set<FlashcardField>.of(selected);
+                          if (value) {
+                            next.add(field);
+                          } else {
+                            next.remove(field);
+                          }
+                          state.setFlashcardFields(front: front, fields: next);
+                        },
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }

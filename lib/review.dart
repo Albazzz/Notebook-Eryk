@@ -114,51 +114,75 @@ class FlashcardFace {
   final List<(String, String)> details;
 }
 
-enum FlashcardFront { word, meaning, kanji }
+enum FlashcardField {
+  word,
+  kanji,
+  meaning,
+  reading,
+  hanViet,
+  conjugation,
+  example,
+  sourceSentence,
+  correctAnswer,
+  mistake,
+  reminder,
+  note,
+}
 
-enum HanVietSide { hidden, front, back }
+extension FlashcardFieldLabel on FlashcardField {
+  String get label => switch (this) {
+    FlashcardField.word => 'Từ / mẫu',
+    FlashcardField.kanji => 'Kanji',
+    FlashcardField.meaning => 'Nghĩa',
+    FlashcardField.reading => 'Cách đọc',
+    FlashcardField.hanViet => 'Hán Việt',
+    FlashcardField.conjugation => 'Cách nối',
+    FlashcardField.example => 'Ví dụ',
+    FlashcardField.sourceSentence => 'Câu gốc',
+    FlashcardField.correctAnswer => 'Đáp án đúng',
+    FlashcardField.mistake => 'Chỗ dễ nhầm',
+    FlashcardField.reminder => 'Mẹo nhớ',
+    FlashcardField.note => 'Ghi chú',
+  };
+}
 
 String kanjiOnCard(WeakPoint point) => RegExp(
   r'[\u3400-\u9fff]+',
 ).allMatches(point.title).map((match) => match.group(0)!).join();
 
-bool canShowFlashcard(WeakPoint point, FlashcardFront front) => switch (front) {
-  FlashcardFront.word => point.title.trim().isNotEmpty,
-  FlashcardFront.meaning => point.content.trim().isNotEmpty,
-  FlashcardFront.kanji => kanjiOnCard(point).isNotEmpty,
-};
+String flashcardFieldValue(WeakPoint point, FlashcardField field) =>
+    switch (field) {
+      FlashcardField.word => point.title,
+      FlashcardField.kanji => kanjiOnCard(point),
+      FlashcardField.meaning => point.content,
+      FlashcardField.reading => point.reading,
+      FlashcardField.hanViet => point.hanViet,
+      FlashcardField.conjugation => point.conjugation,
+      FlashcardField.example => point.examples.join('\n'),
+      FlashcardField.sourceSentence => point.sourceSentence,
+      FlashcardField.correctAnswer => point.correctAnswer,
+      FlashcardField.mistake => point.mistake,
+      FlashcardField.reminder => point.reminder,
+      FlashcardField.note => point.note,
+    }.trim();
 
-FlashcardFace buildConfiguredFlashcard(
-  WeakPoint point, {
-  required FlashcardFront front,
-  required HanVietSide hanVietSide,
-}) {
-  final primary = switch (front) {
-    FlashcardFront.word => point.title,
-    FlashcardFront.meaning => point.content,
-    FlashcardFront.kanji => kanjiOnCard(point),
-  };
-  final answer = front == FlashcardFront.meaning ? point.title : point.content;
-  return FlashcardFace(
-    prompt: front == FlashcardFront.meaning
-        ? 'Từ hoặc mẫu nào có nghĩa này?'
-        : 'Nghĩa là gì?',
-    front: primary,
-    frontHint: hanVietSide == HanVietSide.front ? point.hanViet : '',
-    answer: answer,
-    details: [
-      if (front == FlashcardFront.kanji) ('Từ đầy đủ', point.title),
-      if (point.reading.isNotEmpty) ('Cách đọc', point.reading),
-      if (hanVietSide == HanVietSide.back && point.hanViet.isNotEmpty)
-        ('Hán Việt', point.hanViet),
-      if (point.conjugation.isNotEmpty) ('Cách nối', point.conjugation),
-      if (point.examples.isNotEmpty) ('Ví dụ', point.examples.join('\n')),
-      if (point.mistake.isNotEmpty) ('Chỗ dễ nhầm', point.mistake),
-      if (point.reminder.isNotEmpty) ('Mẹo nhớ', point.reminder),
-      if (point.note.isNotEmpty) ('Ghi chú', point.note),
-    ],
-  );
-}
+List<(FlashcardField, String)> flashcardSideContent(
+  WeakPoint point,
+  Set<FlashcardField> fields,
+) => [
+  for (final field in FlashcardField.values)
+    if (fields.contains(field) && flashcardFieldValue(point, field).isNotEmpty)
+      (field, flashcardFieldValue(point, field)),
+];
+
+bool canShowConfiguredFlashcard(
+  WeakPoint point,
+  Set<FlashcardField> front,
+  Set<FlashcardField> back,
+) =>
+    (!front.contains(FlashcardField.kanji) || kanjiOnCard(point).isNotEmpty) &&
+    flashcardSideContent(point, front).isNotEmpty &&
+    flashcardSideContent(point, back).isNotEmpty;
 
 FlashcardFace buildFlashcard(WeakPoint point, {bool reverse = false}) {
   final details = <(String, String)>[
