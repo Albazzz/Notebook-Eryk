@@ -529,15 +529,18 @@ void _quickCheckTests() {
 
     await tester.tap(find.text('Ôn tập (2)'));
     await tester.pumpAndSettle();
-    expect(find.text('Ôn tập · 1/2'), findsOneWidget);
-    await tester.tap(find.text('Hiện đáp án'));
+    expect(find.text('Tạo phiên flashcard'), findsOneWidget);
+    await tester.tap(find.text('Bắt đầu · 2 thẻ'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Được'));
+    expect(find.text('Ôn tập · 1/2'), findsOneWidget);
+    await tester.tap(find.text('Lật thẻ'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Đã nhớ'));
     await tester.pumpAndSettle();
     expect(find.text('Ôn tập · 2/2'), findsOneWidget);
-    await tester.tap(find.text('Hiện đáp án'));
+    await tester.tap(find.text('Lật thẻ'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Dễ'));
+    await tester.tap(find.text('Đã nhớ'));
     await tester.pumpAndSettle();
     expect(find.text('Xong phiên ôn tập'), findsOneWidget);
     expect(state.dueWeakPoints, isEmpty);
@@ -634,15 +637,14 @@ void _quickCheckTests() {
     await tester.pumpAndSettle();
 
     expect(find.text('Đáp án đúng: 3. đáp án 3'), findsOneWidget);
+    expect(find.text('Đáp án đúng: 1. đáp án 1'), findsOneWidget);
     expect(find.text('Sai collocation'), findsOneWidget);
     expect(find.byIcon(Icons.cancel_rounded), findsOneWidget);
     expect(find.text('Đúng 0/1 · 2 câu'), findsOneWidget);
 
-    await tester.tap(find.text('1. đáp án 1').last);
+    await tester.tap(find.text('Thêm câu này vào Điểm yếu').first);
     await tester.pumpAndSettle();
-    expect(find.byIcon(Icons.check_circle_rounded), findsOneWidget);
-
-    await tester.tap(find.text('Lưu câu sai thành điểm yếu (1)'));
+    await tester.tap(find.text('Lưu câu đã tích vào Điểm yếu (1)'));
     await tester.pumpAndSettle();
     expect(wrongAnswers, hasLength(1));
     expect(wrongAnswers!.single.pickedIndex, 1);

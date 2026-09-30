@@ -502,6 +502,7 @@ class WeakPoint {
     this.reps = 0,
     this.lapses = 0,
     this.lastReviewedAt,
+    this.needsRevisit = false,
   });
 
   final String id;
@@ -545,6 +546,7 @@ class WeakPoint {
   int reps;
   int lapses;
   DateTime? lastReviewedAt;
+  bool needsRevisit;
 
   bool get isNewCard => lastReviewedAt == null;
 
@@ -581,6 +583,7 @@ class WeakPoint {
     'reps': reps,
     'lapses': lapses,
     'lastReviewedAt': lastReviewedAt?.toIso8601String(),
+    'needsRevisit': needsRevisit,
   };
 
   /// Đọc khoan dung: một trường cũ/hỏng không được làm mất cả danh sách.
@@ -624,6 +627,7 @@ class WeakPoint {
       reps: (json['reps'] as num?)?.toInt() ?? 0,
       lapses: (json['lapses'] as num?)?.toInt() ?? 0,
       lastReviewedAt: date('lastReviewedAt'),
+      needsRevisit: json['needsRevisit'] == true,
     );
   }
 }

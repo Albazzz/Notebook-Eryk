@@ -110,6 +110,8 @@ void main() {
     expect(card.intervalDays, 3);
     scheduler.apply(card, ReviewRating.again, now: now);
     expect(card.lapses, 1);
+    expect(card.needsRevisit, isTrue);
+    expect(WeakPoint.fromJson(card.toJson()).needsRevisit, isTrue);
     expect(card.reps, 0);
     expect(card.dueAt, now.add(ReviewScheduler.relearnDelay));
     expect(card.ease, closeTo(2.3, 1e-9));
@@ -126,6 +128,49 @@ void main() {
       card,
     ], now: now.add(const Duration(minutes: 11)));
     expect(afterRelearn.map((item) => item.id), ['a', 'b']);
+    scheduler.apply(
+      card,
+      ReviewRating.good,
+      now: now.add(const Duration(days: 1)),
+    );
+    expect(card.needsRevisit, isFalse);
+  });
+
+  test('flashcard respects selected front and Han Viet side', () {
+    final point = WeakPoint(
+      id: 'kanji',
+      title: '認識する',
+      kind: WeaknessKind.vocabulary,
+      content: 'nhận thức',
+      reminder: '',
+      note: '',
+      tags: const [],
+      notebookId: 'n',
+      notebookTitle: 'Vở',
+      page: 1,
+      ocrText: '',
+      createdAt: DateTime(2026),
+      hanViet: 'NHẬN THỨC',
+    );
+    expect(kanjiOnCard(point), '認識');
+    final front = buildConfiguredFlashcard(
+      point,
+      front: FlashcardFront.kanji,
+      hanVietSide: HanVietSide.front,
+    );
+    expect(front.front, '認識');
+    expect(front.frontHint, 'NHẬN THỨC');
+    expect(front.details.where((entry) => entry.$1 == 'Hán Việt'), isEmpty);
+    final back = buildConfiguredFlashcard(
+      point,
+      front: FlashcardFront.meaning,
+      hanVietSide: HanVietSide.back,
+    );
+    expect(back.front, 'nhận thức');
+    expect(back.answer, '認識する');
+    expect(back.details, contains(('Hán Việt', 'NHẬN THỨC')));
+    point.title = 'たべる';
+    expect(canShowFlashcard(point, FlashcardFront.kanji), isFalse);
   });
 
   test('grammar flashcard blanks the pattern in the source sentence', () {

@@ -976,6 +976,58 @@ Ngôn ngữ trả lời: $language. Trình độ: $jlpt.''';
     return (items: items, warning: (object['warning'] as String? ?? '').trim());
   }
 
+  /// Chuẩn hóa một mục cũ theo schema hiện tại, giữ nguyên phạm vi một mục.
+  Future<WeakPointDraft> reformatWeakPoint({
+    required String apiKey,
+    required String modelId,
+    required WeakPoint point,
+    required String jlpt,
+    required String language,
+  }) async {
+    final source = jsonEncode({
+      'kind': point.kind.name,
+      'title': point.title,
+      'meaning': point.content,
+      'reading': point.reading,
+      'hanViet': point.hanViet,
+      'conjugation': point.conjugation,
+      'examples': point.examples,
+      'sourceSentence': point.sourceSentence,
+      'correctAnswer': point.correctAnswer,
+      'mistake': point.mistake,
+      'memoryTip': point.reminder,
+      'uncertain': point.warning,
+      'ocrText': point.ocrText,
+    });
+    final object = await _requestValidatedObject(
+      apiKey: apiKey,
+      modelId: modelId,
+      instruction:
+          '''Bạn là giáo viên JLPT. Chuẩn hóa ĐÚNG MỘT điểm yếu cũ vào schema mới.
+Chỉ sửa nội dung sai định dạng, tách thông tin bị đặt nhầm trường, sửa lỗi OCR
+khi có bằng chứng. Giữ đúng từ/mẫu/kỹ năng gốc, không tạo điểm học khác.
+Không bịa nghĩa, cách đọc, Hán Việt hoặc ví dụ; ghi điều chưa chắc vào uncertain.
+Nếu thiếu thông tin, để trường tương ứng rỗng. Không chép ghi chú cá nhân.
+Trả về đúng một đối tượng. Ngôn ngữ: $language. Trình độ: $jlpt.''',
+      userContent: source,
+      temperature: 0.1,
+      maxTokens: 1200,
+      spec: _StructuredOutputSpec(
+        'reformatted_weak_point',
+        _objectSchema(_weakPointItemProperties()),
+      ),
+      operation: 'Chuẩn hóa điểm yếu',
+    );
+    if (object == null) {
+      throw const FormatException('AI không trả về điểm yếu hợp lệ');
+    }
+    final draft = WeakPointDraft.fromJson(object);
+    if (draft.title.isEmpty) {
+      throw const FormatException('Điểm yếu thiếu tiêu đề');
+    }
+    return draft;
+  }
+
   /// Kiểm tra nhanh: AI giải mọi câu trong vùng chọn, người học tự bấm đáp án
   /// và app chấm tại chỗ (không cần gọi AI lần hai).
   Future<QuickCheckResult> completeQuickCheck({

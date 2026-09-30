@@ -23,16 +23,20 @@ class ReviewScheduler {
     final days = _nextIntervalDays(point, rating);
     switch (rating) {
       case ReviewRating.again:
+        point.needsRevisit = true;
         point.lapses++;
         point.reps = 0;
         point.ease = math.max(minEase, point.ease - .2);
         point.intervalDays = 0;
       case ReviewRating.hard:
+        point.needsRevisit = true;
         point.reps++;
         point.ease = math.max(minEase, point.ease - .15);
       case ReviewRating.good:
+        point.needsRevisit = false;
         point.reps++;
       case ReviewRating.easy:
+        point.needsRevisit = false;
         point.reps++;
         point.ease = math.min(maxEase, point.ease + .15);
     }
@@ -108,6 +112,52 @@ class FlashcardFace {
 
   /// Các mục phụ ở mặt sau (nhãn, nội dung).
   final List<(String, String)> details;
+}
+
+enum FlashcardFront { word, meaning, kanji }
+
+enum HanVietSide { hidden, front, back }
+
+String kanjiOnCard(WeakPoint point) => RegExp(
+  r'[\u3400-\u9fff]+',
+).allMatches(point.title).map((match) => match.group(0)!).join();
+
+bool canShowFlashcard(WeakPoint point, FlashcardFront front) => switch (front) {
+  FlashcardFront.word => point.title.trim().isNotEmpty,
+  FlashcardFront.meaning => point.content.trim().isNotEmpty,
+  FlashcardFront.kanji => kanjiOnCard(point).isNotEmpty,
+};
+
+FlashcardFace buildConfiguredFlashcard(
+  WeakPoint point, {
+  required FlashcardFront front,
+  required HanVietSide hanVietSide,
+}) {
+  final primary = switch (front) {
+    FlashcardFront.word => point.title,
+    FlashcardFront.meaning => point.content,
+    FlashcardFront.kanji => kanjiOnCard(point),
+  };
+  final answer = front == FlashcardFront.meaning ? point.title : point.content;
+  return FlashcardFace(
+    prompt: front == FlashcardFront.meaning
+        ? 'Từ hoặc mẫu nào có nghĩa này?'
+        : 'Nghĩa là gì?',
+    front: primary,
+    frontHint: hanVietSide == HanVietSide.front ? point.hanViet : '',
+    answer: answer,
+    details: [
+      if (front == FlashcardFront.kanji) ('Từ đầy đủ', point.title),
+      if (point.reading.isNotEmpty) ('Cách đọc', point.reading),
+      if (hanVietSide == HanVietSide.back && point.hanViet.isNotEmpty)
+        ('Hán Việt', point.hanViet),
+      if (point.conjugation.isNotEmpty) ('Cách nối', point.conjugation),
+      if (point.examples.isNotEmpty) ('Ví dụ', point.examples.join('\n')),
+      if (point.mistake.isNotEmpty) ('Chỗ dễ nhầm', point.mistake),
+      if (point.reminder.isNotEmpty) ('Mẹo nhớ', point.reminder),
+      if (point.note.isNotEmpty) ('Ghi chú', point.note),
+    ],
+  );
 }
 
 FlashcardFace buildFlashcard(WeakPoint point, {bool reverse = false}) {

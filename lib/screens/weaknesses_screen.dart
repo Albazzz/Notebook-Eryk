@@ -44,6 +44,8 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
   /// Non-empty while multi-select mode is active.
   final Set<String> selected = {};
   bool selecting = false;
+  bool _reformatting = false;
+  int _reformatProgress = 0;
 
   AppState get state => widget.state;
 
@@ -167,6 +169,8 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
                           setState(() => selecting = true);
                         } else if (value == 'export') {
                           _exportAnki(items);
+                        } else if (value == 'reformat') {
+                          _reformatAll();
                         }
                       },
                       itemBuilder: (_) => const [
@@ -178,12 +182,26 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
                           value: 'export',
                           child: Text('Xuất Anki (danh sách đang lọc)'),
                         ),
+                        PopupMenuItem(
+                          value: 'reformat',
+                          child: Text('Chuẩn hóa toàn bộ Điểm yếu'),
+                        ),
                       ],
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 16),
+              if (_reformatting) ...[
+                LinearProgressIndicator(
+                  value: state.weakPoints.isEmpty
+                      ? null
+                      : _reformatProgress / state.weakPoints.length,
+                ),
+                Text(
+                  'Đang chuẩn hóa $_reformatProgress/${state.weakPoints.length} mục…',
+                ),
+              ],
               if (state.weakPoints.isNotEmpty)
                 _StatsStrip(points: state.weakPoints),
               const SizedBox(height: 12),
@@ -377,6 +395,55 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
       ),
     );
     if (mounted) setState(() {});
+  }
+
+  Future<void> _reformatAll() async {
+    if (_reformatting || state.weakPoints.isEmpty) return;
+    if (!state.aiConnected) {
+      showAppSnack(context, 'Hãy thiết lập OpenRouter trong Cài đặt AI');
+      return;
+    }
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Chuẩn hóa toàn bộ Điểm yếu?'),
+        content: Text(
+          'AI sẽ xử lý ${state.weakPoints.length} mục và có thể mất vài phút. Nội dung học sẽ được cập nhật; ghi chú riêng, thẻ, nguồn và lịch ôn được giữ lại.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Bắt đầu'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !mounted) return;
+    setState(() {
+      _reformatting = true;
+      _reformatProgress = 0;
+    });
+    try {
+      final result = await state.reformatAllWeakPoints(
+        onProgress: (done, _) {
+          if (mounted) setState(() => _reformatProgress = done);
+        },
+      );
+      if (mounted) {
+        showAppSnack(
+          context,
+          'Đã chuẩn hóa ${result.updated} mục; ${result.failed} mục cần kiểm tra lại.',
+        );
+      }
+    } catch (error) {
+      if (mounted) showAppSnack(context, 'Không thể chuẩn hóa: $error');
+    } finally {
+      if (mounted) setState(() => _reformatting = false);
+    }
   }
 
   Future<void> _exportAnki(List<WeakPoint> items) async {

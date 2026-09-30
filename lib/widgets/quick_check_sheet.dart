@@ -32,8 +32,8 @@ class QuickCheckAnswer {
   /// Mô tả cho AI biết người học đã sai ở đâu khi tạo điểm yếu.
   String get learnerContext {
     final label = question.label.isEmpty ? '' : 'Câu ${question.label}: ';
-    if (pickedIndex == null) {
-      return '${label}người học trả lời sai; đáp án đúng là ${question.correctText}.';
+    if (pickedIndex == null || pickedIndex == question.correctIndex) {
+      return '${label}người học chọn lưu câu này để ôn; đáp án đúng là ${question.correctText}.';
     }
     return '${label}người học chọn "$pickedText" (sai); đáp án đúng là ${question.correctText}.';
   }
@@ -60,7 +60,7 @@ class QuickCheckSheet extends StatefulWidget {
     required this.title,
     this.sourceText = '',
     this.initialQuestionCount = 1,
-    this.wrongActionLabel = 'Lưu câu sai thành điểm yếu',
+    this.wrongActionLabel = 'Lưu câu đã tích vào Điểm yếu',
     required this.onWrongAnswers,
     this.onExplain,
     this.onRetry,
@@ -88,7 +88,7 @@ class _QuickCheckSheetState extends State<QuickCheckSheet> {
 
   /// Tự chấm cho câu không có lựa chọn.
   final Map<int, bool> _selfGraded = {};
-  final Set<int> _revealed = {};
+  final Set<int> _selectedForWeakness = {};
   late int _placeholderCount = widget.initialQuestionCount.clamp(1, 20);
 
   @override
@@ -149,7 +149,16 @@ class _QuickCheckSheetState extends State<QuickCheckSheet> {
   Widget build(BuildContext context) {
     final result = _result;
     final answers = _answers;
-    final wrong = answers.where((answer) => !answer.correct).toList();
+    final selectedAnswers = <QuickCheckAnswer>[
+      if (result != null)
+        for (var index = 0; index < result.questions.length; index++)
+          if (_selectedForWeakness.contains(index))
+            QuickCheckAnswer(
+              question: result.questions[index],
+              pickedIndex: _picks[index],
+              correct: false,
+            ),
+    ];
     final total = result?.questions.length ?? _placeholderCount;
     final height = MediaQuery.sizeOf(context).height * .86;
     return SafeArea(
@@ -191,7 +200,7 @@ class _QuickCheckSheetState extends State<QuickCheckSheet> {
               Text(
                 result == null && _error == null
                     ? 'AI đang giải đề… Bạn cứ bấm đáp án của mình, app sẽ chấm ngay khi có kết quả.'
-                    : 'Bấm đáp án bạn đã chọn cho từng câu.',
+                    : 'Đáp án hiện ngay bên dưới mỗi câu. Tích câu muốn lưu vào Điểm yếu.',
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -254,7 +263,7 @@ class _QuickCheckSheetState extends State<QuickCheckSheet> {
                       onPressed: () => setState(() {
                         _picks.clear();
                         _selfGraded.clear();
-                        _revealed.clear();
+                        _selectedForWeakness.clear();
                       }),
                       child: const Text('Làm lại'),
                     ),
@@ -266,17 +275,17 @@ class _QuickCheckSheetState extends State<QuickCheckSheet> {
                     style: FilledButton.styleFrom(
                       backgroundColor: AppColors.weakness,
                     ),
-                    onPressed: wrong.isEmpty
+                    onPressed: selectedAnswers.isEmpty
                         ? null
                         : () {
                             Navigator.pop(context);
-                            widget.onWrongAnswers(wrong);
+                            widget.onWrongAnswers(selectedAnswers);
                           },
                     icon: const Icon(Icons.bookmark_add_outlined),
                     label: Text(
-                      wrong.isEmpty
+                      selectedAnswers.isEmpty
                           ? widget.wrongActionLabel
-                          : '${widget.wrongActionLabel} (${wrong.length})',
+                          : '${widget.wrongActionLabel} (${selectedAnswers.length})',
                     ),
                   ),
                 ],
@@ -333,6 +342,7 @@ class _QuickCheckSheetState extends State<QuickCheckSheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _weaknessCheckbox(index),
           if (question.stem.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
@@ -342,45 +352,42 @@ class _QuickCheckSheetState extends State<QuickCheckSheet> {
             _ChoiceTile(
               choice: question.choices[choice],
               picked: pick == choice,
-              revealed: graded,
+              revealed: true,
               onTap: graded
                   ? null
                   : () => setState(() => _picks[index] = choice),
             ),
-          if (graded) ...[
-            const SizedBox(height: 8),
-            if (!correct)
-              Text(
-                'Đáp án đúng: ${question.correctText}',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.correct,
-                ),
-              ),
-            if (question.explanation.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  question.explanation,
-                  style: const TextStyle(height: 1.45),
-                ),
-              ),
-            _QuestionActions(
-              point: question.point,
-              onExplain: widget.onExplain == null
-                  ? null
-                  : () {
-                      Navigator.pop(context);
-                      widget.onExplain!(
-                        QuickCheckAnswer(
-                          question: question,
-                          pickedIndex: pick,
-                          correct: correct,
-                        ),
-                      );
-                    },
+          const SizedBox(height: 8),
+          Text(
+            'Đáp án đúng: ${question.correctText}',
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              color: AppColors.correct,
             ),
-          ],
+          ),
+          if (question.explanation.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                question.explanation,
+                style: const TextStyle(height: 1.45),
+              ),
+            ),
+          _QuestionActions(
+            point: question.point,
+            onExplain: widget.onExplain == null
+                ? null
+                : () {
+                    Navigator.pop(context);
+                    widget.onExplain!(
+                      QuickCheckAnswer(
+                        question: question,
+                        pickedIndex: pick,
+                        correct: correct,
+                      ),
+                    );
+                  },
+          ),
         ],
       ),
     );
@@ -391,7 +398,6 @@ class _QuickCheckSheetState extends State<QuickCheckSheet> {
     QuickCheckQuestion question,
     String heading,
   ) {
-    final revealed = _revealed.contains(index);
     final graded = _selfGraded[index];
     return _QuestionFrame(
       heading: heading,
@@ -399,45 +405,56 @@ class _QuickCheckSheetState extends State<QuickCheckSheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _weaknessCheckbox(index),
           if (question.stem.isNotEmpty)
             Text(question.stem, style: const TextStyle(height: 1.5)),
           const SizedBox(height: 8),
-          if (!revealed)
-            OutlinedButton(
-              onPressed: () => setState(() => _revealed.add(index)),
-              child: const Text('Xem đáp án'),
-            )
-          else ...[
-            Text(
-              'Đáp án: ${question.answer}',
-              style: const TextStyle(fontWeight: FontWeight.w800),
+          Text(
+            'Đáp án: ${question.answer}',
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+          if (question.explanation.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(question.explanation),
             ),
-            if (question.explanation.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(question.explanation),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              ChoiceChip(
+                label: const Text('Mình làm đúng'),
+                selected: graded == true,
+                onSelected: (_) => setState(() => _selfGraded[index] = true),
               ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: [
-                ChoiceChip(
-                  label: const Text('Mình làm đúng'),
-                  selected: graded == true,
-                  onSelected: (_) => setState(() => _selfGraded[index] = true),
-                ),
-                ChoiceChip(
-                  label: const Text('Mình làm sai'),
-                  selected: graded == false,
-                  onSelected: (_) => setState(() => _selfGraded[index] = false),
-                ),
-              ],
-            ),
-          ],
+              ChoiceChip(
+                label: const Text('Mình làm sai'),
+                selected: graded == false,
+                onSelected: (_) => setState(() => _selfGraded[index] = false),
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
+
+  Widget _weaknessCheckbox(int index) => Material(
+    type: MaterialType.transparency,
+    child: CheckboxListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      title: const Text('Thêm câu này vào Điểm yếu'),
+      value: _selectedForWeakness.contains(index),
+      onChanged: (value) => setState(() {
+        if (value == true) {
+          _selectedForWeakness.add(index);
+        } else {
+          _selectedForWeakness.remove(index);
+        }
+      }),
+    ),
+  );
 }
 
 class _QuestionFrame extends StatelessWidget {

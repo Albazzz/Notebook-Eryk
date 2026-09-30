@@ -24,7 +24,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
   late List<WeakPoint> _queue;
   int _index = 0;
   bool _revealed = false;
-  bool _reverse = false;
+  bool _started = false;
+  FlashcardFront _front = FlashcardFront.word;
+  HanVietSide _hanVietSide = HanVietSide.back;
+  late Set<String> _selectedIds;
   int _reviewed = 0;
   int _again = 0;
 
@@ -37,6 +40,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   void initState() {
     super.initState();
     _queue = List.of(widget.initialQueue ?? state.dueWeakPoints);
+    _selectedIds = _queue.map((point) => point.id).toSet();
   }
 
   WeakPoint? get _current => _index < _queue.length ? _queue[_index] : null;
@@ -50,10 +54,6 @@ class _ReviewScreenState extends State<ReviewScreen> {
       if (rating == ReviewRating.again) {
         _again++;
         if (!_forgotten.contains(point)) _forgotten.add(point);
-        // Gặp lại trong cùng phiên, tối đa một lần nữa ở cuối hàng đợi.
-        if (_queue.skip(_index + 1).where((item) => item == point).isEmpty) {
-          _queue.add(point);
-        }
       }
       _index++;
       _revealed = false;
@@ -61,14 +61,28 @@ class _ReviewScreenState extends State<ReviewScreen> {
   }
 
   void _studyAll() {
-    final all = List.of(state.weakPoints)
-      ..sort(
-        (a, b) => (a.dueAt ?? DateTime(0)).compareTo(b.dueAt ?? DateTime(0)),
-      );
     setState(() {
-      _queue = all;
+      _selectedIds = state.weakPoints.map((point) => point.id).toSet();
+      _started = false;
+    });
+  }
+
+  void _startWith(Iterable<WeakPoint> points) {
+    final cards = points
+        .where((point) => canShowFlashcard(point, _front))
+        .toList();
+    if (cards.isEmpty) {
+      showAppSnack(context, 'Không có thẻ phù hợp với mặt trước đã chọn');
+      return;
+    }
+    setState(() {
+      _queue = cards;
       _index = 0;
       _revealed = false;
+      _started = true;
+      _reviewed = 0;
+      _again = 0;
+      _forgotten.clear();
     });
   }
 
@@ -108,7 +122,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
         result: future,
         title: 'Luyện đề AI (${points.length} câu)',
         initialQuestionCount: points.length,
-        wrongActionLabel: 'Đưa điểm sai về ôn lại',
+        wrongActionLabel: 'Đưa câu đã tích về ôn lại',
         onRetry: () => _startPractice(),
         onWrongAnswers: (wrong) {
           var matched = 0;
@@ -141,25 +155,13 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final point = _current;
+    final point = _started ? _current : null;
     return Scaffold(
       appBar: AppBar(
         title: Text(
           point == null ? 'Ôn tập' : 'Ôn tập · ${_index + 1}/${_queue.length}',
         ),
         actions: [
-          Row(
-            children: [
-              const Text('Đảo mặt'),
-              Switch(
-                value: _reverse,
-                onChanged: (value) => setState(() {
-                  _reverse = value;
-                  _revealed = false;
-                }),
-              ),
-            ],
-          ),
           IconButton(
             tooltip: 'Luyện đề AI từ điểm hay quên',
             onPressed: _startPractice,
@@ -169,7 +171,139 @@ class _ReviewScreenState extends State<ReviewScreen> {
         ],
       ),
       body: SafeArea(
-        child: point == null ? _buildFinished() : _buildCard(point),
+        child: !_started
+            ? _buildSetup()
+            : point == null
+            ? _buildFinished()
+            : _buildCard(point),
+      ),
+    );
+  }
+
+  Widget _buildSetup() {
+    final eligible = state.weakPoints;
+    final selected = eligible
+        .where((point) => _selectedIds.contains(point.id))
+        .toList();
+    final missing = selected
+        .where((point) => !canShowFlashcard(point, _front))
+        .toList();
+    final forgotten = eligible.where((point) => point.needsRevisit).toList();
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            Text(
+              'Tạo phiên flashcard',
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+            const SizedBox(height: 12),
+            Text('Mặt trước', style: Theme.of(context).textTheme.titleMedium),
+            Wrap(
+              spacing: 8,
+              children: [
+                ChoiceChip(
+                  label: const Text('Từ / mẫu'),
+                  selected: _front == FlashcardFront.word,
+                  onSelected: (_) =>
+                      setState(() => _front = FlashcardFront.word),
+                ),
+                ChoiceChip(
+                  label: const Text('Nghĩa'),
+                  selected: _front == FlashcardFront.meaning,
+                  onSelected: (_) =>
+                      setState(() => _front = FlashcardFront.meaning),
+                ),
+                ChoiceChip(
+                  label: const Text('Kanji'),
+                  selected: _front == FlashcardFront.kanji,
+                  onSelected: (_) =>
+                      setState(() => _front = FlashcardFront.kanji),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<HanVietSide>(
+              initialValue: _hanVietSide,
+              decoration: const InputDecoration(labelText: 'Hiển thị Hán Việt'),
+              items: const [
+                DropdownMenuItem(
+                  value: HanVietSide.front,
+                  child: Text('Mặt trước'),
+                ),
+                DropdownMenuItem(
+                  value: HanVietSide.back,
+                  child: Text('Mặt sau'),
+                ),
+                DropdownMenuItem(value: HanVietSide.hidden, child: Text('Ẩn')),
+              ],
+              onChanged: (value) =>
+                  setState(() => _hanVietSide = value ?? _hanVietSide),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Chọn mục để học (${selected.length})',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => setState(
+                    () => _selectedIds = eligible
+                        .map((point) => point.id)
+                        .toSet(),
+                  ),
+                  child: const Text('Chọn tất cả'),
+                ),
+                TextButton(
+                  onPressed: () => setState(_selectedIds.clear),
+                  child: const Text('Bỏ chọn'),
+                ),
+              ],
+            ),
+            if (missing.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  '${missing.length} mục không có ${_front == FlashcardFront.kanji ? 'Kanji' : 'nội dung cho mặt trước'} sẽ được bỏ qua.',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+            for (final point in eligible)
+              CheckboxListTile(
+                value: _selectedIds.contains(point.id),
+                title: Text(point.title),
+                subtitle: Text(
+                  point.content,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onChanged: (value) => setState(() {
+                  if (value == true) {
+                    _selectedIds.add(point.id);
+                  } else {
+                    _selectedIds.remove(point.id);
+                  }
+                }),
+              ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: selected.isEmpty ? null : () => _startWith(selected),
+              icon: const Icon(Icons.style_outlined),
+              label: Text('Bắt đầu · ${selected.length - missing.length} thẻ'),
+            ),
+            if (forgotten.isNotEmpty)
+              OutlinedButton.icon(
+                onPressed: () => _startWith(forgotten),
+                icon: const Icon(Icons.replay),
+                label: Text('Ôn lại ${forgotten.length} thẻ chưa nhớ'),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -209,6 +343,14 @@ class _ReviewScreenState extends State<ReviewScreen> {
                   icon: const Icon(Icons.replay),
                   label: const Text('Ôn thêm tất cả'),
                 ),
+              if (state.weakPoints.any((item) => item.needsRevisit))
+                FilledButton.icon(
+                  onPressed: () => _startWith(
+                    state.weakPoints.where((item) => item.needsRevisit),
+                  ),
+                  icon: const Icon(Icons.replay),
+                  label: const Text('Ôn lại các thẻ chưa nhớ'),
+                ),
               FilledButton.icon(
                 onPressed: _startPractice,
                 icon: const Icon(Icons.quiz_outlined),
@@ -230,7 +372,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
   );
 
   Widget _buildCard(WeakPoint point) {
-    final face = buildFlashcard(point, reverse: _reverse);
+    final face = buildConfiguredFlashcard(
+      point,
+      front: _front,
+      hanVietSide: _hanVietSide,
+    );
     final scheme = Theme.of(context).colorScheme;
     final frontSize = face.front.characters.length <= 8
         ? 44.0
@@ -247,117 +393,143 @@ class _ReviewScreenState extends State<ReviewScreen> {
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 760),
               child: GestureDetector(
-                onTap: () => setState(() => _revealed = true),
+                onTap: () => setState(() => _revealed = !_revealed),
                 child: Card(
                   margin: const EdgeInsets.all(20),
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.all(28),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
-                          children: [
-                            _Badge(label: point.kind.label),
-                            const SizedBox(width: 8),
-                            if (point.isNewCard)
-                              const _Badge(
-                                label: 'Mới',
-                                color: AppColors.quickCheck,
-                              )
-                            else if (point.lapses > 0)
-                              _Badge(
-                                label: 'Quên ${point.lapses} lần',
-                                color: AppColors.wrong,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 240),
+                      transitionBuilder: (child, animation) =>
+                          RotationTransition(
+                            turns: Tween<double>(
+                              begin: .5,
+                              end: 1,
+                            ).animate(animation),
+                            child: child,
+                          ),
+                      child: Column(
+                        key: ValueKey('${point.id}-$_revealed'),
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              _Badge(label: point.kind.label),
+                              const SizedBox(width: 8),
+                              if (point.isNewCard)
+                                const _Badge(
+                                  label: 'Mới',
+                                  color: AppColors.quickCheck,
+                                )
+                              else if (point.lapses > 0)
+                                _Badge(
+                                  label: 'Quên ${point.lapses} lần',
+                                  color: AppColors.wrong,
+                                ),
+                              const Spacer(),
+                              Flexible(
+                                child: Text(
+                                  '${point.notebookTitle} · Tr. ${point.page}',
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                ),
                               ),
-                            const Spacer(),
-                            Flexible(
+                            ],
+                          ),
+                          const SizedBox(height: 18),
+                          if (!_revealed)
+                            Text(
+                              face.prompt,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: scheme.onSurfaceVariant),
+                            ),
+                          if (!_revealed) const SizedBox(height: 14),
+                          if (!_revealed)
+                            SelectableText(
+                              face.front,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: frontSize,
+                                fontWeight: FontWeight.w700,
+                                height: 1.4,
+                              ),
+                            ),
+                          if (face.frontHint.isNotEmpty && !_revealed) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              face.frontHint,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: scheme.onSurfaceVariant,
+                                height: 1.5,
+                              ),
+                            ),
+                          ],
+                          if (_revealed)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 16),
                               child: Text(
-                                '${point.notebookTitle} · Tr. ${point.page}',
-                                overflow: TextOverflow.ellipsis,
+                                'Mặt sau · chạm để lật lại',
+                                textAlign: TextAlign.center,
                                 style: TextStyle(
-                                  fontSize: 12,
                                   color: scheme.onSurfaceVariant,
                                 ),
                               ),
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 18),
-                        Text(
-                          face.prompt,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: scheme.onSurfaceVariant),
-                        ),
-                        const SizedBox(height: 14),
-                        SelectableText(
-                          face.front,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: frontSize,
-                            fontWeight: FontWeight.w700,
-                            height: 1.4,
-                          ),
-                        ),
-                        if (face.frontHint.isNotEmpty && !_reverse) ...[
-                          const SizedBox(height: 12),
-                          Text(
-                            face.frontHint,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: scheme.onSurfaceVariant,
-                              height: 1.5,
-                            ),
-                          ),
-                        ],
-                        const Divider(height: 36),
-                        if (!_revealed)
-                          Center(
-                            child: FilledButton.tonal(
-                              onPressed: () => setState(() => _revealed = true),
-                              child: const Text('Hiện đáp án'),
-                            ),
-                          )
-                        else ...[
-                          SelectableText(
-                            face.answer,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.correct,
-                            ),
-                          ),
-                          const SizedBox(height: 18),
-                          for (final (label, value) in face.details)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 14),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    label.toUpperCase(),
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      letterSpacing: .8,
-                                      fontWeight: FontWeight.w800,
-                                      color: label == 'Chỗ dễ nhầm'
-                                          ? AppColors.weakness
-                                          : Colors.grey,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  SelectableText(
-                                    value,
-                                    style: const TextStyle(
-                                      fontSize: 15,
-                                      height: 1.5,
-                                    ),
-                                  ),
-                                ],
+                          if (!_revealed) const Divider(height: 36),
+                          if (!_revealed)
+                            Center(
+                              child: FilledButton.tonal(
+                                onPressed: () =>
+                                    setState(() => _revealed = true),
+                                child: const Text('Lật thẻ'),
+                              ),
+                            )
+                          else ...[
+                            SelectableText(
+                              face.answer,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.correct,
                               ),
                             ),
+                            const SizedBox(height: 18),
+                            for (final (label, value) in face.details)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 14),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      label.toUpperCase(),
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        letterSpacing: .8,
+                                        fontWeight: FontWeight.w800,
+                                        color: label == 'Chỗ dễ nhầm'
+                                            ? AppColors.weakness
+                                            : Colors.grey,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    SelectableText(
+                                      value,
+                                      style: const TextStyle(
+                                        fontSize: 15,
+                                        height: 1.5,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -372,9 +544,12 @@ class _ReviewScreenState extends State<ReviewScreen> {
               constraints: const BoxConstraints(maxWidth: 760),
               child: Row(
                 children: [
-                  for (final rating in ReviewRating.values) ...[
+                  for (final rating in [
+                    ReviewRating.again,
+                    ReviewRating.good,
+                  ]) ...[
                     Expanded(child: _ratingButton(point, rating)),
-                    if (rating != ReviewRating.easy) const SizedBox(width: 8),
+                    if (rating == ReviewRating.again) const SizedBox(width: 8),
                   ],
                 ],
               ),
@@ -404,7 +579,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            rating.label,
+            rating == ReviewRating.again ? 'Chưa nhớ' : 'Đã nhớ',
             style: const TextStyle(fontWeight: FontWeight.w800),
           ),
           Text(next, style: const TextStyle(fontSize: 11)),

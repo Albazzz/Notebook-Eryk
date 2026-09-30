@@ -2211,6 +2211,52 @@ class AppState extends ChangeNotifier {
 
   List<WeakPoint> get dueWeakPoints => reviewScheduler.dueQueue(weakPoints);
 
+  Future<({int updated, int failed})> reformatAllWeakPoints({
+    void Function(int completed, int total)? onProgress,
+  }) async {
+    if (!aiConnected) {
+      throw StateError('Hãy thiết lập OpenRouter trong Cài đặt AI');
+    }
+    final points = List<WeakPoint>.of(weakPoints);
+    var updated = 0;
+    var failed = 0;
+    for (final point in points) {
+      try {
+        final draft = await aiService.reformatWeakPoint(
+          apiKey: apiKey,
+          modelId: modelIdFor(AiTask.createWeakPoint),
+          point: point,
+          jlpt: jlpt,
+          language: explanationLanguage,
+        );
+        point
+          ..title = draft.title
+          ..kind = draft.kind
+          ..content = draft.content
+          ..reading = draft.reading
+          ..hanViet = draft.hanViet
+          ..conjugation = draft.conjugation
+          ..examples = draft.examples
+          ..sourceSentence = draft.sourceSentence
+          ..correctAnswer = draft.correctAnswer
+          ..mistake = draft.mistake
+          ..reminder = draft.reminder
+          ..warning = draft.warning;
+        await _persistWeakPoints();
+        schedulePersistence();
+        updated++;
+      } catch (error) {
+        failed++;
+        debugPrint('[NoteEryk][WeakPoint] reformat ${point.id} failed: $error');
+      }
+      onProgress?.call(updated + failed, points.length);
+    }
+    if (updated > 0) {
+      notifyListeners();
+    }
+    return (updated: updated, failed: failed);
+  }
+
   /// Xóa nhiều điểm yếu; ảnh nguồn chỉ bị xóa sau [undoWindow] để Hoàn tác
   /// khôi phục được trọn vẹn.
   List<({int index, WeakPoint point})> deleteWeakPoints(
