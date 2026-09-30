@@ -5,7 +5,9 @@ import 'dart:ui';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:noteeryk/app_state.dart';
 import 'package:noteeryk/models.dart';
+import 'package:noteeryk/review.dart';
 import 'package:noteeryk/services.dart';
+import 'package:noteeryk/widgets/quick_check_sheet.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -17,11 +19,274 @@ void main() {
     expect(serviceSource, contains('Every AI response must pass'));
     expect(serviceSource, contains("..._structuredRequestOptions(spec)"));
     expect(serviceSource, isNot(contains('compatibilityMode')));
-    expect(serviceSource, contains("'max_completion_tokens': maxTokens"));
-    expect(
-      serviceSource,
-      contains("if (!gpt5Family) 'temperature': temperature"),
+  });
+
+  test('reasoning payload reserves tokens and omits sampling params', () {
+    final service = OpenRouterService()
+      ..reasoningEffort = AiReasoningEffort.high;
+    addTearDown(service.dispose);
+
+    final luna = service.chatPayloadForTesting(modelId: 'openai/gpt-5.6-luna');
+    expect(luna.containsKey('temperature'), isFalse);
+    expect(luna.containsKey('max_tokens'), isFalse);
+    expect(luna['max_completion_tokens'], greaterThan(1000));
+    expect(luna['reasoning'], {'effort': 'high', 'exclude': true});
+
+    final plain = service.chatPayloadForTesting(
+      modelId: 'some/chat-model',
+      reasoning: false,
     );
+    expect(plain['temperature'], isNotNull);
+    expect(plain['max_tokens'], 1000);
+    expect(plain.containsKey('reasoning'), isFalse);
+  });
+
+  test(
+    'delete weak points can be undone and duplicates are reencountered',
+    () async {
+      SharedPreferences.setMockInitialValues({'autoSave': false});
+      final state = AppState()..autoSave = false;
+      addTearDown(state.dispose);
+      WeakPoint point(String id, String title) => WeakPoint(
+        id: id,
+        title: title,
+        kind: WeaknessKind.grammar,
+        content: 'nghĩa',
+        reminder: '',
+        note: '',
+        tags: const [],
+        notebookId: 'n',
+        notebookTitle: 'Vở',
+        page: 1,
+        ocrText: '',
+        createdAt: DateTime(2026),
+      );
+      state.weakPoints = [point('a', 'のに'), point('b', 'ために'), point('c', 'ば')];
+
+      final removed = state.deleteWeakPoints(['a', 'c']);
+      expect(state.weakPoints.map((item) => item.id), ['b']);
+      state.restoreWeakPoints(removed);
+      expect(state.weakPoints.map((item) => item.id), ['a', 'b', 'c']);
+
+      final duplicate = state.findDuplicateWeakPoint(
+        WeaknessKind.grammar,
+        '〜 ために',
+      );
+      expect(duplicate?.id, 'b');
+      duplicate!
+        ..lastReviewedAt = DateTime(2026)
+        ..dueAt = DateTime(2030);
+      state.reencounterWeakPoint(duplicate, sourceSentence: '合格するために勉強する。');
+      expect(state.weakPoints.first.id, 'b');
+      expect(duplicate.lapses, 1);
+      expect(duplicate.isDue(DateTime.now()), isTrue);
+      expect(duplicate.examples, contains('合格するために勉強する。'));
+    },
+  );
+
+  test('SRS schedules again/good/easy like Anki and queues due cards', () {
+    const scheduler = ReviewScheduler();
+    final now = DateTime(2026, 9, 30, 9);
+    WeakPoint point(String id) => WeakPoint(
+      id: id,
+      title: id,
+      kind: WeaknessKind.vocabulary,
+      content: 'nghĩa',
+      reminder: '',
+      note: '',
+      tags: const [],
+      notebookId: 'n',
+      notebookTitle: 'Vở',
+      page: 1,
+      ocrText: '',
+      createdAt: now,
+    );
+
+    final card = point('a');
+    expect(card.isNewCard, isTrue);
+    scheduler.apply(card, ReviewRating.good, now: now);
+    expect(card.dueAt, now.add(const Duration(days: 1)));
+    scheduler.apply(card, ReviewRating.good, now: now);
+    expect(card.intervalDays, 3);
+    scheduler.apply(card, ReviewRating.again, now: now);
+    expect(card.lapses, 1);
+    expect(card.reps, 0);
+    expect(card.dueAt, now.add(ReviewScheduler.relearnDelay));
+    expect(card.ease, closeTo(2.3, 1e-9));
+
+    final fresh = point('b');
+    final later = point('c')
+      ..lastReviewedAt = now
+      ..dueAt = now.add(const Duration(days: 2));
+    final queue = scheduler.dueQueue([later, fresh, card], now: now);
+    expect(queue.map((item) => item.id), ['b']);
+    final afterRelearn = scheduler.dueQueue([
+      later,
+      fresh,
+      card,
+    ], now: now.add(const Duration(minutes: 11)));
+    expect(afterRelearn.map((item) => item.id), ['a', 'b']);
+  });
+
+  test('grammar flashcard blanks the pattern in the source sentence', () {
+    final point = WeakPoint(
+      id: 'g',
+      title: '〜わけではない',
+      kind: WeaknessKind.grammar,
+      content: 'không hẳn là',
+      reminder: '',
+      note: '',
+      tags: const [],
+      notebookId: 'n',
+      notebookTitle: 'Vở',
+      page: 1,
+      ocrText: '',
+      createdAt: DateTime(2026),
+      sourceSentence: '嫌いなわけではないが、あまり食べない。',
+    );
+    final face = buildFlashcard(point);
+    expect(face.front, '嫌いな＿＿＿が、あまり食べない。');
+    expect(face.answer, '〜わけではない');
+
+    final tsv = exportAnkiTsv([point]);
+    expect(tsv, startsWith('#separator:tab'));
+    expect(tsv.trim().split('\n').last.split('\t'), hasLength(3));
+  });
+
+  test('old or partly broken weak points still load', () {
+    final legacy = WeakPoint.fromJson({
+      'id': 'old',
+      'title': '認識',
+      'kind': 'vocabulary',
+      'content': 'nhận thức',
+      'reminder': '',
+      'note': '',
+      'tags': ['N2'],
+      'notebookId': 'n',
+      'notebookTitle': 'Vở',
+      'page': 2,
+      'ocrText': '',
+      'createdAt': '2026-08-01T10:00:00.000',
+    });
+    expect(legacy.isNewCard, isTrue);
+    expect(legacy.mistake, isEmpty);
+
+    final broken = WeakPoint.fromJson({
+      'id': 'x',
+      'kind': 'unknown',
+      'page': null,
+    });
+    expect(broken.kind, WeaknessKind.other);
+    expect(broken.page, 1);
+  });
+
+  test('quick check keeps exactly one correct choice per question', () {
+    final question = QuickCheckQuestion.fromJson({
+      'label': '2',
+      'questionType': '文脈規定',
+      'stem': '（　）に入れるのに最もよいもの',
+      'choices': [
+        {'label': '1', 'text': 'A', 'correct': false, 'reason': ''},
+        {'label': '2', 'text': 'B', 'correct': true, 'reason': ''},
+        {'label': '3', 'text': 'C', 'correct': true, 'reason': ''},
+      ],
+      'answer': '2',
+      'explanation': '',
+      'point': 'B',
+      'kind': 'vocabulary',
+    });
+    expect(question.correctIndex, 1);
+    expect(question.choices.where((choice) => choice.correct), hasLength(1));
+    expect(question.questionType, JlptQuestionType.contextVocab);
+    expect(question.correctText, '2. B');
+  });
+
+  test('question count estimate treats ★ ordering as one question', () {
+    expect(
+      estimateQuestionCount(
+        '1 彼は（　）行った。\n1 a 2 b 3 c 4 d\n2 私は ＿＿ ＿＿ ★ ＿＿ です。',
+      ),
+      2,
+    );
+    expect(estimateQuestionCount('ただの文'), 1);
+  });
+
+  test('weak point schemas include mistake, question type and no AI tags', () {
+    final service = OpenRouterService();
+    addTearDown(service.dispose);
+    Map<String, dynamic> itemSchema(Map<String, dynamic> options) {
+      final schema =
+          ((options['response_format'] as Map)['json_schema'] as Map)['schema']
+              as Map;
+      return Map<String, dynamic>.from(
+        ((schema['properties'] as Map)['items'] as Map)['items'] as Map,
+      );
+    }
+
+    final properties =
+        itemSchema(
+              service.weakPointDraftRequestOptionsForTesting(),
+            )['properties']
+            as Map;
+    expect(
+      properties.keys,
+      containsAll(['mistake', 'correctAnswer', 'questionType']),
+    );
+    expect(properties.keys, isNot(contains('tags')));
+    expect(properties.keys, isNot(contains('note')));
+    final typeEnum = (properties['questionType'] as Map)['enum'] as List;
+    expect(typeEnum, contains('文の組み立て'));
+
+    final draft = WeakPointDraft.fromJson({
+      'kind': 'grammar',
+      'title': 'のに',
+      'meaning': 'vậy mà',
+      'examples': [
+        {'japanese': '雨なのに出かけた。', 'meaning': 'Trời mưa vậy mà vẫn đi.'},
+      ],
+      'questionType': '文法形式の判断',
+      'uncertain': '',
+    });
+    expect(draft.examples.single, '雨なのに出かけた。 — Trời mưa vậy mà vẫn đi.');
+    expect(draft.questionType.tag, '問題:文法形式の判断');
+  });
+
+  test('solve output formats every question separately', () {
+    final service = OpenRouterService();
+    addTearDown(service.dispose);
+    final formatted = service.formatStructuredResultForTesting(
+      AiTask.solve,
+      jsonEncode({
+        'questions': [
+          {
+            'label': '1',
+            'questionType': '漢字読み',
+            'stem': '',
+            'choices': [
+              {'label': '1', 'text': 'きょう', 'correct': true, 'reason': 'Đúng'},
+            ],
+            'answer': 'きょう',
+            'explanation': 'Âm On.',
+            'point': '今日',
+            'kind': 'kanji',
+          },
+          {
+            'label': '2',
+            'questionType': '文の組み立て',
+            'stem': '',
+            'choices': [],
+            'answer': '3',
+            'explanation': 'Thứ tự 2-4-3-1.',
+            'point': '',
+            'kind': 'grammar',
+          },
+        ],
+        'warning': '',
+      }),
+    );
+    expect(formatted, contains('Câu 1 · Đọc Kanji'));
+    expect(formatted, contains('Câu 2 · Sắp xếp câu'));
+    expect(formatted, contains('Thứ tự 2-4-3-1.'));
   });
 
   test('autosave batches pen changes without lifecycle backup', () async {

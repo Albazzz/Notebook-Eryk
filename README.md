@@ -29,6 +29,12 @@ APK debug được tạo tại `build/app/outputs/flutter-apk/app-debug.apk`.
 - OpenRouter service dùng chung, tải model động, tùy chọn JLPT/ngôn ngữ.
 - API key lưu bằng secure storage và không hiển thị lại sau khi lưu.
 - Tạo, sửa, lọc, xóa Điểm yếu; mở lại đúng vở/trang nguồn.
+  - AI tách từng điểm theo câu hỏi, nhận dạng dạng đề JLPT (漢字読み, 文脈規定, 文の組み立て★, 読解...) và ghi "Chỗ dễ nhầm", "Đáp án đúng"; cách đọc/Hán Việt được đối chiếu với từ điển ngoại tuyến.
+  - Gặp lại điểm đã lưu thì không tạo bản trùng mà đưa về ôn ngay.
+  - Chọn nhiều, vuốt để xóa kèm Hoàn tác, sắp xếp/lọc theo loại, JLPT, dạng đề, đến hạn.
+- Kiểm tra nhanh đáp án: khoanh một hoặc nhiều câu, bấm đáp án của mình ngay trong lúc AI giải, app chấm tại chỗ và lưu câu sai thành điểm yếu.
+- Ôn tập flashcard theo lịch lặp lại ngắt quãng (Quên/Khó/Được/Dễ), thẻ điền chỗ trống cho ngữ pháp, luyện đề AI từ các điểm hay quên, xuất TSV cho Anki (Tệp › Note Eryk › Exports).
+- Mức suy luận AI (Nhanh/Cân bằng/Kỹ) trong Cài đặt AI; mặc định Kỹ (high).
 - Light/dark mode và layout thích nghi tablet/khổ hẹp.
 
 ## Điểm tích hợp cần dữ liệu/native service

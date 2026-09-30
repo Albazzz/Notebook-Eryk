@@ -6,6 +6,9 @@ class AppColors {
   static const translate = Color(0xff3979d6);
   static const explain = Color(0xff7a5bc7);
   static const weakness = Color(0xffd9822b);
+  static const quickCheck = Color(0xff0f8b8d);
+  static const correct = Color(0xff2e8b57);
+  static const wrong = Color(0xffc8453b);
   static const paper = Color(0xfffffdf9);
   static const warmBackground = Color(0xfff5f3ee);
   static const ink = Color(0xff1f2633);

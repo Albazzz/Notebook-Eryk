@@ -690,6 +690,27 @@ class _AiSettingsState extends State<_AiSettings> {
                 widget.state.translationStyle.helper,
                 style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
               ),
+              const SizedBox(height: 18),
+              const _FieldLabel('MỨC SUY LUẬN AI'),
+              const SizedBox(height: 8),
+              SegmentedButton<AiReasoningEffort>(
+                segments: AiReasoningEffort.values
+                    .map(
+                      (value) =>
+                          ButtonSegment(value: value, label: Text(value.label)),
+                    )
+                    .toList(),
+                selected: {widget.state.reasoningEffort},
+                onSelectionChanged: (values) async {
+                  await widget.state.setReasoningEffort(values.first);
+                  if (mounted) setState(() {});
+                },
+              ),
+              const SizedBox(height: 7),
+              Text(
+                '${widget.state.reasoningEffort.helper} Chỉ áp dụng cho model có reasoning; model khác tự bỏ qua.',
+                style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+              ),
               const Divider(height: 30),
               SwitchListTile.adaptive(
                 contentPadding: EdgeInsets.zero,

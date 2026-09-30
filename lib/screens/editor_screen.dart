@@ -18,6 +18,7 @@ import '../models.dart';
 import '../services.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/quick_check_sheet.dart';
 
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key, required this.state, required this.notebook});
@@ -383,6 +384,8 @@ class _EditorScreenState extends State<EditorScreen>
                                         ? 'Đang tra từ bằng AI...'
                                         : tool == EditorTool.weakness
                                         ? 'Đang tạo bản nháp...'
+                                        : tool == EditorTool.quickCheck
+                                        ? 'AI đang xử lý...'
                                         : 'Đang đọc vùng chọn...',
                                     onCancel: () {
                                       _cancelPendingAi();
@@ -806,6 +809,7 @@ class _EditorScreenState extends State<EditorScreen>
     EditorTool.aiDictionary => 'AI Tra từ',
     EditorTool.translate => 'AI Dịch',
     EditorTool.explain => 'AI Giải thích',
+    EditorTool.quickCheck => 'Kiểm tra nhanh',
     EditorTool.weakness => 'Điểm yếu',
   };
 
@@ -1757,6 +1761,11 @@ class _EditorScreenState extends State<EditorScreen>
           ),
         );
         completed = true;
+      } else if (selectionTool == EditorTool.quickCheck) {
+        if (!mounted) return;
+        await _openQuickCheck(recognized);
+        completed = true;
+        return;
       } else if (selectionTool == EditorTool.weakness) {
         if (!mounted) return;
         await _openWeaknessDraft(
@@ -2063,14 +2072,18 @@ class _EditorScreenState extends State<EditorScreen>
     // Upscale only very small crops. This is inexpensive compared with a
     // network request and gives Apple Vision a useful minimum glyph size.
     var encoded = bytes.buffer.asUint8List();
-    final decoded = img.decodeImage(encoded);
-    if (decoded != null && (decoded.width < 320 || decoded.height < 160)) {
-      final enlarged = img.copyResize(
-        decoded,
-        width: math.max(decoded.width, 320).toInt(),
-        interpolation: img.Interpolation.cubic,
-      );
-      encoded = Uint8List.fromList(img.encodePng(enlarged));
+    if (source.width < 320 || source.height < 160) {
+      final small = encoded;
+      encoded = await Isolate.run(() {
+        final decoded = img.decodeImage(small);
+        if (decoded == null) return small;
+        final enlarged = img.copyResize(
+          decoded,
+          width: math.max(decoded.width, 320).toInt(),
+          interpolation: img.Interpolation.cubic,
+        );
+        return Uint8List.fromList(img.encodePng(enlarged));
+      });
     }
     final path =
         '${cropDirectory.path}${Platform.pathSeparator}crop_${DateTime.now().microsecondsSinceEpoch}.png';
@@ -2084,13 +2097,16 @@ class _EditorScreenState extends State<EditorScreen>
       return 'API key không hợp lệ. Hãy kiểm tra trong Cài đặt AI.';
     }
     if (value.contains('quota') || value.contains('402')) {
-      return 'Tài khoản OpenRouter đã hết quota.';
+      return 'Tài khoản OpenRouter không đủ credit cho yêu cầu này. Nạp thêm hoặc giảm "Mức suy luận AI" trong Cài đặt.';
     }
     if (value.contains('429')) {
       return 'Dịch vụ AI đang giới hạn lượt. Hãy đợi một chút rồi thử lại.';
     }
     if (value.contains('SocketException')) {
       return 'Mất kết nối mạng. Vùng chọn của bạn vẫn được giữ.';
+    }
+    if (exception is TimeoutException) {
+      return 'AI phản hồi quá lâu. Hãy thử lại hoặc giảm "Mức suy luận AI" trong Cài đặt.';
     }
     return value
         .replaceFirst('Exception: ', '')
@@ -2106,6 +2122,7 @@ class _EditorScreenState extends State<EditorScreen>
     if ({
           EditorTool.translate,
           EditorTool.explain,
+          EditorTool.quickCheck,
           EditorTool.weakness,
           EditorTool.aiDictionary,
         }.contains(value) &&
@@ -3051,173 +3068,245 @@ class _EditorScreenState extends State<EditorScreen>
     showAppSnack(context, 'Đã ghim vào trang');
   }
 
-  String _weaknessKindDescription(WeaknessKind kind) {
-    switch (kind) {
-      case WeaknessKind.grammar:
-        return 'AI sẽ tạo nghĩa, cách chia/cấu trúc và ví dụ.';
-      case WeaknessKind.vocabulary:
-        return 'AI sẽ tạo cách đọc, nghĩa và ví dụ.';
-      case WeaknessKind.kanji:
-        return 'AI sẽ tạo cách đọc, nghĩa và Hán Việt.';
-      case WeaknessKind.reading:
-        return 'AI sẽ tạo ý chính, từ khóa và cách suy luận.';
-      case WeaknessKind.other:
-        return 'Bạn có thể ghi nội dung tự do.';
-    }
-  }
-
-  Future<Set<WeaknessKind>?> _chooseWeaknessKinds(WeaknessKind initial) {
-    var primary = initial;
-    final selectedKinds = <WeaknessKind>{initial};
-    return showDialog<Set<WeaknessKind>>(
+  /// Kiểm tra nhanh: mở bảng chấm ngay sau OCR, AI giải đề ở nền.
+  Future<void> _openQuickCheck(String ocrText) async {
+    final state = widget.state;
+    final future = state.aiService.completeQuickCheck(
+      apiKey: state.apiKey,
+      modelId: state.modelIdFor(AiTask.solve),
+      text: ocrText,
+      jlpt: state.jlpt,
+      language: state.explanationLanguage,
+    );
+    if (mounted && processing) setState(() => processing = false);
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          final kindTiles = WeaknessKind.values
-              .map<Widget>(
-                (kind) => CheckboxListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  value: selectedKinds.contains(kind),
-                  title: Text(kind.label),
-                  onChanged: (value) => setDialogState(() {
-                    if (value == true) {
-                      selectedKinds.add(kind);
-                    } else {
-                      selectedKinds.remove(kind);
-                    }
-                  }),
-                ),
-              )
-              .toList();
-          return AlertDialog(
-            title: const Text('Bạn muốn ghi điểm yếu loại nào?'),
-            content: SizedBox(
-              width: 480,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  DropdownButtonFormField<WeaknessKind>(
-                    initialValue: primary,
-                    decoration: const InputDecoration(
-                      labelText: 'Loại điểm yếu',
-                    ),
-                    items: WeaknessKind.values
-                        .map(
-                          (kind) => DropdownMenuItem(
-                            value: kind,
-                            child: Text(kind.label),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) {
-                      if (value != null) {
-                        setDialogState(() {
-                          primary = value;
-                          selectedKinds.add(value);
-                        });
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      _weaknessKindDescription(primary),
-                      style: const TextStyle(color: Colors.black54),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  const Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Chọn thêm loại để tạo nhiều điểm yếu cho cùng một câu.',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                  ...kindTiles,
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Hủy'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, Set.of(selectedKinds)),
-                child: const Text('Tiếp tục'),
-              ),
-            ],
-          );
-        },
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => QuickCheckSheet(
+        result: future,
+        title: 'Kiểm tra nhanh đáp án',
+        sourceText: ocrText,
+        initialQuestionCount: estimateQuestionCount(ocrText),
+        onRetry: () => unawaited(_openQuickCheck(ocrText)),
+        onWrongAnswers: (wrong) => unawaited(
+          _openWeaknessDraft(
+            ocrText: wrong.map((answer) => answer.questionText).join('\n\n'),
+            sourceImagePath: _latestCropPath,
+            learnerContext: wrong
+                .map((answer) => answer.learnerContext)
+                .join('\n'),
+          ),
+        ),
+        onExplain: (answer) => unawaited(_explainQuickCheckAnswer(answer)),
       ),
     );
   }
+
+  Future<void> _explainQuickCheckAnswer(QuickCheckAnswer answer) async {
+    final serial = ++_aiRequestSerial;
+    setState(() {
+      processing = true;
+      error = null;
+    });
+    try {
+      final picked = answer.pickedText;
+      final response = await widget.state.aiService.complete(
+        apiKey: widget.state.apiKey,
+        modelId: widget.state.modelIdFor(AiTask.explain),
+        task: AiTask.explain,
+        text: [
+          answer.questionText,
+          if (picked.isNotEmpty)
+            'Thông tin làm bài (không phải nội dung đề): người học chọn "$picked".',
+        ].join('\n\n'),
+        jlpt: widget.state.jlpt,
+        language: widget.state.explanationLanguage,
+        translationStyle: widget.state.translationStyle,
+      );
+      if (!mounted || serial != _aiRequestSerial) return;
+      setState(
+        () => result = _SmartResult.ai(
+          tool: EditorTool.explain,
+          source: answer.questionText,
+          body: response,
+        ),
+      );
+    } catch (exception) {
+      if (mounted && serial == _aiRequestSerial) {
+        setState(() => error = _friendlyError(exception));
+      }
+    } finally {
+      if (mounted && serial == _aiRequestSerial) {
+        setState(() => processing = false);
+      }
+    }
+  }
+
+  /// Cách đọc/Hán Việt do AI viết được đối chiếu với từ điển ngoại tuyến:
+  /// Hán Việt lấy theo từ điển, cách đọc khác thì ghi chú để người học xem.
+  Future<List<WeakPointDraft>> _verifyWithDictionary(
+    List<WeakPointDraft> drafts,
+  ) async {
+    String kana(String value) => value.replaceAll(RegExp(r'[\s・.]'), '');
+    final verified = <WeakPointDraft>[];
+    for (final draft in drafts) {
+      if (draft.kind != WeaknessKind.vocabulary &&
+          draft.kind != WeaknessKind.kanji) {
+        verified.add(draft);
+        continue;
+      }
+      DictionaryEntry? entry;
+      try {
+        entry = await widget.state.dictionary.lookupBasic(draft.title);
+      } catch (_) {}
+      if (entry == null) {
+        verified.add(draft);
+        continue;
+      }
+      final notes = <String>[if (draft.warning.isNotEmpty) draft.warning];
+      var reading = draft.reading;
+      if (reading.isEmpty) {
+        reading = entry.reading;
+      } else if (kana(reading) != kana(entry.reading)) {
+        notes.add('Từ điển ghi cách đọc: ${entry.reading}');
+      }
+      var hanViet = draft.hanViet;
+      if (entry.hanViet.isNotEmpty) {
+        if (hanViet.isNotEmpty &&
+            hanViet.toUpperCase() != entry.hanViet.toUpperCase()) {
+          notes.add('Hán Việt đã sửa theo từ điển (AI ghi: $hanViet)');
+        }
+        hanViet = entry.hanViet;
+      }
+      verified.add(
+        draft.copyWith(
+          reading: reading,
+          hanViet: hanViet,
+          warning: notes.join('\n'),
+        ),
+      );
+    }
+    return verified;
+  }
+
+  Future<String?> _askWeaknessFallback(String message) => showDialog<String>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      icon: const Icon(Icons.error_outline, color: AppColors.weakness),
+      title: const Text('Chưa tạo được điểm yếu'),
+      content: Text(message),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('Hủy'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, 'manual'),
+          child: const Text('Nhập thủ công'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, 'retry'),
+          child: const Text('Thử lại'),
+        ),
+      ],
+    ),
+  );
 
   Future<void> _openWeaknessDraft({
     String? ocrText,
     String? sourceImagePath,
     int? requestSerial,
+    String learnerContext = '',
   }) async {
     final activeSerial = requestSerial ?? ++_aiRequestSerial;
-    final resolvedOcr =
-        ocrText ?? _latestOcrText ?? result?.source ?? 'Không có OCR text';
+    final state = widget.state;
+    final resolvedOcr = ocrText ?? _latestOcrText ?? result?.source ?? '';
     final resolvedImage = sourceImagePath ?? _latestCropPath;
-    final initialKind = result?.dictionaryEntry != null
-        ? WeaknessKind.vocabulary
-        : WeaknessKind.grammar;
-    final chosenKinds = await _chooseWeaknessKinds(initialKind);
-    if (!mounted ||
-        chosenKinds == null ||
-        chosenKinds.isEmpty ||
-        activeSerial != _aiRequestSerial) {
-      await _finishProcessingAfterOverlay();
-      return;
+    void discardCrop() {
+      _deleteTemporaryCropIfUnused(resolvedImage);
+      if (_latestCropPath == resolvedImage &&
+          !state.weakPoints.any(
+            (item) => item.sourceImagePath == resolvedImage,
+          )) {
+        _latestCropPath = null;
+        _latestOcrText = null;
+      }
     }
+
     var drafts = <WeakPointDraft>[];
-    final model = widget.state.modelIdFor(AiTask.createWeakPoint);
-    if (widget.state.hasApiKey && model.isNotEmpty) {
-      if (!processing) setState(() => processing = true);
-      try {
-        drafts = await widget.state.aiService.completeWeakPointDrafts(
-          apiKey: widget.state.apiKey,
-          modelId: model,
-          text: resolvedOcr,
-          jlpt: widget.state.jlpt,
-          language: widget.state.explanationLanguage,
-          kinds: chosenKinds,
+    var batchWarning = '';
+    var manual = false;
+    final model = state.modelIdFor(AiTask.createWeakPoint);
+    if (state.hasApiKey && model.isNotEmpty && resolvedOcr.trim().isNotEmpty) {
+      while (true) {
+        if (mounted && !processing) setState(() => processing = true);
+        Object? failure;
+        try {
+          final batch = await state.aiService.completeWeakPointDrafts(
+            apiKey: state.apiKey,
+            modelId: model,
+            text: resolvedOcr,
+            jlpt: state.jlpt,
+            language: state.explanationLanguage,
+            learnerContext: learnerContext,
+          );
+          drafts = await _verifyWithDictionary(batch.items);
+          batchWarning = batch.warning;
+        } catch (exception) {
+          failure = exception;
+        }
+        if (!mounted || activeSerial != _aiRequestSerial) return;
+        await _finishProcessingAfterOverlay();
+        if (!mounted) return;
+        if (failure == null && drafts.isNotEmpty) break;
+        // Không bao giờ âm thầm lưu OCR thô làm điểm yếu: hỏi người học.
+        final choice = await _askWeaknessFallback(
+          failure == null
+              ? 'AI không tìm thấy điểm cần học trong vùng này.'
+              : _friendlyError(failure),
         );
-      } catch (_) {}
-      if (!mounted || activeSerial != _aiRequestSerial) return;
+        if (!mounted) return;
+        if (choice == 'retry') continue;
+        if (choice == 'manual') {
+          manual = true;
+          break;
+        }
+        discardCrop();
+        return;
+      }
+    } else {
+      manual = true;
+      await _finishProcessingAfterOverlay();
+      if (!mounted) return;
     }
-    if (drafts.isEmpty) {
-      final shortOcr = resolvedOcr.replaceAll('\n', ' ').trim();
-      drafts = chosenKinds
-          .map(
-            (kind) => WeakPointDraft(
-              title: shortOcr.isEmpty ? 'Điểm cần ôn' : shortOcr,
-              kind: kind,
-              content: 'Nội dung OCR từ vùng đã khoanh:\n$resolvedOcr',
-              reminder: 'Ghi điều bạn thường nhầm để ôn lại.',
-              tags: [widget.state.jlpt],
-              sourceSentence: resolvedOcr,
-            ),
-          )
-          .toList();
+    if (manual) {
+      drafts = [
+        WeakPointDraft(
+          title: '',
+          kind: WeaknessKind.grammar,
+          content: '',
+          sourceSentence: resolvedOcr.trim(),
+        ),
+      ];
     }
-    await _finishProcessingAfterOverlay();
-    if (!mounted) return;
     final forms = drafts.asMap().entries.map((entry) {
       final form = _WeaknessDraftForm.fromDraft(entry.value, entry.key);
-      if (!form.tags.contains(widget.state.jlpt)) {
-        form.tags.add(widget.state.jlpt);
-      }
+      form.tags = {
+        state.jlpt,
+        if (entry.value.questionType != JlptQuestionType.other)
+          entry.value.questionType.tag,
+        ...entry.value.tags,
+      }.toList();
       return form;
     }).toList();
     final pageController = PageController();
     final tagController = TextEditingController();
     var activeIndex = 0;
+    var saveError = '';
+    var added = 0;
+    var merged = 0;
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -3245,6 +3334,61 @@ class _EditorScreenState extends State<EditorScreen>
             });
           }
 
+          void save() {
+            final missing = forms.indexWhere(
+              (form) => form.title.trim().isEmpty,
+            );
+            if (missing >= 0) {
+              setSheetState(() {
+                saveError = 'Mục ${missing + 1} chưa có tên (mẫu/từ/kanji).';
+                activeIndex = missing;
+              });
+              pageController.jumpToPage(missing);
+              return;
+            }
+            for (final form in forms) {
+              final duplicate = state.findDuplicateWeakPoint(
+                form.kind,
+                form.title,
+              );
+              if (duplicate != null) {
+                state.reencounterWeakPoint(
+                  duplicate,
+                  sourceSentence: form.sourceSentence,
+                );
+                merged++;
+                continue;
+              }
+              state.addWeakPoint(
+                WeakPoint(
+                  id: '${DateTime.now().microsecondsSinceEpoch}_${form.id}',
+                  title: form.title.trim(),
+                  kind: form.kind,
+                  content: form.content.trim(),
+                  reminder: form.reminder.trim(),
+                  note: form.note.trim(),
+                  tags: form.tags,
+                  notebookId: widget.notebook.id,
+                  notebookTitle: widget.notebook.title,
+                  page: state.openPage,
+                  ocrText: resolvedOcr,
+                  sourceImagePath: resolvedImage,
+                  reading: form.reading.trim(),
+                  hanViet: form.hanViet.trim(),
+                  conjugation: form.conjugation.trim(),
+                  examples: form.examples,
+                  sourceSentence: form.sourceSentence.trim(),
+                  correctAnswer: form.correctAnswer.trim(),
+                  mistake: form.mistake.trim(),
+                  warning: form.warning.trim(),
+                  createdAt: DateTime.now(),
+                ),
+              );
+              added++;
+            }
+            Navigator.pop(context, true);
+          }
+
           return Padding(
             padding: EdgeInsets.fromLTRB(
               24,
@@ -3254,7 +3398,7 @@ class _EditorScreenState extends State<EditorScreen>
             ),
             child: SizedBox(
               width: 720,
-              height: math.min(MediaQuery.sizeOf(context).height * .82, 720),
+              height: math.min(MediaQuery.sizeOf(context).height * .86, 780),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -3265,12 +3409,16 @@ class _EditorScreenState extends State<EditorScreen>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Duyệt điểm yếu (${forms.length})',
+                              manual
+                                  ? 'Nhập điểm yếu thủ công'
+                                  : 'Duyệt điểm yếu (${forms.length})',
                               style: Theme.of(context).textTheme.headlineMedium,
                             ),
-                            const Text(
-                              'Mỗi thẻ là một điểm riêng trong câu hỏi/đáp án.',
-                              style: TextStyle(color: Colors.grey),
+                            Text(
+                              manual
+                                  ? 'Điền tên và nội dung cần nhớ.'
+                                  : 'AI đã tách từng điểm riêng. Sửa hoặc bỏ mục không cần rồi lưu.',
+                              style: const TextStyle(color: Colors.grey),
                             ),
                           ],
                         ),
@@ -3284,20 +3432,19 @@ class _EditorScreenState extends State<EditorScreen>
                       borderRadius: BorderRadius.circular(10),
                       child: Image.file(
                         File(resolvedImage),
-                        height: 88,
+                        height: 80,
                         width: double.infinity,
                         fit: BoxFit.contain,
                       ),
-                    )
-                  else
-                    Text(
-                      resolvedOcr,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
+                    ),
+                  if (batchWarning.isNotEmpty)
+                    _DraftNotice(
+                      icon: Icons.info_outline,
+                      message: batchWarning,
                     ),
                   ExpansionTile(
                     tilePadding: EdgeInsets.zero,
-                    title: const Text('Câu hỏi / đáp án đã nhận dạng'),
+                    title: const Text('Nội dung đã nhận dạng'),
                     children: [
                       Align(
                         alignment: Alignment.centerLeft,
@@ -3311,18 +3458,26 @@ class _EditorScreenState extends State<EditorScreen>
                       scrollDirection: Axis.horizontal,
                       itemCount: forms.length,
                       separatorBuilder: (_, _) => const SizedBox(width: 6),
-                      itemBuilder: (_, index) => ChoiceChip(
-                        label: Text('${index + 1}. ${forms[index].kind.label}'),
-                        selected: index == activeIndex,
-                        onSelected: (_) {
-                          setSheetState(() => activeIndex = index);
-                          pageController.animateToPage(
-                            index,
-                            duration: const Duration(milliseconds: 180),
-                            curve: Curves.easeOut,
-                          );
-                        },
-                      ),
+                      itemBuilder: (_, index) {
+                        final form = forms[index];
+                        final question = form.questionLabel.isEmpty
+                            ? ''
+                            : 'Câu ${form.questionLabel} · ';
+                        return ChoiceChip(
+                          label: Text(
+                            '${index + 1}. $question${form.kind.label}',
+                          ),
+                          selected: index == activeIndex,
+                          onSelected: (_) {
+                            setSheetState(() => activeIndex = index);
+                            pageController.animateToPage(
+                              index,
+                              duration: const Duration(milliseconds: 180),
+                              curve: Curves.easeOut,
+                            );
+                          },
+                        );
+                      },
                     ),
                   ),
                   Expanded(
@@ -3343,6 +3498,16 @@ class _EditorScreenState extends State<EditorScreen>
                       ),
                     ),
                   ),
+                  if (saveError.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Text(
+                        saveError,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    ),
                   Row(
                     children: [
                       Text(
@@ -3356,35 +3521,9 @@ class _EditorScreenState extends State<EditorScreen>
                       ),
                       const SizedBox(width: 8),
                       FilledButton.icon(
-                        onPressed: () {
-                          for (final form in forms) {
-                            widget.state.addWeakPoint(
-                              WeakPoint(
-                                id: '${DateTime.now().microsecondsSinceEpoch}_${form.id}',
-                                title: form.title.trim(),
-                                kind: form.kind,
-                                content: form.content.trim(),
-                                reminder: form.reminder.trim(),
-                                note: form.note.trim(),
-                                tags: form.tags,
-                                notebookId: widget.notebook.id,
-                                notebookTitle: widget.notebook.title,
-                                page: widget.state.openPage,
-                                ocrText: resolvedOcr,
-                                sourceImagePath: resolvedImage,
-                                reading: form.reading.trim(),
-                                hanViet: form.hanViet.trim(),
-                                conjugation: form.conjugation.trim(),
-                                examples: form.examples,
-                                sourceSentence: form.sourceSentence.trim(),
-                                createdAt: DateTime.now(),
-                              ),
-                            );
-                          }
-                          Navigator.pop(context, true);
-                        },
+                        onPressed: save,
                         icon: const Icon(Icons.bookmark_add_outlined),
-                        label: const Text('Lưu tất cả'),
+                        label: Text(forms.length == 1 ? 'Lưu' : 'Lưu tất cả'),
                       ),
                     ],
                   ),
@@ -3397,28 +3536,27 @@ class _EditorScreenState extends State<EditorScreen>
     );
     pageController.dispose();
     tagController.dispose();
-    if (saved != true && resolvedImage != null) {
-      try {
-        await File(resolvedImage).delete();
-      } catch (_) {}
-      if (_latestCropPath == resolvedImage) {
-        _latestCropPath = null;
-        _latestOcrText = null;
-      }
+    if (saved != true) {
+      discardCrop();
+      return;
     }
-    if (saved == true && mounted) {
-      setState(() {
-        result = null;
-        selectionStart = null;
-        selectionEnd = null;
-      });
-      showAppSnack(
-        context,
-        'Đã lưu ${forms.length} điểm yếu',
-        actionLabel: 'Xem',
-        onAction: () => widget.state.goTo(AppDestination.weaknesses),
-      );
-    }
+    if (added == 0) _deleteTemporaryCropIfUnused(resolvedImage);
+    if (!mounted) return;
+    setState(() {
+      result = null;
+      selectionStart = null;
+      selectionEnd = null;
+    });
+    final parts = [
+      if (added > 0) 'Đã lưu $added điểm yếu',
+      if (merged > 0) '$merged mục đã có được đưa lên ôn lại',
+    ];
+    showAppSnack(
+      context,
+      parts.join(' · '),
+      actionLabel: 'Xem',
+      onAction: () => state.goTo(AppDestination.weaknesses),
+    );
   }
 
   Widget _buildWeaknessDraftEditor(
@@ -3434,6 +3572,7 @@ class _EditorScreenState extends State<EditorScreen>
       void Function(String) onChanged, {
       int minLines = 1,
       int maxLines = 4,
+      String? helper,
     }) => Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: TextFormField(
@@ -3442,24 +3581,51 @@ class _EditorScreenState extends State<EditorScreen>
         minLines: minLines,
         maxLines: maxLines,
         onChanged: onChanged,
-        decoration: InputDecoration(labelText: label),
+        decoration: InputDecoration(labelText: label, helperText: helper),
       ),
     );
     final lexical = {
       WeaknessKind.vocabulary,
       WeaknessKind.kanji,
     }.contains(form.kind);
-    final examples = {
-      WeaknessKind.grammar,
-      WeaknessKind.vocabulary,
-      WeaknessKind.kanji,
-    }.contains(form.kind);
+    final duplicate = widget.state.findDuplicateWeakPoint(
+      form.kind,
+      form.title,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Chip(label: Text(form.kind.label)),
+            SizedBox(
+              width: 170,
+              child: DropdownButtonFormField<WeaknessKind>(
+                key: ValueKey('${form.id}-kind'),
+                initialValue: form.kind,
+                isDense: true,
+                decoration: const InputDecoration(labelText: 'Loại'),
+                items: WeaknessKind.values
+                    .map(
+                      (kind) => DropdownMenuItem(
+                        value: kind,
+                        child: Text(kind.label),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) =>
+                    setSheetState(() => form.kind = value ?? form.kind),
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (form.questionType != JlptQuestionType.other)
+              Flexible(
+                child: Chip(
+                  label: Text(
+                    form.questionType.label,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
             const Spacer(),
             TextButton.icon(
               onPressed: removeCurrent,
@@ -3468,60 +3634,72 @@ class _EditorScreenState extends State<EditorScreen>
             ),
           ],
         ),
+        const SizedBox(height: 8),
+        if (duplicate != null)
+          const _DraftNotice(
+            icon: Icons.repeat_rounded,
+            message:
+                'Đã có trong sổ điểm yếu. Lưu sẽ không tạo bản trùng mà đưa mục cũ lên ôn lại ngay.',
+          ),
+        if (form.warning.isNotEmpty)
+          _DraftNotice(
+            icon: Icons.help_outline,
+            message: 'Cần kiểm tra: ${form.warning}',
+          ),
         field(
           form.kind == WeaknessKind.grammar
               ? 'Mẫu ngữ pháp'
               : form.kind == WeaknessKind.kanji
               ? 'Chữ Kanji'
-              : 'Từ khóa',
+              : form.kind == WeaknessKind.vocabulary
+              ? 'Từ khóa'
+              : 'Tên điểm cần nhớ',
           form.title,
           (v) => form.title = v,
         ),
         field(
           form.kind == WeaknessKind.grammar
               ? 'Nghĩa / cách dùng'
-              : 'Nghĩa trong câu hỏi/đáp án',
+              : 'Nghĩa trong ngữ cảnh',
           form.content,
           (v) => form.content = v,
           minLines: 2,
         ),
         if (lexical) field('Cách đọc', form.reading, (v) => form.reading = v),
-        if (lexical)
-          field(
-            'Hán Việt (nếu chắc chắn)',
-            form.hanViet,
-            (v) => form.hanViet = v,
-          ),
+        if (lexical) field('Hán Việt', form.hanViet, (v) => form.hanViet = v),
         if (form.kind == WeaknessKind.grammar)
           field(
-            'Cách chia / cấu trúc',
+            'Cách nối (接続)',
             form.conjugation,
             (v) => form.conjugation = v,
             minLines: 2,
           ),
-        if (examples)
-          field(
-            'Ví dụ / câu gốc',
-            form.examples.join('\n'),
-            (v) => form.examples = v
-                .split('\n')
-                .map((line) => line.trim())
-                .where((line) => line.isNotEmpty)
-                .toList(),
-            minLines: 2,
-          ),
         field(
-          'Câu chứa điểm này',
+          'Ví dụ (mỗi dòng một ví dụ)',
+          form.examples.join('\n'),
+          (v) => form.examples = v
+              .split('\n')
+              .map((line) => line.trim())
+              .where((line) => line.isNotEmpty)
+              .toList(),
+          minLines: 2,
+        ),
+        field(
+          form.kind == WeaknessKind.reading
+              ? 'Câu căn cứ trong bài'
+              : 'Câu gốc',
           form.sourceSentence,
           (v) => form.sourceSentence = v,
           minLines: 2,
         ),
+        field('Đáp án đúng', form.correctAnswer, (v) => form.correctAnswer = v),
         field(
-          'Điểm cần nhớ',
-          form.reminder,
-          (v) => form.reminder = v,
+          'Chỗ dễ nhầm',
+          form.mistake,
+          (v) => form.mistake = v,
           minLines: 2,
         ),
+        field('Mẹo nhớ', form.reminder, (v) => form.reminder = v, minLines: 1),
         field('Ghi chú của tôi', form.note, (v) => form.note = v, minLines: 2),
         Wrap(
           spacing: 6,
@@ -3552,6 +3730,31 @@ class _EditorScreenState extends State<EditorScreen>
   }
 }
 
+class _DraftNotice extends StatelessWidget {
+  const _DraftNotice({required this.icon, required this.message});
+  final IconData icon;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    margin: const EdgeInsets.only(bottom: 10, top: 4),
+    padding: const EdgeInsets.all(10),
+    decoration: BoxDecoration(
+      color: AppColors.weakness.withValues(alpha: .1),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: AppColors.weakness),
+        const SizedBox(width: 8),
+        Expanded(child: Text(message, style: const TextStyle(fontSize: 13))),
+      ],
+    ),
+  );
+}
+
 class _WeaknessDraftForm {
   _WeaknessDraftForm({
     required this.id,
@@ -3566,6 +3769,11 @@ class _WeaknessDraftForm {
     required this.conjugation,
     required this.examples,
     required this.sourceSentence,
+    required this.correctAnswer,
+    required this.mistake,
+    required this.warning,
+    required this.questionLabel,
+    required this.questionType,
   });
 
   factory _WeaknessDraftForm.fromDraft(WeakPointDraft draft, int index) =>
@@ -3576,16 +3784,21 @@ class _WeaknessDraftForm {
         content: draft.content,
         reminder: draft.reminder,
         note: draft.note,
-        tags: {...draft.tags, draft.kind.label}.toList(),
+        tags: List.of(draft.tags),
         reading: draft.reading,
         hanViet: draft.hanViet,
         conjugation: draft.conjugation,
         examples: List.of(draft.examples),
         sourceSentence: draft.sourceSentence,
+        correctAnswer: draft.correctAnswer,
+        mistake: draft.mistake,
+        warning: draft.warning,
+        questionLabel: draft.questionLabel,
+        questionType: draft.questionType,
       );
 
   final String id;
-  final WeaknessKind kind;
+  WeaknessKind kind;
   String title;
   String content;
   String reminder;
@@ -3596,6 +3809,11 @@ class _WeaknessDraftForm {
   String conjugation;
   List<String> examples;
   String sourceSentence;
+  String correctAnswer;
+  String mistake;
+  final String warning;
+  final String questionLabel;
+  final JlptQuestionType questionType;
 }
 
 class _ToolButton extends StatelessWidget {
@@ -3622,6 +3840,7 @@ class _ToolButton extends StatelessWidget {
       EditorTool.aiDictionary => (Icons.auto_stories_outlined, 'AI Tra từ'),
       EditorTool.translate => (Icons.translate_rounded, 'AI Dịch'),
       EditorTool.explain => (Icons.auto_awesome_outlined, 'AI Giải thích'),
+      EditorTool.quickCheck => (Icons.fact_check_outlined, 'Kiểm tra nhanh'),
       EditorTool.weakness => (Icons.bookmark_add_outlined, 'Điểm yếu'),
     };
     return Padding(
@@ -3642,7 +3861,7 @@ class _ToolButton extends StatelessWidget {
             onTap: onTap,
             borderRadius: BorderRadius.circular(13),
             child: SizedBox(
-              width: tool == EditorTool.explain
+              width: tool == EditorTool.explain || tool == EditorTool.quickCheck
                   ? 92
                   : tool == EditorTool.quickDictionary
                   ? 88
@@ -3730,6 +3949,7 @@ Color _toolColor(EditorTool tool) => switch (tool) {
   EditorTool.translate => AppColors.translate,
   EditorTool.explain => AppColors.explain,
   EditorTool.weakness => AppColors.weakness,
+  EditorTool.quickCheck => AppColors.quickCheck,
   _ => AppColors.primary,
 };
 

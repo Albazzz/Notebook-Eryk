@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -5,8 +6,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:noteeryk/app.dart';
 import 'package:noteeryk/app_state.dart';
 import 'package:noteeryk/models.dart';
+import 'package:noteeryk/widgets/quick_check_sheet.dart';
 
 void main() {
+  _quickCheckTests();
+
   testWidgets('hiển thị thư viện notebook trên tablet', (tester) async {
     tester.view.physicalSize = const Size(1180, 820);
     tester.view.devicePixelRatio = 1;
@@ -468,6 +472,181 @@ void main() {
     expect(controller.value.storage, isNot(equals(identity)));
     expect(controller.value.getMaxScaleOnAxis(), greaterThan(1));
     expect(state.strokesFor('n3', 1), hasLength(1));
+  });
+}
+
+void _quickCheckTests() {
+  testWidgets('sổ điểm yếu: ôn flashcard, vuốt xóa và hoàn tác', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook()..autoSave = false;
+    addTearDown(state.dispose);
+    state.weakPoints = [
+      WeakPoint(
+        id: 'w1',
+        title: '認識',
+        kind: WeaknessKind.vocabulary,
+        content: 'nhận thức',
+        reminder: '',
+        note: '',
+        tags: const ['N3', '問題:文脈規定'],
+        notebookId: 'n3',
+        notebookTitle: 'N3 Grammar',
+        page: 1,
+        ocrText: '',
+        createdAt: DateTime(2026, 9, 1),
+        reading: 'にんしき',
+        hanViet: 'NHẬN THỨC',
+        mistake: 'Dễ nhầm với 意識.',
+      ),
+      WeakPoint(
+        id: 'w2',
+        title: '〜わけではない',
+        kind: WeaknessKind.grammar,
+        content: 'không hẳn là',
+        reminder: '',
+        note: '',
+        tags: const ['N3'],
+        notebookId: 'n3',
+        notebookTitle: 'N3 Grammar',
+        page: 2,
+        ocrText: '',
+        createdAt: DateTime(2026, 9, 2),
+        sourceSentence: '嫌いなわけではない。',
+      ),
+    ];
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    state.goTo(AppDestination.weaknesses);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ôn tập (2)'), findsOneWidget);
+    expect(find.textContaining('Dạng đề sai nhiều'), findsOneWidget);
+
+    await tester.tap(find.text('Ôn tập (2)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Ôn tập · 1/2'), findsOneWidget);
+    await tester.tap(find.text('Hiện đáp án'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Được'));
+    await tester.pumpAndSettle();
+    expect(find.text('Ôn tập · 2/2'), findsOneWidget);
+    await tester.tap(find.text('Hiện đáp án'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Dễ'));
+    await tester.pumpAndSettle();
+    expect(find.text('Xong phiên ôn tập'), findsOneWidget);
+    expect(state.dueWeakPoints, isEmpty);
+    await tester.tap(find.text('Đóng'));
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.text('認識'), const Offset(-600, 0));
+    await tester.pumpAndSettle();
+    expect(state.weakPoints.map((item) => item.id), ['w2']);
+    await tester.tap(find.text('Hoàn tác'));
+    await tester.pumpAndSettle();
+    expect(state.weakPoints.map((item) => item.id), ['w1', 'w2']);
+  });
+
+  testWidgets('kiểm tra nhanh: bấm đáp án trước khi AI trả về rồi được chấm', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1180, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final completer = Completer<QuickCheckResult>();
+    List<QuickCheckAnswer>? wrongAnswers;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                builder: (_) => QuickCheckSheet(
+                  result: completer.future,
+                  title: 'Kiểm tra nhanh đáp án',
+                  initialQuestionCount: 2,
+                  onWrongAnswers: (wrong) => wrongAnswers = wrong,
+                ),
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    // The loading bar animates until the AI result arrives, so settle only
+    // the sheet's entrance animation here.
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(find.text('Câu 1'), findsOneWidget);
+    expect(find.text('Câu 2'), findsOneWidget);
+    // Người học chọn lựa chọn thứ hai của câu 1 khi AI còn đang giải.
+    await tester.tap(find.widgetWithText(ChoiceChip, '2').first);
+    await tester.pump();
+
+    QuickCheckChoice choice(String label, bool correct) => QuickCheckChoice(
+      label: label,
+      text: 'đáp án $label',
+      correct: correct,
+      reason: correct ? 'Hợp ngữ cảnh' : 'Sai collocation',
+    );
+    completer.complete(
+      QuickCheckResult(
+        questions: [
+          QuickCheckQuestion(
+            label: '1',
+            stem: '彼は（　）。',
+            choices: [
+              choice('1', false),
+              choice('2', false),
+              choice('3', true),
+              choice('4', false),
+            ],
+            answer: '3',
+            explanation: 'Vì ngữ cảnh.',
+            point: 'わけではない',
+            kind: WeaknessKind.grammar,
+            questionType: JlptQuestionType.grammarForm,
+          ),
+          QuickCheckQuestion(
+            label: '2',
+            stem: '別の問題',
+            choices: [choice('1', true), choice('2', false)],
+            answer: '1',
+            explanation: '',
+            point: '',
+            kind: WeaknessKind.vocabulary,
+          ),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Đáp án đúng: 3. đáp án 3'), findsOneWidget);
+    expect(find.text('Sai collocation'), findsOneWidget);
+    expect(find.byIcon(Icons.cancel_rounded), findsOneWidget);
+    expect(find.text('Đúng 0/1 · 2 câu'), findsOneWidget);
+
+    await tester.tap(find.text('1. đáp án 1').last);
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.check_circle_rounded), findsOneWidget);
+
+    await tester.tap(find.text('Lưu câu sai thành điểm yếu (1)'));
+    await tester.pumpAndSettle();
+    expect(wrongAnswers, hasLength(1));
+    expect(wrongAnswers!.single.pickedIndex, 1);
+    expect(wrongAnswers!.single.learnerContext, contains('đáp án đúng là 3'));
   });
 }
 

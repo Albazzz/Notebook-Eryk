@@ -12,6 +12,7 @@ import 'package:pdfx/pdfx.dart' as pdfx;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
+import 'review.dart';
 import 'services.dart';
 import 'widgets/common.dart';
 
@@ -29,8 +30,14 @@ class AppState extends ChangeNotifier {
     EditorTool.aiDictionary,
     EditorTool.translate,
     EditorTool.explain,
+    EditorTool.quickCheck,
     EditorTool.weakness,
   ];
+
+  /// Tools added after a user may already have saved a custom toolbar. They
+  /// are shown once so existing users discover them; removing them later is
+  /// respected because the introduction flag is stored.
+  static const _introducedToolbarTools = <EditorTool>[EditorTool.quickCheck];
   static const _keyStorageName = 'openrouter_api_key';
   static const _modelIdsStorageName = 'ai_model_ids';
   static const _modelNamesStorageName = 'ai_model_names';
@@ -62,6 +69,7 @@ class AppState extends ChangeNotifier {
   String jlpt = 'N3';
   String explanationLanguage = 'Tiếng Việt';
   TranslationStyle translationStyle = TranslationStyle.balanced;
+  AiReasoningEffort reasoningEffort = AiReasoningEffort.high;
   bool showOcrInAiResults = false;
   String selectedModelId = defaultAiModelId;
   String selectedModelName = defaultAiModelName;
@@ -83,6 +91,10 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _persistenceTimer?.cancel();
+    for (final timer in _pendingCropDeletes.values) {
+      timer.cancel();
+    }
+    _pendingCropDeletes.clear();
     for (final document in _pdfDocuments.values) {
       unawaited(document.close());
     }
@@ -113,6 +125,10 @@ class AppState extends ChangeNotifier {
   final Set<String> blankPages = {};
   final Map<String, String> sourceDocuments = {};
   List<WeakPoint> weakPoints = [];
+  final ReviewScheduler reviewScheduler = const ReviewScheduler();
+
+  /// Source crops of deleted weak points, kept until the undo window closes.
+  final Map<String, Timer> _pendingCropDeletes = {};
   Future<void>? _persistenceInFlight;
   Future<File>? _backupInFlight;
   final Map<String, pdfx.PdfDocument> _pdfDocuments = {};
@@ -151,6 +167,11 @@ class AppState extends ChangeNotifier {
       (style) => style.name == prefs.getString('translationStyle'),
       orElse: () => TranslationStyle.balanced,
     );
+    reasoningEffort = AiReasoningEffort.values.firstWhere(
+      (effort) => effort.name == prefs.getString('aiReasoningEffort'),
+      orElse: () => AiReasoningEffort.high,
+    );
+    aiService.reasoningEffort = reasoningEffort;
     showOcrInAiResults = prefs.getBool('showOcrInAiResults') ?? false;
     final storedModelId = prefs.getString('selectedModelId');
     final storedModelName = prefs.getString('selectedModelName');
@@ -171,6 +192,14 @@ class AppState extends ChangeNotifier {
       if (!toolbarTools.contains(EditorTool.pen)) {
         toolbarTools.insert(0, EditorTool.pen);
       }
+      final introduced =
+          prefs.getStringList('introducedToolbarTools') ?? const <String>[];
+      for (final newTool in _introducedToolbarTools) {
+        if (!introduced.contains(newTool.name) &&
+            !toolbarTools.contains(newTool)) {
+          toolbarTools.add(newTool);
+        }
+      }
       toolbarTools.sort(
         (a, b) => defaultToolbarTools
             .indexOf(a)
@@ -187,11 +216,11 @@ class AppState extends ChangeNotifier {
     final savedWeakPoints = prefs.getString('weakPoints');
     if (savedWeakPoints != null) {
       try {
-        weakPoints = (jsonDecode(savedWeakPoints) as List)
-            .map((item) => WeakPoint.fromJson(item as Map<String, dynamic>))
-            .toList();
+        weakPoints = _parseWeakPoints(jsonDecode(savedWeakPoints) as List);
       } catch (_) {
-        weakPoints = _seedWeakPoints();
+        // The library file below carries its own copy of weak points; keep
+        // the list empty instead of overwriting user data with samples.
+        weakPoints = [];
       }
     } else {
       weakPoints = _seedWeakPoints();
@@ -397,9 +426,10 @@ class AppState extends ChangeNotifier {
     final parsedDocuments = Map<String, String>.from(
       data['sourceDocuments'] as Map? ?? {},
     );
-    final parsedWeakPoints = (data['weakPoints'] as List?)
-        ?.map((item) => WeakPoint.fromJson(item as Map<String, dynamic>))
-        .toList();
+    final rawWeakPoints = data['weakPoints'] as List?;
+    final parsedWeakPoints = rawWeakPoints == null
+        ? null
+        : _parseWeakPoints(rawWeakPoints);
     final parsedLastPages = (data['lastPages'] as Map?)?.map(
       (key, value) => MapEntry(key.toString(), (value as num).toInt()),
     );
@@ -2114,11 +2144,146 @@ class AppState extends ChangeNotifier {
     schedulePersistence();
   }
 
+  List<WeakPoint> _parseWeakPoints(List raw) {
+    final parsed = <WeakPoint>[];
+    for (final item in raw) {
+      try {
+        parsed.add(WeakPoint.fromJson(Map<String, dynamic>.from(item as Map)));
+      } catch (error) {
+        debugPrint('[NoteEryk][Storage] skipped malformed weak point: $error');
+      }
+    }
+    return parsed;
+  }
+
   void addWeakPoint(WeakPoint weakPoint) {
     weakPoints.insert(0, weakPoint);
     notifyListeners();
     _persistWeakPoints();
     schedulePersistence();
+  }
+
+  WeakPoint? findDuplicateWeakPoint(WeaknessKind kind, String title) {
+    final key = weakPointDedupeKey(kind, title);
+    return weakPoints.where((point) => point.dedupeKey == key).firstOrNull;
+  }
+
+  /// Gặp lại một điểm yếu đã lưu: đưa về ôn ngay thay vì tạo bản trùng, và
+  /// bổ sung câu gốc mới làm ví dụ.
+  void reencounterWeakPoint(WeakPoint existing, {String sourceSentence = ''}) {
+    final sentence = sourceSentence.trim();
+    if (sentence.isNotEmpty &&
+        sentence != existing.sourceSentence &&
+        !existing.examples.contains(sentence)) {
+      existing.examples = [...existing.examples, sentence];
+    }
+    if (!existing.isNewCard) existing.lapses++;
+    existing.dueAt = DateTime.now();
+    weakPoints
+      ..remove(existing)
+      ..insert(0, existing);
+    notifyListeners();
+    _persistWeakPoints();
+    schedulePersistence();
+  }
+
+  void reviewWeakPoint(WeakPoint point, ReviewRating rating) {
+    reviewScheduler.apply(point, rating);
+    notifyListeners();
+    _persistWeakPoints();
+    schedulePersistence();
+  }
+
+  void resetWeakPointSchedule(Iterable<String> ids) {
+    final selected = ids.toSet();
+    for (final point in weakPoints.where(
+      (item) => selected.contains(item.id),
+    )) {
+      point
+        ..dueAt = DateTime.now()
+        ..intervalDays = 0
+        ..reps = 0;
+    }
+    notifyListeners();
+    _persistWeakPoints();
+    schedulePersistence();
+  }
+
+  List<WeakPoint> get dueWeakPoints => reviewScheduler.dueQueue(weakPoints);
+
+  /// Xóa nhiều điểm yếu; ảnh nguồn chỉ bị xóa sau [undoWindow] để Hoàn tác
+  /// khôi phục được trọn vẹn.
+  List<({int index, WeakPoint point})> deleteWeakPoints(
+    Iterable<String> ids, {
+    Duration undoWindow = const Duration(seconds: 8),
+  }) {
+    final selected = ids.toSet();
+    final removed = <({int index, WeakPoint point})>[];
+    for (var index = 0; index < weakPoints.length; index++) {
+      final point = weakPoints[index];
+      if (selected.contains(point.id)) {
+        removed.add((index: index, point: point));
+      }
+    }
+    if (removed.isEmpty) return removed;
+    weakPoints.removeWhere((point) => selected.contains(point.id));
+    for (final entry in removed) {
+      final path = entry.point.sourceImagePath;
+      if (path == null || path.isEmpty) continue;
+      _pendingCropDeletes[path]?.cancel();
+      _pendingCropDeletes[path] = Timer(undoWindow, () {
+        _pendingCropDeletes.remove(path);
+        final stillUsed = weakPoints.any(
+          (point) => point.sourceImagePath == path,
+        );
+        if (!stillUsed) {
+          File(path).delete().catchError((_) => File(path));
+        }
+      });
+    }
+    notifyListeners();
+    _persistWeakPoints();
+    schedulePersistence();
+    return removed;
+  }
+
+  void restoreWeakPoints(List<({int index, WeakPoint point})> removed) {
+    for (final entry
+        in removed.toList()..sort((a, b) => a.index.compareTo(b.index))) {
+      if (weakPoints.any((point) => point.id == entry.point.id)) continue;
+      weakPoints.insert(entry.index.clamp(0, weakPoints.length), entry.point);
+      final path = entry.point.sourceImagePath;
+      if (path != null) _pendingCropDeletes.remove(path)?.cancel();
+    }
+    notifyListeners();
+    _persistWeakPoints();
+    schedulePersistence();
+  }
+
+  /// Ghi TSV cho Anki vào thư mục Documents (hiện trong app Tệp trên iPad).
+  Future<File> exportWeakPointsToAnki(Iterable<WeakPoint> points) async {
+    final directory = await getApplicationDocumentsDirectory();
+    final exportDirectory = Directory(
+      '${directory.path}${Platform.pathSeparator}Exports',
+    );
+    await exportDirectory.create(recursive: true);
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .replaceAll(RegExp(r'[:.]'), '-')
+        .substring(0, 19);
+    final file = File(
+      '${exportDirectory.path}${Platform.pathSeparator}NoteEryk_Anki_$stamp.txt',
+    );
+    await file.writeAsString(exportAnkiTsv(points), flush: true);
+    return file;
+  }
+
+  Future<void> setReasoningEffort(AiReasoningEffort value) async {
+    reasoningEffort = value;
+    aiService.reasoningEffort = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('aiReasoningEffort', value.name);
   }
 
   void updateWeakPoint(WeakPoint weakPoint) {
@@ -2129,19 +2294,8 @@ class AppState extends ChangeNotifier {
     schedulePersistence();
   }
 
-  void deleteWeakPoint(String id) {
-    final sourcePath = weakPoints
-        .where((item) => item.id == id)
-        .map((item) => item.sourceImagePath)
-        .firstOrNull;
-    weakPoints.removeWhere((item) => item.id == id);
-    if (sourcePath != null && sourcePath.isNotEmpty) {
-      File(sourcePath).delete().catchError((_) => File(sourcePath));
-    }
-    notifyListeners();
-    _persistWeakPoints();
-    schedulePersistence();
-  }
+  List<({int index, WeakPoint point})> deleteWeakPoint(String id) =>
+      deleteWeakPoints([id]);
 
   Future<void> _persistWeakPoints() async {
     final prefs = await SharedPreferences.getInstance();
@@ -2169,6 +2323,10 @@ class AppState extends ChangeNotifier {
       'editorToolbarTools',
       toolbarTools.map((tool) => tool.name).toList(),
     );
+    await prefs.setStringList(
+      'introducedToolbarTools',
+      _introducedToolbarTools.map((tool) => tool.name).toList(),
+    );
     await prefs.setString(
       'studentName',
       studentName.trim().isEmpty ? 'Eryk' : studentName.trim(),
@@ -2193,6 +2351,7 @@ class AppState extends ChangeNotifier {
         EditorTool.aiDictionary,
         EditorTool.translate,
         EditorTool.explain,
+        EditorTool.quickCheck,
         EditorTool.weakness,
       }.contains(tool);
 
