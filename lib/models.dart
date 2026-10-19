@@ -19,6 +19,19 @@ enum EditorTool {
 
 enum PaperStyle { blank, lined, grid, dotted, genkou }
 
+/// Kiểu nét của công cụ Bút. Nét cũ không lưu kiểu được đọc là thư pháp.
+enum PenStyle {
+  calligraphy('Thư pháp', 'Đầu vát, nét đổi độ rộng theo hướng và lực'),
+  fountain('Bút máy', 'Nét mảnh, đậm dần theo lực, thuôn hai đầu'),
+  ballpoint('Bút bi', 'Nét đều, hơi đổi theo lực'),
+  marker('Bút dạ', 'Nét dày đều, đầu tròn, không thuôn'),
+  pencil('Bút chì', 'Nét mảnh, nhạt, có vân giấy');
+
+  const PenStyle(this.label, this.helper);
+  final String label;
+  final String helper;
+}
+
 class PageImagePlacement {
   const PageImagePlacement({
     required this.id,
@@ -423,6 +436,7 @@ class InkStroke {
     required this.width,
     required this.tool,
     required this.createdAt,
+    this.penStyle = PenStyle.calligraphy,
   });
 
   final List<StrokePoint> points;
@@ -430,6 +444,7 @@ class InkStroke {
   final double width;
   final EditorTool tool;
   final DateTime createdAt;
+  final PenStyle penStyle;
 
   Map<String, Object> toJson() => {
     'points': points.map((point) => point.toJson()).toList(),
@@ -437,6 +452,7 @@ class InkStroke {
     'width': width,
     'tool': tool.name,
     'createdAt': createdAt.toIso8601String(),
+    if (penStyle != PenStyle.calligraphy) 'penStyle': penStyle.name,
   };
 
   factory InkStroke.fromJson(Map<String, dynamic> json) => InkStroke(
@@ -447,6 +463,10 @@ class InkStroke {
     width: (json['width'] as num).toDouble(),
     tool: EditorTool.values.byName(json['tool'] as String),
     createdAt: DateTime.parse(json['createdAt'] as String),
+    penStyle: PenStyle.values.firstWhere(
+      (style) => style.name == json['penStyle'],
+      orElse: () => PenStyle.calligraphy,
+    ),
   );
 }
 
@@ -503,11 +523,18 @@ class WeakPoint {
     this.lapses = 0,
     this.lastReviewedAt,
     this.needsRevisit = false,
+    this.formatVersion = 0,
   });
 
   final String id;
   String title;
   WeaknessKind kind;
+
+  /// Phiên bản quy tắc chuẩn hóa mà mục này đã đạt ([weakPointFormatVersion]).
+  /// "Chuẩn hóa toàn bộ" bỏ qua mục đã ở phiên bản hiện tại để không tốn token.
+  int formatVersion;
+
+  bool get isNormalized => formatVersion >= weakPointFormatVersion;
 
   /// Nghĩa / nội dung chính cần học.
   String content;
@@ -584,6 +611,7 @@ class WeakPoint {
     'lapses': lapses,
     'lastReviewedAt': lastReviewedAt?.toIso8601String(),
     'needsRevisit': needsRevisit,
+    'formatVersion': formatVersion,
   };
 
   /// Đọc khoan dung: một trường cũ/hỏng không được làm mất cả danh sách.
@@ -628,9 +656,15 @@ class WeakPoint {
       lapses: (json['lapses'] as num?)?.toInt() ?? 0,
       lastReviewedAt: date('lastReviewedAt'),
       needsRevisit: json['needsRevisit'] == true,
+      formatVersion: (json['formatVersion'] as num?)?.toInt() ?? 0,
     );
   }
 }
+
+/// Tăng khi quy tắc chuẩn hóa (schema hoặc dạng tiêu đề) thay đổi, để các mục
+/// cũ được chuẩn hóa lại còn mục đã đạt chuẩn thì bỏ qua.
+/// 2: động từ ở thể ます, từ loại khác ở dạng đứng đơn.
+const weakPointFormatVersion = 2;
 
 String weakPointDedupeKey(WeaknessKind kind, String title) {
   final normalized = title.toLowerCase().replaceAll(

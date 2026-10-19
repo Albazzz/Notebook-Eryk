@@ -18,6 +18,7 @@ import '../models.dart';
 import '../services.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/ocr_highlight_sheet.dart';
 import '../widgets/quick_check_sheet.dart';
 
 class EditorScreen extends StatefulWidget {
@@ -39,6 +40,7 @@ class _EditorScreenState extends State<EditorScreen>
   Color penColor = AppColors.ink;
   Color highlightColor = const Color(0x88f4c542);
   double penWidth = 3;
+  PenStyle penStyle = PenStyle.calligraphy;
   double penOpacity = 1;
   double highlightWidth = 22;
   double highlightOpacity = .64;
@@ -672,6 +674,7 @@ class _EditorScreenState extends State<EditorScreen>
   Future<void> _showAiOutputSettings() async {
     var style = widget.state.translationStyle;
     var showOcr = widget.state.showOcrInAiResults;
+    var highlightWeakness = widget.state.weaknessHighlightMode;
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -720,6 +723,16 @@ class _EditorScreenState extends State<EditorScreen>
                     'Tắt để chỉ xem bản dịch hoặc lời giải. Lưu ý phục dựng OCR vẫn được giữ ở cuối.',
                   ),
                 ),
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  value: highlightWeakness,
+                  onChanged: (value) =>
+                      setDialogState(() => highlightWeakness = value),
+                  title: const Text('Điểm yếu: tự tô cụm cần học trên OCR'),
+                  subtitle: const Text(
+                    'Sau khi khoanh, chạm/kéo để tô từ hoặc mẫu ngữ pháp; AI chỉ tạo điểm yếu cho phần đã tô. Tắt để AI tự tìm toàn bộ.',
+                  ),
+                ),
               ],
             ),
           ),
@@ -740,6 +753,7 @@ class _EditorScreenState extends State<EditorScreen>
     setState(() {
       widget.state.translationStyle = style;
       widget.state.showOcrInAiResults = showOcr;
+      widget.state.weaknessHighlightMode = highlightWeakness;
     });
     await widget.state.saveAiSettings(key: '');
   }
@@ -1349,6 +1363,7 @@ class _EditorScreenState extends State<EditorScreen>
                                             selectionEnd: null,
                                             selectionTool: tool,
                                             sourcePulse: false,
+                                            activePenStyle: penStyle,
                                           ),
                                         ),
                                       ),
@@ -1695,6 +1710,9 @@ class _EditorScreenState extends State<EditorScreen>
               : penWidth,
           tool: drawingTool,
           createdAt: DateTime.now(),
+          penStyle: drawingTool == EditorTool.pen
+              ? penStyle
+              : PenStyle.calligraphy,
         ),
       );
       activePoints = null;
@@ -1772,6 +1790,7 @@ class _EditorScreenState extends State<EditorScreen>
           ocrText: recognized,
           sourceImagePath: crop.path,
           requestSerial: requestSerial,
+          askHighlight: widget.state.weaknessHighlightMode,
         );
         completed = true;
         return;
@@ -2627,8 +2646,10 @@ class _EditorScreenState extends State<EditorScreen>
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      // The pen panel grew a style picker; let it scroll on short screens.
+      isScrollControlled: true,
       builder: (context) => StatefulBuilder(
-        builder: (context, setSheetState) => Padding(
+        builder: (context, setSheetState) => SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 30),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -2636,13 +2657,39 @@ class _EditorScreenState extends State<EditorScreen>
             children: [
               Text(
                 selectedTool == EditorTool.pen
-                    ? 'Bút thư pháp'
+                    ? 'Bút · ${penStyle.label}'
                     : selectedTool == EditorTool.highlighter
                     ? 'Highlight'
                     : 'Tẩy',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 18),
+              if (selectedTool == EditorTool.pen) ...[
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final style in PenStyle.values)
+                      ChoiceChip(
+                        label: Text(style.label),
+                        selected: penStyle == style,
+                        onSelected: (_) {
+                          setState(() => penStyle = style);
+                          setSheetState(() {});
+                        },
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  penStyle.helper,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
               if (selectedTool != EditorTool.eraser) ...[
                 Wrap(
                   spacing: 12,
@@ -2761,13 +2808,14 @@ class _EditorScreenState extends State<EditorScreen>
                     painter: _PenPreviewPainter(
                       color: penColor.withValues(alpha: penOpacity),
                       width: penWidth,
+                      style: penStyle,
                     ),
                   ),
                 ),
                 const SizedBox(height: 6),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('Thư pháp hiện đại · nét theo lực bút'),
+                  title: const Text('Nét theo lực bút'),
                   subtitle: const Text(
                     'Làm mượt nét và thay đổi độ rộng theo hướng viết',
                   ),
@@ -3005,6 +3053,7 @@ class _EditorScreenState extends State<EditorScreen>
             width: stroke.width,
             tool: stroke.tool,
             createdAt: stroke.createdAt,
+            penStyle: stroke.penStyle,
           ),
         )
         .toList(growable: false);
@@ -3149,7 +3198,6 @@ class _EditorScreenState extends State<EditorScreen>
   Future<List<WeakPointDraft>> _verifyWithDictionary(
     List<WeakPointDraft> drafts,
   ) async {
-    String kana(String value) => value.replaceAll(RegExp(r'[\s・.]'), '');
     final verified = <WeakPointDraft>[];
     for (final draft in drafts) {
       if (draft.kind != WeaknessKind.vocabulary &&
@@ -3169,7 +3217,7 @@ class _EditorScreenState extends State<EditorScreen>
       var reading = draft.reading;
       if (reading.isEmpty) {
         reading = entry.reading;
-      } else if (kana(reading) != kana(entry.reading)) {
+      } else if (!readingsMatch(reading, entry.reading)) {
         notes.add('Từ điển ghi cách đọc: ${entry.reading}');
       }
       var hanViet = draft.hanViet;
@@ -3219,10 +3267,11 @@ class _EditorScreenState extends State<EditorScreen>
     String? sourceImagePath,
     int? requestSerial,
     String learnerContext = '',
+    bool askHighlight = false,
   }) async {
     final activeSerial = requestSerial ?? ++_aiRequestSerial;
     final state = widget.state;
-    final resolvedOcr = ocrText ?? _latestOcrText ?? result?.source ?? '';
+    var resolvedOcr = ocrText ?? _latestOcrText ?? result?.source ?? '';
     final resolvedImage = sourceImagePath ?? _latestCropPath;
     void discardCrop() {
       _deleteTemporaryCropIfUnused(resolvedImage);
@@ -3233,6 +3282,26 @@ class _EditorScreenState extends State<EditorScreen>
         _latestCropPath = null;
         _latestOcrText = null;
       }
+    }
+
+    // Người học tự tô cụm cần học trên OCR; AI chỉ điền nội dung cho các cụm
+    // đó nên nhanh và ít token hơn để AI tự dò cả vùng.
+    var focusTerms = const <String>[];
+    if (askHighlight && resolvedOcr.trim().isNotEmpty) {
+      await _finishProcessingAfterOverlay();
+      if (!mounted) return;
+      final picked = await showOcrHighlightSheet(
+        context,
+        ocrText: resolvedOcr,
+        previewImagePath: resolvedImage,
+      );
+      if (!mounted || activeSerial != _aiRequestSerial) return;
+      if (picked == null) {
+        discardCrop();
+        return;
+      }
+      resolvedOcr = picked.text;
+      focusTerms = picked.terms;
     }
 
     var drafts = <WeakPointDraft>[];
@@ -3251,6 +3320,7 @@ class _EditorScreenState extends State<EditorScreen>
             jlpt: state.jlpt,
             language: state.explanationLanguage,
             learnerContext: learnerContext,
+            focusTerms: focusTerms,
           );
           drafts = await _verifyWithDictionary(batch.items);
           batchWarning = batch.warning;
@@ -3282,14 +3352,24 @@ class _EditorScreenState extends State<EditorScreen>
       if (!mounted) return;
     }
     if (manual) {
-      drafts = [
-        WeakPointDraft(
-          title: '',
-          kind: WeaknessKind.grammar,
-          content: '',
-          sourceSentence: resolvedOcr.trim(),
-        ),
-      ];
+      drafts = focusTerms.isEmpty
+          ? [
+              WeakPointDraft(
+                title: '',
+                kind: WeaknessKind.grammar,
+                content: '',
+                sourceSentence: resolvedOcr.trim(),
+              ),
+            ]
+          : [
+              for (final term in focusTerms)
+                WeakPointDraft(
+                  title: term,
+                  kind: WeaknessKind.vocabulary,
+                  content: '',
+                  sourceSentence: _sentenceContaining(resolvedOcr, term),
+                ),
+            ];
     }
     final forms = drafts.asMap().entries.map((entry) {
       final form = _WeaknessDraftForm.fromDraft(entry.value, entry.key);
@@ -3382,6 +3462,9 @@ class _EditorScreenState extends State<EditorScreen>
                   mistake: form.mistake.trim(),
                   warning: form.warning.trim(),
                   createdAt: DateTime.now(),
+                  // AI drafts already follow the current title rules, so
+                  // "Chuẩn hóa toàn bộ" can skip them.
+                  formatVersion: manual ? 0 : weakPointFormatVersion,
                 ),
               );
               added++;
@@ -3558,6 +3641,12 @@ class _EditorScreenState extends State<EditorScreen>
       onAction: () => state.goTo(AppDestination.weaknesses),
     );
   }
+
+  /// Dòng OCR chứa [term], dùng làm câu gốc cho bản nháp nhập thủ công.
+  String _sentenceContaining(String text, String term) => text
+      .split(RegExp(r'(?<=[。！？!?])|\n'))
+      .map((line) => line.trim())
+      .firstWhere((line) => line.contains(term), orElse: () => '');
 
   Widget _buildWeaknessDraftEditor(
     _WeaknessDraftForm form,
@@ -4508,8 +4597,10 @@ class _InkPainter extends CustomPainter {
     required this.selectionEnd,
     required this.selectionTool,
     required this.sourcePulse,
+    this.activePenStyle = PenStyle.calligraphy,
   });
   final List<InkStroke> strokes;
+  final PenStyle activePenStyle;
   final List<StrokePoint>? activePoints;
   final Color activeColor;
   final double activeWidth;
@@ -4521,21 +4612,23 @@ class _InkPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     for (final stroke in strokes) {
-      _drawStroke(
+      _paintInkStroke(
         canvas,
         stroke.points,
         stroke.color,
         stroke.width,
-        stroke.tool == EditorTool.highlighter,
+        highlight: stroke.tool == EditorTool.highlighter,
+        style: stroke.penStyle,
       );
     }
     if (activePoints != null) {
-      _drawStroke(
+      _paintInkStroke(
         canvas,
         activePoints!,
         activeColor,
         activeWidth,
-        selectionTool == EditorTool.highlighter,
+        highlight: selectionTool == EditorTool.highlighter,
+        style: activePenStyle,
       );
     }
     if (selectionStart != null && selectionEnd != null) {
@@ -4577,91 +4670,221 @@ class _InkPainter extends CustomPainter {
     }
   }
 
-  void _drawStroke(
-    Canvas canvas,
-    List<StrokePoint> points,
-    Color color,
-    double width,
-    bool highlight,
-  ) {
-    if (points.length < 2) return;
+  @override
+  bool shouldRepaint(covariant _InkPainter oldDelegate) => true;
+}
 
-    // Build a smoothed centerline from quadratic midpoints, then expand it
-    // into a filled left/right mesh. This gives every point its own radius,
-    // unlike Canvas.drawPath(strokeWidth), and produces natural tapering.
-    final centers = <Offset>[points.first.offset];
-    for (var i = 0; i < points.length - 1; i++) {
-      centers.add(
-        Offset(
-          (points[i].offset.dx + points[i + 1].offset.dx) / 2,
-          (points[i].offset.dy + points[i + 1].offset.dy) / 2,
+/// Vẽ một nét mực theo kiểu bút. Dùng chung cho canvas và ô xem trước.
+void _paintInkStroke(
+  Canvas canvas,
+  List<StrokePoint> points,
+  Color color,
+  double width, {
+  required bool highlight,
+  PenStyle style = PenStyle.calligraphy,
+}) {
+  if (points.length < 2) return;
+
+  // Build a smoothed centerline from quadratic midpoints.
+  final centers = <Offset>[points.first.offset];
+  for (var i = 0; i < points.length - 1; i++) {
+    centers.add(
+      Offset(
+        (points[i].offset.dx + points[i + 1].offset.dx) / 2,
+        (points[i].offset.dy + points[i + 1].offset.dy) / 2,
+      ),
+    );
+  }
+  centers.add(points.last.offset);
+
+  if (!highlight && (style == PenStyle.marker || style == PenStyle.pencil)) {
+    _paintUniformStroke(canvas, centers, color, width, style);
+    return;
+  }
+
+  // Expand the centerline into a filled left/right mesh. This gives every
+  // point its own radius, unlike Canvas.drawPath(strokeWidth), and produces
+  // natural tapering.
+  final radii = <double>[];
+  for (var i = 0; i < centers.length; i++) {
+    final sourceIndex = (i * points.length / centers.length).floor().clamp(
+      0,
+      points.length - 1,
+    );
+    final previous = centers[i == 0 ? 0 : i - 1];
+    final next = centers[i == centers.length - 1 ? i : i + 1];
+    final direction = (next - previous).direction;
+    final pressure = points[sourceIndex].pressure.clamp(.35, 1.0);
+    final dt = i == 0
+        ? 0
+        : (points[sourceIndex].timeMicros -
+                  points[(sourceIndex - 1).clamp(0, points.length - 1)]
+                      .timeMicros)
+              .clamp(1, 1000000);
+    final distance = (next - previous).distance;
+    final speed = dt == 0 ? 0 : distance / dt;
+    final speedFactor = (1 - speed * 1800).clamp(.58, 1.0);
+    final double radius;
+    final double startTaperLength;
+    final double endTaperLength;
+    if (highlight) {
+      radius = width * .5 * speedFactor;
+      startTaperLength = 4;
+      endTaperLength = 5;
+    } else {
+      switch (style) {
+        case PenStyle.fountain:
+          // Thin hairline at light pressure, swelling as the nib is pressed.
+          radius = width * .5 * (.3 + .95 * pressure) * speedFactor;
+          startTaperLength = 3;
+          endTaperLength = 8;
+        case PenStyle.ballpoint:
+          radius = width * .5 * (.82 + .18 * pressure);
+          startTaperLength = 1.5;
+          endTaperLength = 1.5;
+        case PenStyle.calligraphy || PenStyle.marker || PenStyle.pencil:
+          final nibFactor = .76 + .28 * math.sin(direction + math.pi / 5).abs();
+          radius = width * .5 * pressure * speedFactor * nibFactor;
+          startTaperLength = 4;
+          endTaperLength = 5;
+      }
+    }
+    final startTaper = (i / startTaperLength).clamp(0, 1);
+    final endTaper = ((centers.length - 1 - i) / endTaperLength).clamp(0, 1);
+    radii.add(radius * math.min(startTaper, endTaper));
+  }
+  final path = Path();
+  for (var i = 0; i < centers.length; i++) {
+    final tangent =
+        (centers[i == centers.length - 1 ? i : i + 1] -
+                centers[i == 0 ? i : i - 1])
+            .direction;
+    final normal = Offset(-math.sin(tangent), math.cos(tangent));
+    final left = centers[i] + normal * radii[i];
+    if (i == 0) {
+      path.moveTo(left.dx, left.dy);
+    } else {
+      path.lineTo(left.dx, left.dy);
+    }
+  }
+  for (var i = centers.length - 1; i >= 0; i--) {
+    final tangent =
+        (centers[i == centers.length - 1 ? i : i + 1] -
+                centers[i == 0 ? i : i - 1])
+            .direction;
+    final normal = Offset(-math.sin(tangent), math.cos(tangent));
+    final right = centers[i] - normal * radii[i];
+    path.lineTo(right.dx, right.dy);
+  }
+  path.close();
+  final paint = Paint()
+    ..isAntiAlias = true
+    ..style = PaintingStyle.fill
+    ..color = color;
+  if (highlight) paint.blendMode = BlendMode.multiply;
+  canvas.drawPath(path, paint);
+  if (!highlight && style == PenStyle.ballpoint) {
+    // Round end caps keep the nearly uniform line from looking clipped.
+    final cap = Paint()
+      ..isAntiAlias = true
+      ..color = color;
+    canvas
+      ..drawCircle(centers.first, radii[1.clamp(0, radii.length - 1)], cap)
+      ..drawCircle(
+        centers.last,
+        radii[(radii.length - 2).clamp(0, radii.length - 1)],
+        cap,
+      );
+  }
+}
+
+/// Bút dạ và bút chì: nét có độ rộng cố định, đầu tròn.
+void _paintUniformStroke(
+  Canvas canvas,
+  List<Offset> centers,
+  Color color,
+  double width,
+  PenStyle style,
+) {
+  final path = Path()..moveTo(centers.first.dx, centers.first.dy);
+  for (var i = 1; i < centers.length - 1; i++) {
+    final control = centers[i];
+    final end = Offset.lerp(centers[i], centers[i + 1], .5)!;
+    path.quadraticBezierTo(control.dx, control.dy, end.dx, end.dy);
+  }
+  path.lineTo(centers.last.dx, centers.last.dy);
+  final paint = Paint()
+    ..isAntiAlias = true
+    ..style = PaintingStyle.stroke
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round;
+  if (style == PenStyle.marker) {
+    canvas.drawPath(
+      path,
+      paint
+        ..color = color
+        ..strokeWidth = width * 1.5,
+    );
+    return;
+  }
+  // Graphite: a soft, lighter core plus two offset passes that read as the
+  // grain of a pencil dragged over paper.
+  final strokeWidth = (width * .62).clamp(.8, 6.0);
+  final alpha = color.a;
+  canvas.drawPath(
+    path,
+    paint
+      ..color = color.withValues(alpha: alpha * .62)
+      ..strokeWidth = strokeWidth
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, .35),
+  );
+  final grain = Paint()
+    ..isAntiAlias = true
+    ..style = PaintingStyle.stroke
+    ..strokeCap = StrokeCap.round
+    ..strokeWidth = strokeWidth * .45
+    ..color = color.withValues(alpha: alpha * .28);
+  canvas
+    ..drawPath(path.shift(Offset(strokeWidth * .22, -strokeWidth * .18)), grain)
+    ..drawPath(path.shift(Offset(-strokeWidth * .2, strokeWidth * .2)), grain);
+}
+
+/// Các điểm giả lập dọc một đường cong để xem trước kiểu bút, áp lực tăng
+/// rồi giảm như khi viết thật.
+List<StrokePoint> _previewStrokePoints(Size size) {
+  final path = Path()
+    ..moveTo(20, size.height * .68)
+    ..cubicTo(
+      size.width * .25,
+      size.height * .08,
+      size.width * .48,
+      size.height * .92,
+      size.width * .67,
+      size.height * .35,
+    )
+    ..quadraticBezierTo(
+      size.width * .78,
+      size.height * .12,
+      size.width - 18,
+      size.height * .55,
+    );
+  final points = <StrokePoint>[];
+  for (final metric in path.computeMetrics()) {
+    const steps = 48;
+    for (var step = 0; step <= steps; step++) {
+      final t = step / steps;
+      final tangent = metric.getTangentForOffset(metric.length * t);
+      if (tangent == null) continue;
+      points.add(
+        StrokePoint(
+          tangent.position,
+          .45 + .55 * math.sin(t * math.pi),
+          step * 8000,
         ),
       );
     }
-    centers.add(points.last.offset);
-    final radii = <double>[];
-    for (var i = 0; i < centers.length; i++) {
-      final sourceIndex = (i * points.length / centers.length).floor().clamp(
-        0,
-        points.length - 1,
-      );
-      final previous = centers[i == 0 ? 0 : i - 1];
-      final next = centers[i == centers.length - 1 ? i : i + 1];
-      final direction = (next - previous).direction;
-      final pressure = points[sourceIndex].pressure.clamp(.35, 1.0);
-      final dt = i == 0
-          ? 0
-          : (points[sourceIndex].timeMicros -
-                    points[(sourceIndex - 1).clamp(0, points.length - 1)]
-                        .timeMicros)
-                .clamp(1, 1000000);
-      final distance = (next - previous).distance;
-      final speed = dt == 0 ? 0 : distance / dt;
-      final speedFactor = (1 - speed * 1800).clamp(.58, 1.0);
-      final nibFactor = highlight
-          ? 1.0
-          : .76 + .28 * math.sin(direction + math.pi / 5).abs();
-      var radius =
-          width * .5 * (highlight ? 1 : pressure) * speedFactor * nibFactor;
-      final startTaper = (i / 4).clamp(0, 1);
-      final endTaper = ((centers.length - 1 - i) / 5).clamp(0, 1);
-      radius *= math.min(startTaper, endTaper);
-      radii.add(radius);
-    }
-    final path = Path();
-    for (var i = 0; i < centers.length; i++) {
-      final tangent =
-          (centers[i == centers.length - 1 ? i : i + 1] -
-                  centers[i == 0 ? i : i - 1])
-              .direction;
-      final normal = Offset(-math.sin(tangent), math.cos(tangent));
-      final left = centers[i] + normal * radii[i];
-      if (i == 0) {
-        path.moveTo(left.dx, left.dy);
-      } else {
-        path.lineTo(left.dx, left.dy);
-      }
-    }
-    for (var i = centers.length - 1; i >= 0; i--) {
-      final tangent =
-          (centers[i == centers.length - 1 ? i : i + 1] -
-                  centers[i == 0 ? i : i - 1])
-              .direction;
-      final normal = Offset(-math.sin(tangent), math.cos(tangent));
-      final right = centers[i] - normal * radii[i];
-      path.lineTo(right.dx, right.dy);
-    }
-    path.close();
-    final paint = Paint()
-      ..isAntiAlias = true
-      ..style = PaintingStyle.fill
-      ..color = color;
-    if (highlight) paint.blendMode = BlendMode.multiply;
-    canvas.drawPath(path, paint);
   }
-
-  @override
-  bool shouldRepaint(covariant _InkPainter oldDelegate) => true;
+  return points;
 }
 
 class _Ruler extends StatelessWidget {
@@ -5449,40 +5672,30 @@ class _CapturedRegion {
 }
 
 class _PenPreviewPainter extends CustomPainter {
-  const _PenPreviewPainter({required this.color, required this.width});
+  const _PenPreviewPainter({
+    required this.color,
+    required this.width,
+    required this.style,
+  });
   final Color color;
   final double width;
+  final PenStyle style;
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..strokeWidth = width.clamp(1.5, 10);
-    final path = Path()
-      ..moveTo(20, size.height * .68)
-      ..cubicTo(
-        size.width * .25,
-        size.height * .08,
-        size.width * .48,
-        size.height * .92,
-        size.width * .67,
-        size.height * .35,
-      )
-      ..quadraticBezierTo(
-        size.width * .78,
-        size.height * .12,
-        size.width - 18,
-        size.height * .55,
-      );
-    canvas.drawPath(path, paint);
-  }
+  void paint(Canvas canvas, Size size) => _paintInkStroke(
+    canvas,
+    _previewStrokePoints(size),
+    color,
+    width,
+    highlight: false,
+    style: style,
+  );
 
   @override
   bool shouldRepaint(covariant _PenPreviewPainter oldDelegate) =>
-      oldDelegate.color != color || oldDelegate.width != width;
+      oldDelegate.color != color ||
+      oldDelegate.width != width ||
+      oldDelegate.style != style;
 }
 
 class _HighlighterPreviewPainter extends CustomPainter {

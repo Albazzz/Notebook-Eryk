@@ -802,6 +802,16 @@ class _AiSettingsState extends State<_AiSettings> {
                   'Mặc định chỉ hiện bản dịch/lời giải; cảnh báo phục dựng vẫn luôn hiện.',
                 ),
               ),
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                value: widget.state.weaknessHighlightMode,
+                onChanged: (value) =>
+                    setState(() => widget.state.weaknessHighlightMode = value),
+                title: const Text('Điểm yếu: tự tô cụm cần học trên OCR'),
+                subtitle: const Text(
+                  'AI chỉ tạo điểm yếu cho phần đã tô, nhanh và ít token hơn. Tắt để AI tự tìm toàn bộ vùng khoanh.',
+                ),
+              ),
             ],
           ),
         ),

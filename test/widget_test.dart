@@ -8,10 +8,70 @@ import 'package:noteeryk/app_state.dart';
 import 'package:noteeryk/models.dart';
 import 'package:noteeryk/review.dart';
 import 'package:noteeryk/screens/settings_screen.dart';
+import 'package:flutter/rendering.dart';
+import 'package:noteeryk/widgets/ocr_highlight_sheet.dart';
 import 'package:noteeryk/widgets/quick_check_sheet.dart';
 
 void main() {
   _quickCheckTests();
+
+  testWidgets('tô cụm trên OCR trả về đúng các cụm đã chọn', (tester) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    OcrHighlightResult? picked;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async => picked = await showOcrHighlightSheet(
+                context,
+                ocrText: 'かれは毎日、勉強します。',
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    final paragraph = tester.renderObject<RenderParagraph>(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is RichText && widget.text.toPlainText().contains('勉強'),
+      ),
+    );
+    Offset glyphCenter(int index) {
+      final box = paragraph
+          .getBoxesForSelection(
+            TextSelection(baseOffset: index, extentOffset: index + 1),
+          )
+          .first
+          .toRect();
+      return paragraph.localToGlobal(box.center);
+    }
+
+    // Chạm một kanji tô cả cụm kanji liền nhau: 毎日 rồi 勉強.
+    await tester.tapAt(glyphCenter(3));
+    await tester.pump();
+    await tester.tapAt(glyphCenter(6));
+    await tester.pump();
+    expect(find.text('Tạo điểm yếu (2)'), findsOneWidget);
+
+    // Chạm lại cụm đã tô thì bỏ tô.
+    await tester.tapAt(glyphCenter(4));
+    await tester.pump();
+    expect(find.text('Tạo điểm yếu (1)'), findsOneWidget);
+
+    await tester.tap(find.text('Tạo điểm yếu (1)'));
+    await tester.pumpAndSettle();
+    expect(picked?.terms, ['勉強']);
+  });
 
   testWidgets('hiển thị thư viện notebook trên tablet', (tester) async {
     tester.view.physicalSize = const Size(1180, 820);

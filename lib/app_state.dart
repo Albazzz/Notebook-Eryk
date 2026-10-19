@@ -17,8 +17,24 @@ import 'services.dart';
 import 'widgets/common.dart';
 
 class AppState extends ChangeNotifier {
-  static const defaultAiModelId = 'openai/gpt-5.6-luna';
-  static const defaultAiModelName = 'GPT-5.6 Luna';
+  /// Gemini Flash: benchmark trên đề JLPT cho đáp án đúng như các model
+  /// mạnh, luôn giải thích bằng tiếng Việt và dịch sát nhất.
+  static const defaultAiModelId = 'google/gemini-3.8-flash';
+  static const defaultAiModelName = 'Gemini 3.8 Flash';
+
+  /// Tra từ AI trả lời rất ngắn nên dùng model rẻ nhất vẫn đủ chính xác.
+  static const defaultDictionaryModelId = 'anthropic/claude-haiku-5.5';
+  static const defaultDictionaryModelName = 'Claude Haiku 5.5';
+
+  static ({String id, String name}) defaultModelFor(AiModelSlot slot) =>
+      slot == AiModelSlot.dictionary
+      ? (id: defaultDictionaryModelId, name: defaultDictionaryModelName)
+      : (id: defaultAiModelId, name: defaultAiModelName);
+
+  /// Mặc định cũ hay viết giải thích bằng tiếng Nhật; mục nào còn dùng nó
+  /// được chuyển một lần sang mặc định mới.
+  static const _legacyDefaultModelIds = {'openai/gpt-5.6-luna'};
+  static const _defaultModelMigrationKey = 'defaultModelMigratedToGemini';
   static const defaultToolbarTools = <EditorTool>[
     EditorTool.pen,
     EditorTool.highlighter,
@@ -71,6 +87,10 @@ class AppState extends ChangeNotifier {
   TranslationStyle translationStyle = TranslationStyle.balanced;
   AiReasoningEffort reasoningEffort = AiReasoningEffort.high;
   bool showOcrInAiResults = false;
+
+  /// Công cụ Điểm yếu: hiện OCR để người học tự tô cụm cần học trước khi gửi
+  /// AI, thay vì để AI tự dò toàn bộ vùng khoanh.
+  bool weaknessHighlightMode = true;
   String selectedModelId = defaultAiModelId;
   String selectedModelName = defaultAiModelName;
 
@@ -179,6 +199,7 @@ class AppState extends ChangeNotifier {
     );
     aiService.reasoningEffort = reasoningEffort;
     showOcrInAiResults = prefs.getBool('showOcrInAiResults') ?? false;
+    weaknessHighlightMode = prefs.getBool('weaknessHighlightMode') ?? true;
     flashcardFrontFields = _loadFlashcardFields(prefs, 'flashcardFrontFields', {
       FlashcardField.word,
     });
@@ -221,12 +242,19 @@ class AppState extends ChangeNotifier {
       );
     }
     _loadModelAssignments(prefs);
+    final migrateDefaultModel =
+        !(prefs.getBool(_defaultModelMigrationKey) ?? false) &&
+        _replaceLegacyDefaultModel();
     try {
       _apiKey = await _secureStorage.read(key: _keyStorageName) ?? '';
     } catch (_) {
       _apiKey = '';
     }
     aiConnected = _apiKey.isNotEmpty && _hasTextAiModel;
+    if (migrateDefaultModel) await saveAiSettings(key: '');
+    // Mark the migration even when nothing changed, so choosing Luna again
+    // later is respected.
+    await prefs.setBool(_defaultModelMigrationKey, true);
     final savedWeakPoints = prefs.getString('weakPoints');
     if (savedWeakPoints != null) {
       try {
@@ -2225,50 +2253,93 @@ class AppState extends ChangeNotifier {
 
   List<WeakPoint> get dueWeakPoints => reviewScheduler.dueQueue(weakPoints);
 
-  Future<({int updated, int failed})> reformatAllWeakPoints({
+  /// Số loạt chuẩn hóa chạy song song: đủ nhanh mà ít bị giới hạn lượt (429).
+  static const _reformatConcurrency = 3;
+
+  int get unnormalizedWeakPointCount =>
+      weakPoints.where((point) => !point.isNormalized).length;
+
+  /// Chuẩn hóa điểm yếu theo lô. Mặc định chỉ xử lý mục chưa đạt
+  /// [weakPointFormatVersion]; [includeNormalized] làm lại cả mục đã chuẩn.
+  Future<({int updated, int failed, int skipped})> reformatAllWeakPoints({
+    bool includeNormalized = false,
     void Function(int completed, int total)? onProgress,
   }) async {
     if (!aiConnected) {
       throw StateError('Hãy thiết lập OpenRouter trong Cài đặt AI');
     }
-    final points = List<WeakPoint>.of(weakPoints);
+    final points = weakPoints
+        .where((point) => includeNormalized || !point.isNormalized)
+        .toList(growable: false);
+    final skipped = weakPoints.length - points.length;
+    final batches = [
+      for (
+        var start = 0;
+        start < points.length;
+        start += OpenRouterService.reformatBatchSize
+      )
+        points.sublist(
+          start,
+          (start + OpenRouterService.reformatBatchSize).clamp(0, points.length),
+        ),
+    ];
     var updated = 0;
     var failed = 0;
-    for (final point in points) {
-      try {
-        final draft = await aiService.reformatWeakPoint(
-          apiKey: apiKey,
-          modelId: modelIdFor(AiTask.createWeakPoint),
-          point: point,
-          jlpt: jlpt,
-          language: explanationLanguage,
-        );
-        point
-          ..title = draft.title
-          ..kind = draft.kind
-          ..content = draft.content
-          ..reading = draft.reading
-          ..hanViet = draft.hanViet
-          ..conjugation = draft.conjugation
-          ..examples = draft.examples
-          ..sourceSentence = draft.sourceSentence
-          ..correctAnswer = draft.correctAnswer
-          ..mistake = draft.mistake
-          ..reminder = draft.reminder
-          ..warning = draft.warning;
-        await _persistWeakPoints();
-        schedulePersistence();
-        updated++;
-      } catch (error) {
-        failed++;
-        debugPrint('[NoteEryk][WeakPoint] reformat ${point.id} failed: $error');
+    var nextBatch = 0;
+
+    Future<void> worker() async {
+      while (nextBatch < batches.length) {
+        final batch = batches[nextBatch++];
+        Map<String, WeakPointDraft> drafts;
+        try {
+          drafts = await aiService.reformatWeakPoints(
+            apiKey: apiKey,
+            modelId: modelIdFor(AiTask.createWeakPoint),
+            points: batch,
+            jlpt: jlpt,
+            language: explanationLanguage,
+          );
+        } catch (error) {
+          debugPrint('[NoteEryk][WeakPoint] reformat batch failed: $error');
+          drafts = const {};
+        }
+        for (final point in batch) {
+          final draft = drafts[point.id];
+          if (draft == null) {
+            failed++;
+            continue;
+          }
+          point
+            ..title = draft.title
+            ..kind = draft.kind
+            ..content = draft.content
+            ..reading = draft.reading
+            ..hanViet = draft.hanViet
+            ..conjugation = draft.conjugation
+            ..examples = draft.examples
+            ..sourceSentence = draft.sourceSentence
+            ..correctAnswer = draft.correctAnswer
+            ..mistake = draft.mistake
+            ..reminder = draft.reminder
+            ..warning = draft.warning
+            ..formatVersion = weakPointFormatVersion;
+          updated++;
+        }
+        if (drafts.isNotEmpty) {
+          await _persistWeakPoints();
+          schedulePersistence();
+        }
+        onProgress?.call(updated + failed, points.length);
       }
-      onProgress?.call(updated + failed, points.length);
     }
+
+    await Future.wait([
+      for (var index = 0; index < _reformatConcurrency; index++) worker(),
+    ]);
     if (updated > 0) {
       notifyListeners();
     }
-    return (updated: updated, failed: failed);
+    return (updated: updated, failed: failed, skipped: skipped);
   }
 
   /// Xóa nhiều điểm yếu; ảnh nguồn chỉ bị xóa sau [undoWindow] để Hoàn tác
@@ -2464,6 +2535,7 @@ class AppState extends ChangeNotifier {
     await prefs.setString('explanationLanguage', explanationLanguage);
     await prefs.setString('translationStyle', translationStyle.name);
     await prefs.setBool('showOcrInAiResults', showOcrInAiResults);
+    await prefs.setBool('weaknessHighlightMode', weaknessHighlightMode);
     await prefs.setString('selectedModelId', selectedModelId);
     await prefs.setString('selectedModelName', selectedModelName);
     await prefs.setBool('useAiVision', useAiVision);
@@ -2483,6 +2555,26 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Đổi mọi chỗ còn dùng model mặc định cũ sang [defaultAiModelId]; model
+  /// người học tự chọn được giữ nguyên. Trả về true nếu có thay đổi.
+  bool _replaceLegacyDefaultModel() {
+    var changed = false;
+    if (_legacyDefaultModelIds.contains(selectedModelId)) {
+      selectedModelId = defaultAiModelId;
+      selectedModelName = defaultAiModelName;
+      changed = true;
+    }
+    for (final slot in AiModelSlot.values) {
+      if (_legacyDefaultModelIds.contains(modelIds[slot])) {
+        final model = defaultModelFor(slot);
+        modelIds[slot] = model.id;
+        modelNames[slot] = model.name;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
   void _loadModelAssignments(SharedPreferences prefs) {
     modelIds.clear();
     modelNames.clear();
@@ -2494,18 +2586,20 @@ class AppState extends ChangeNotifier {
       final name = names[slot.name] ?? '';
       if (name.isNotEmpty) modelNames[slot] = name;
     }
-    // Migrate the old single-model setting to every compatible slot.
-    if (modelIds.isEmpty && selectedModelId.isNotEmpty) {
-      for (final slot in AiModelSlot.values) {
-        modelIds[slot] = selectedModelId;
-        modelNames[slot] = selectedModelName;
-      }
-    }
-    // New installs (and older installs without a per-feature assignment) use
-    // Luna consistently in every AI function while still allowing overrides.
+    // New installs, and older installs that only stored one model, fill
+    // every feature from the selected model. While that is still the app
+    // default, each feature gets its own default (Haiku for AI lookup); a
+    // model the learner chose is used everywhere.
+    final usesAppDefault = selectedModelId == defaultAiModelId;
     for (final slot in AiModelSlot.values) {
-      modelIds.putIfAbsent(slot, () => selectedModelId);
-      modelNames.putIfAbsent(slot, () => selectedModelName);
+      final model = usesAppDefault
+          ? defaultModelFor(slot)
+          : (id: selectedModelId, name: selectedModelName);
+      if (!modelIds.containsKey(slot)) {
+        modelIds[slot] = model.id;
+        modelNames[slot] = model.name;
+      }
+      modelNames.putIfAbsent(slot, () => model.name);
     }
     final rawSaved = prefs.getString(_savedModelsStorageName);
     if (rawSaved != null) {

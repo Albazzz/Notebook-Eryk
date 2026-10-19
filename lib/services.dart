@@ -18,6 +18,52 @@ abstract class DictionaryRepository {
   Future<DictionaryEntry?> lookupBasic(String text);
 }
 
+const _iRowToURow = {
+  'い': 'う',
+  'き': 'く',
+  'ぎ': 'ぐ',
+  'し': 'す',
+  'ち': 'つ',
+  'に': 'ぬ',
+  'び': 'ぶ',
+  'み': 'む',
+  'り': 'る',
+};
+
+/// Thể từ điển có thể có của một động từ ở thể ます, theo thứ tự nên thử:
+/// 書きます → 書く, 書きる; 話します → 話す, 話する, 話; 食べます → 食べる.
+/// Không biết nhóm động từ nên trả về mọi khả năng để từ điển quyết định;
+/// dạng godan đứng trước để 話します không bị khớp nhầm danh từ 話.
+List<String> dictionaryFormCandidates(String word) {
+  final value = word.trim();
+  if (!value.endsWith('ます') || value.length < 3) return const [];
+  final stem = value.substring(0, value.length - 2);
+  if (stem == 'き' || stem == '来') return ['$stemる', 'くる'];
+  if (stem == 'し') return const ['する'];
+  // One-kana stems are almost always ichidan (います, みます, ねます).
+  if (stem.length == 1) return ['$stemる'];
+  final candidates = <String>[];
+  final head = stem.substring(0, stem.length - 1);
+  final godan = _iRowToURow[stem.substring(stem.length - 1)];
+  if (godan != null) candidates.add('$head$godan');
+  if (stem.endsWith('し')) {
+    candidates
+      ..add('$headする')
+      ..add(head);
+  }
+  candidates.add('$stemる');
+  return candidates.toSet().toList(growable: false);
+}
+
+/// Cách đọc AI ghi cho tiêu đề thể ます (たべます) khớp với cách đọc thể từ
+/// điển (たべる) thì không phải là sai lệch cần cảnh báo.
+bool readingsMatch(String aiReading, String dictionaryReading) {
+  String kana(String value) => value.replaceAll(RegExp(r'[\s・.]'), '');
+  final ai = kana(aiReading);
+  final dictionary = kana(dictionaryReading);
+  return ai == dictionary || dictionaryFormCandidates(ai).contains(dictionary);
+}
+
 class LocalDictionaryRepository implements DictionaryRepository {
   static const _databaseVersion = 2;
   static const _dictionaryAsset = 'assets/japanese_dictionary.sql';
@@ -270,15 +316,20 @@ class LocalDictionaryRepository implements DictionaryRepository {
     final value = text.trim().replaceAll(RegExp(r'^[〜~～]+'), '');
     if (value.isEmpty) return null;
     final db = await _database;
-    // Prefer a kanji match: a kana-only title such as かける is ambiguous.
-    for (final column in const ['kanji', 'hiragana']) {
-      final rows = await db.query(
-        'japanese_dictionary',
-        where: '$column = ?',
-        whereArgs: [value],
-        limit: 1,
-      );
-      if (rows.isNotEmpty) return _entryFromRow(rows.first);
+    // Weak-point titles keep verbs in ます form while the dictionary mostly
+    // stores the dictionary form, so try the exact title first and then its
+    // plain-form candidates.
+    for (final candidate in [value, ...dictionaryFormCandidates(value)]) {
+      // Prefer a kanji match: a kana-only title such as かける is ambiguous.
+      for (final column in const ['kanji', 'hiragana']) {
+        final rows = await db.query(
+          'japanese_dictionary',
+          where: '$column = ?',
+          whereArgs: [candidate],
+          limit: 1,
+        );
+        if (rows.isNotEmpty) return _entryFromRow(rows.first);
+      }
     }
     return null;
   }
@@ -395,6 +446,49 @@ Nhận dạng dạng đề JLPT (questionType) của từng câu rồi giải th
 - 情報検索: đối chiếu từng điều kiện trong câu hỏi với bảng/thông báo rồi loại dần.
 - その他: câu không thuộc các dạng trên.''';
 
+/// Dạng chuẩn của tiêu đề điểm yếu theo từ loại, dùng chung khi tạo mới và
+/// khi chuẩn hóa để hai luồng cho ra cùng một tiêu đề (và so trùng được).
+const weakPointTitleGuide = '''
+Dạng chuẩn của title theo từ loại (không chép nguyên dạng đã chia trong đề):
+- Động từ: thể ます (食べます, 書きます, 勉強します, 来ます).
+- Danh từ, phó từ, liên từ, cụm cố định: dạng đứng đơn (勉強, ゆっくり, しかし).
+- Tính từ い: dạng kết thúc bằng い (高い); tính từ な: bỏ な (静か).
+- kanji: chỉ chữ kanji; grammar: mẫu ngữ pháp có 〜 (〜わけではない).
+reading là cách đọc của đúng title đã chuẩn hóa (食べます → たべます).''';
+
+bool isJapaneseLanguage(String language) {
+  final value = language.trim().toLowerCase();
+  return value == '日本語' || value == 'japanese' || value == 'tiếng nhật';
+}
+
+/// Đề bài toàn tiếng Nhật kéo model trả lời luôn bằng tiếng Nhật, nên quy tắc
+/// ngôn ngữ được nhắc ở cả đầu và cuối prompt.
+String answerLanguageRule(String language) {
+  if (isJapaneseLanguage(language)) return 'Ngôn ngữ trả lời: 日本語.';
+  return 'QUY TẮC NGÔN NGỮ (bắt buộc): mọi lời giải thích, lý do, nghĩa, chỗ dễ '
+      'nhầm, mẹo nhớ và cảnh báo phải viết bằng $language. Chỉ giữ tiếng Nhật '
+      'khi chép nguyên văn đề, nội dung lựa chọn, câu ví dụ hoặc trích đúng '
+      'từ/mẫu đang nói tới. Không viết câu giải thích bằng tiếng Nhật.';
+}
+
+/// Câu "giải thích" gần như toàn kana/kanji, không có chữ Latin: dấu hiệu
+/// model đã trả lời bằng tiếng Nhật thay vì ngôn ngữ được yêu cầu.
+bool looksJapaneseOnly(String text) {
+  var japanese = 0;
+  var latin = 0;
+  for (final rune in text.runes) {
+    if ((rune >= 0x3040 && rune <= 0x30ff) ||
+        (rune >= 0x4e00 && rune <= 0x9fff)) {
+      japanese++;
+    } else if ((rune >= 0x41 && rune <= 0x5a) ||
+        (rune >= 0x61 && rune <= 0x7a) ||
+        (rune >= 0xc0 && rune <= 0x1ef9)) {
+      latin++;
+    }
+  }
+  return japanese >= 8 && latin < (japanese + latin) * .15;
+}
+
 /// Quy tắc tách đề khi vùng khoanh chứa nhiều câu hỏi.
 const multiQuestionGuide = '''
 Vùng khoanh có thể chứa NHIỀU câu hỏi (đánh số 1, 2, 問1, (1), ①...). Tách và xử lý TỪNG câu riêng theo đúng thứ tự xuất hiện; không trộn lựa chọn hay ngữ cảnh giữa các câu. Số của lựa chọn (1 2 3 4) khác số câu hỏi: nhóm 4 phương án ngắn liên tiếp là lựa chọn của câu ngay phía trên. Câu hỏi đọc hiểu dùng chung một bài đọc thì mỗi câu vẫn là một mục riêng. Nếu một câu bị cắt mất lựa chọn thì vẫn xử lý phần còn lại và ghi vào warning.''';
@@ -415,20 +509,51 @@ class OpenRouterService {
   /// Model/provider đã từ chối tham số `reasoning`; lần sau gửi không kèm.
   final Set<String> _reasoningUnsupportedModels = {};
 
+  /// Model không nhận `temperature` (GPT-5/6, Claude 5...). Với
+  /// require_parameters, gửi kèm tham số này làm OpenRouter không tìm được
+  /// provider nào và trả lỗi; model lạ được phát hiện ở lần gọi đầu.
+  final Set<String> _temperatureUnsupportedModels = {};
+
+  bool _acceptsTemperature(String modelId) {
+    final id = modelId.toLowerCase();
+    if (_temperatureUnsupportedModels.contains(modelId)) return false;
+    return !id.contains('gpt-5') &&
+        !id.contains('gpt-6') &&
+        !RegExp(r'claude-(haiku|sonnet|opus)-5').hasMatch(id);
+  }
+
   /// Ngân sách token dành riêng cho phần suy luận ẩn. Phần này được cộng vào
   /// max_tokens để suy luận không ăn mất chỗ của JSON kết quả (nguyên nhân
   /// JSON bị cắt và phải gọi lại lần hai).
-  int get _reasoningBudget => switch (reasoningEffort) {
+  int _reasoningBudget(AiReasoningEffort effort) => switch (effort) {
     AiReasoningEffort.low => 1500,
     AiReasoningEffort.medium => 5000,
     AiReasoningEffort.high => 12000,
   };
 
+  /// Mức suy luận của người dùng nhưng không vượt [cap]: tác vụ ngắn như dịch
+  /// hay giải thích không cần suy luận sâu và sẽ chậm đi hàng chục giây.
+  AiReasoningEffort _cappedEffort(AiReasoningEffort cap) =>
+      reasoningEffort.index <= cap.index ? reasoningEffort : cap;
+
+  /// null: không gửi tham số reasoning (nhanh nhất).
+  AiReasoningEffort? _effortFor(AiTask task) => switch (task) {
+    AiTask.translate || AiTask.dictionary => null,
+    AiTask.explain => _cappedEffort(AiReasoningEffort.low),
+    AiTask.createWeakPoint => _cappedEffort(AiReasoningEffort.medium),
+    AiTask.solve => reasoningEffort,
+  };
+
   Map<String, dynamic> _structuredRequestOptions(
-    _StructuredOutputSpec spec,
-  ) => {
+    _StructuredOutputSpec spec, {
+    bool preferLatency = false,
+  }) => {
     'stream': false,
-    'provider': {'require_parameters': true},
+    'provider': {
+      'require_parameters': true,
+      // Route short interactive tasks to the provider answering fastest.
+      if (preferLatency) 'sort': 'latency',
+    },
     'response_format': {
       'type': 'json_schema',
       'json_schema': {'name': spec.name, 'strict': true, 'schema': spec.schema},
@@ -445,13 +570,17 @@ class OpenRouterService {
     required double temperature,
     required int maxTokens,
     required _StructuredOutputSpec spec,
-    bool reasoning = false,
+    AiReasoningEffort? effort,
+    bool preferLatency = false,
   }) {
     // GPT-5/Luna endpoints expose max_completion_tokens and may reject
     // temperature. Omitting that unsupported parameter lets OpenRouter route
     // the request to a provider that can enforce the schema.
     final gpt5Family = modelId.toLowerCase().contains('gpt-5');
-    final tokenLimit = reasoning ? maxTokens + _reasoningBudget : maxTokens;
+    final reasoning = effort != null;
+    final tokenLimit = reasoning
+        ? maxTokens + _reasoningBudget(effort)
+        : maxTokens;
     return {
       'model': modelId,
       'messages': [
@@ -460,14 +589,14 @@ class OpenRouterService {
       ],
       // Reasoning models ignore/refuse temperature; sampling only matters
       // for non-reasoning requests.
-      if (!gpt5Family && !reasoning) 'temperature': temperature,
+      if (!reasoning && _acceptsTemperature(modelId))
+        'temperature': temperature,
       if (gpt5Family) 'max_completion_tokens': tokenLimit,
       if (!gpt5Family) 'max_tokens': tokenLimit,
       // The hidden reasoning text is never shown, so exclude it from the
       // response to save bandwidth and parsing time.
-      if (reasoning)
-        'reasoning': {'effort': reasoningEffort.name, 'exclude': true},
-      ..._structuredRequestOptions(spec),
+      if (reasoning) 'reasoning': {'effort': effort.name, 'exclude': true},
+      ..._structuredRequestOptions(spec, preferLatency: preferLatency),
     };
   }
 
@@ -482,15 +611,21 @@ class OpenRouterService {
     temperature: .2,
     maxTokens: 1000,
     spec: _quickCheckSpec,
-    reasoning: reasoning,
+    effort: reasoning ? reasoningEffort : null,
   );
 
   bool _isReasoningRejected(_HttpResult response) {
     if (response.statusCode < 400 || response.statusCode >= 500) return false;
     final detail = response.body.toLowerCase();
-    return detail.contains('reasoning') ||
-        detail.contains('no endpoints found') ||
-        detail.contains('require_parameters');
+    return detail.contains('reasoning') || _isParameterRejected(response);
+  }
+
+  bool _isParameterRejected(_HttpResult response) {
+    if (response.statusCode < 400 || response.statusCode >= 500) return false;
+    final detail = response.body.toLowerCase();
+    return detail.contains('no endpoints found') ||
+        detail.contains('require_parameters') ||
+        detail.contains('temperature');
   }
 
   /// Every AI response must pass the same strict JSON Schema validation. A
@@ -507,7 +642,8 @@ class OpenRouterService {
     required _StructuredOutputSpec spec,
     required String operation,
     bool retryRateLimit = false,
-    bool useReasoning = true,
+    AiReasoningEffort? effort,
+    bool preferLatency = false,
   }) async {
     var attempts = 0;
     var rateLimitRetries = 0;
@@ -516,7 +652,8 @@ class OpenRouterService {
           ? maxTokens
           : (maxTokens * 3 ~/ 2).clamp(maxTokens, maxTokens + 1600);
       final reasoning =
-          useReasoning && !_reasoningUnsupportedModels.contains(modelId);
+          effort != null && !_reasoningUnsupportedModels.contains(modelId);
+      final sentTemperature = !reasoning && _acceptsTemperature(modelId);
       final response = await _request(
         'POST',
         '/chat/completions',
@@ -530,7 +667,8 @@ class OpenRouterService {
             temperature: temperature,
             maxTokens: attemptMaxTokens,
             spec: spec,
-            reasoning: reasoning,
+            effort: reasoning ? effort : null,
+            preferLatency: preferLatency,
           ),
         ),
       );
@@ -539,6 +677,11 @@ class OpenRouterService {
         // while require_parameters is on. Remember it and resend without it;
         // this does not consume a schema attempt.
         _reasoningUnsupportedModels.add(modelId);
+        continue;
+      }
+      if (sentTemperature && _isParameterRejected(response)) {
+        // Same idea for sampling: resend once without temperature.
+        _temperatureUnsupportedModels.add(modelId);
         continue;
       }
       if (response.statusCode == 429 && retryRateLimit) {
@@ -693,7 +836,7 @@ class OpenRouterService {
     'questionType': _questionTypeProperty(),
     'kind': _kindProperty(),
     'title': _stringProperty(
-      'grammar: chỉ mẫu ngữ pháp (vd 〜わけではない); vocabulary: từ khóa ở dạng từ điển; kanji: chữ kanji; reading/other: tên ngắn của kỹ năng hoặc bẫy.',
+      'grammar: chỉ mẫu ngữ pháp (vd 〜わけではない); vocabulary: động từ ở thể ます (食べます), danh từ/phó từ/tính từ ở dạng đứng đơn (勉強, 高い, 静か); kanji: chữ kanji; reading/other: tên ngắn của kỹ năng hoặc bẫy.',
     ),
     'meaning': _stringProperty('Nghĩa ngắn gọn trong đúng ngữ cảnh của đề.'),
     'reading': _stringProperty(
@@ -742,47 +885,56 @@ class OpenRouterService {
     }),
   );
 
-  _StructuredOutputSpec get _quickCheckSpec => _StructuredOutputSpec(
-    'quick_check_result',
-    _objectSchema({
-      'questions': _objectArrayProperty(
-        'Mỗi câu hỏi là một mục riêng, đúng thứ tự trong đề.',
-        {
-          'label': _stringProperty('Số câu, ví dụ 1 hoặc 問3.'),
-          'questionType': _questionTypeProperty(),
-          'stem': _stringProperty(
-            'Nội dung câu hỏi nguyên văn; rút gọn bài đọc dài thành câu hỏi chính.',
-          ),
-          'choices': _objectArrayProperty(
-            'Các lựa chọn theo đúng thứ tự trong đề; mảng rỗng nếu là câu tự luận/điền từ.',
-            {
-              'label': _stringProperty(
-                'Nhãn lựa chọn như trong đề: 1, A, ア...',
-              ),
-              'text': _stringProperty('Nội dung lựa chọn.'),
-              'correct': _booleanProperty(
-                'true cho đúng một lựa chọn là đáp án.',
-              ),
-              'reason': _stringProperty(
-                'Tối đa 1 câu: vì sao đúng, hoặc vì sao người chọn nó bị sai.',
-              ),
-            },
-          ),
-          'answer': _stringProperty('Đáp án đúng dạng chữ.'),
-          'explanation': _stringProperty(
-            'Giải thích ngắn (tối đa 2 câu) theo chiến lược của dạng đề; với 文の組み立て ghi thứ tự và câu hoàn chỉnh.',
-          ),
-          'point': _stringProperty(
-            'Điểm kiến thức được kiểm tra: mẫu ngữ pháp, từ hoặc kỹ năng.',
-          ),
-          'kind': _kindProperty(),
-        },
-      ),
-      'warning': _stringProperty(
-        'Cảnh báo về OCR hoặc phần đã phục dựng; để chuỗi rỗng nếu không có.',
-      ),
-    }),
-  );
+  _StructuredOutputSpec get _quickCheckSpec => _quickCheckSpecFor('');
+
+  /// [language] được ghi thẳng vào mô tả các trường giải thích: model đọc
+  /// schema sát hơn prompt, nên đây là chỗ giữ ngôn ngữ hiệu quả nhất.
+  _StructuredOutputSpec _quickCheckSpecFor(String language) {
+    final inLanguage = language.isEmpty || isJapaneseLanguage(language)
+        ? ''
+        : ' Viết bằng $language, không viết bằng tiếng Nhật.';
+    return _StructuredOutputSpec(
+      'quick_check_result',
+      _objectSchema({
+        'questions': _objectArrayProperty(
+          'Mỗi câu hỏi là một mục riêng, đúng thứ tự trong đề.',
+          {
+            'label': _stringProperty('Số câu, ví dụ 1 hoặc 問3.'),
+            'questionType': _questionTypeProperty(),
+            'stem': _stringProperty(
+              'Nội dung câu hỏi nguyên văn; rút gọn bài đọc dài thành câu hỏi chính.',
+            ),
+            'choices': _objectArrayProperty(
+              'Các lựa chọn theo đúng thứ tự trong đề; mảng rỗng nếu là câu tự luận/điền từ.',
+              {
+                'label': _stringProperty(
+                  'Nhãn lựa chọn như trong đề: 1, A, ア...',
+                ),
+                'text': _stringProperty('Nội dung lựa chọn.'),
+                'correct': _booleanProperty(
+                  'true cho đúng một lựa chọn là đáp án.',
+                ),
+                'reason': _stringProperty(
+                  'Tối đa 1 câu: vì sao đúng, hoặc vì sao người chọn nó bị sai.$inLanguage',
+                ),
+              },
+            ),
+            'answer': _stringProperty('Đáp án đúng dạng chữ.'),
+            'explanation': _stringProperty(
+              'Giải thích ngắn (tối đa 2 câu) theo chiến lược của dạng đề; với 文の組み立て ghi thứ tự và câu hoàn chỉnh.$inLanguage',
+            ),
+            'point': _stringProperty(
+              'Điểm kiến thức được kiểm tra: mẫu ngữ pháp, từ hoặc kỹ năng.',
+            ),
+            'kind': _kindProperty(),
+          },
+        ),
+        'warning': _stringProperty(
+          'Cảnh báo về OCR hoặc phần đã phục dựng; để chuỗi rỗng nếu không có.$inLanguage',
+        ),
+      }),
+    );
+  }
 
   @visibleForTesting
   Map<String, dynamic> quickCheckRequestOptionsForTesting() =>
@@ -885,6 +1037,8 @@ class OpenRouterService {
       },
       spec: spec,
       operation: 'Yêu cầu AI',
+      effort: _effortFor(task),
+      preferLatency: task != AiTask.solve,
     );
     if (resultObject == null) {
       throw const FormatException(
@@ -904,6 +1058,8 @@ class OpenRouterService {
   /// độc lập để người học duyệt từng mục trước khi lưu. [kinds] rỗng hoặc null
   /// nghĩa là để AI tự phát hiện mọi loại. [learnerContext] mô tả người học đã
   /// chọn sai gì (từ Kiểm tra nhanh) để AI tập trung vào đúng chỗ nhầm.
+  /// [focusTerms] là các cụm người học tự tô trên OCR: khi có, AI chỉ tạo
+  /// điểm yếu cho đúng các cụm đó thay vì tự dò toàn bộ vùng.
   Future<({List<WeakPointDraft> items, String warning})>
   completeWeakPointDrafts({
     required String apiKey,
@@ -913,22 +1069,33 @@ class OpenRouterService {
     required String language,
     Set<WeaknessKind>? kinds,
     String learnerContext = '',
+    List<String> focusTerms = const [],
   }) async {
+    final focused = focusTerms.isNotEmpty;
     final kindRule = kinds == null || kinds.isEmpty
         ? 'Tự xác định loại (kind) phù hợp cho từng điểm.'
         : 'Chỉ tạo điểm yếu thuộc các loại: ${kinds.map((kind) => kind.name).join(', ')}.';
+    final scopeRule = focused
+        ? '''- Người học đã TỰ TÔ các cụm cần học (danh sách ở cuối đầu vào). Tạo đúng
+  một mục cho mỗi cụm đã tô, theo đúng thứ tự; không thêm điểm nào khác.
+  Cụm tô có thể là dạng đã chia, thiếu/thừa chữ do tô lệch: dựa vào câu chứa nó
+  để xác định đúng từ/mẫu rồi đưa title về dạng chuẩn.'''
+        : '''- Tối đa 8 mục; ưu tiên điểm quyết định đáp án và điểm dễ nhầm, bỏ qua từ
+  quá cơ bản so với trình độ $jlpt.
+- Một câu có nhiều mẫu ngữ pháp hoặc nhiều từ đáng học thì tạo nhiều mục riêng;
+  không tạo hai mục trùng nhau.''';
     final instruction =
         '''
 Bạn là giáo viên luyện thi JLPT. Người học khoanh một vùng trong vở/đề để lưu
 "điểm yếu" ôn lại bằng flashcard. Phân tích đúng nội dung đã khoanh: có thể là
 câu hỏi, các lựa chọn, đáp án hoặc một đoạn văn bất kỳ.
+${answerLanguageRule(language)}
 $multiQuestionGuide
 $jlptQuestionTypeGuide
+$weakPointTitleGuide
 Quy tắc tạo điểm yếu:
-- $kindRule Tối đa 8 mục; ưu tiên điểm quyết định đáp án và điểm dễ nhầm,
-  bỏ qua từ quá cơ bản so với trình độ $jlpt.
-- Một câu có nhiều mẫu ngữ pháp hoặc nhiều từ đáng học thì tạo nhiều mục riêng;
-  không tạo hai mục trùng nhau.
+- $kindRule
+$scopeRule
 - title phải ngắn gọn để làm mặt trước flashcard; meaning ngắn gọn đúng ngữ cảnh.
 - grammar: conjugation ghi cách nối; examples là câu mới, khác câu trong đề.
 - vocabulary/kanji: bắt buộc có reading; hanViet chỉ ghi khi chắc chắn.
@@ -941,21 +1108,30 @@ Bỏ qua nét ghi chú hoặc chữ rác rời rạc ngoài đoạn chính. Nế
 chữ nhưng ngữ cảnh đủ rõ, phục dựng phương án hợp lý nhất và ghi vào warning.
 Dòng "Lưu ý OCR:" trong đầu vào là metadata, không phải nội dung tiếng Nhật.
 Nếu không có điểm phù hợp thì để items rỗng.
-Ngôn ngữ trả lời: $language. Trình độ: $jlpt.''';
+Trình độ: $jlpt. ${answerLanguageRule(language)}''';
     final normalizedModelId = modelId.trim();
     if (normalizedModelId.isEmpty) throw ArgumentError('Chưa chọn model AI');
-    final userContent = learnerContext.trim().isEmpty
-        ? text
-        : '$text\n\nThông tin làm bài của người học:\n${learnerContext.trim()}';
+    final userContent = [
+      text,
+      if (learnerContext.trim().isNotEmpty)
+        'Thông tin làm bài của người học:\n${learnerContext.trim()}',
+      if (focused)
+        'Các cụm người học đã tô:\n${focusTerms.indexed.map((entry) => '${entry.$1 + 1}. ${entry.$2}').join('\n')}',
+    ].join('\n\n');
     final object = await _requestValidatedObject(
       apiKey: apiKey,
       modelId: normalizedModelId,
       instruction: instruction,
       userContent: userContent,
       temperature: 0.15,
-      maxTokens: 3000,
+      // A focused request only fills in known items, so it needs far fewer
+      // output tokens and almost no reasoning.
+      maxTokens: focused ? (450 * focusTerms.length).clamp(600, 3000) : 3000,
       spec: _weakPointDraftsSpec,
       operation: 'Yêu cầu AI tạo điểm yếu',
+      effort: focused
+          ? _cappedEffort(AiReasoningEffort.low)
+          : _effortFor(AiTask.createWeakPoint),
     );
     if (object == null) {
       throw const FormatException(
@@ -976,56 +1152,86 @@ Ngôn ngữ trả lời: $language. Trình độ: $jlpt.''';
     return (items: items, warning: (object['warning'] as String? ?? '').trim());
   }
 
-  /// Chuẩn hóa một mục cũ theo schema hiện tại, giữ nguyên phạm vi một mục.
-  Future<WeakPointDraft> reformatWeakPoint({
+  /// Số mục gửi trong một lần chuẩn hóa: đủ lớn để chia sẻ prompt hệ thống,
+  /// đủ nhỏ để một lỗi JSON không làm hỏng cả loạt.
+  static const reformatBatchSize = 6;
+
+  /// Chuẩn hóa một loạt mục cũ trong MỘT lần gọi AI. Trả về bản nháp theo id;
+  /// mục AI bỏ sót hoặc trả sai không có trong kết quả.
+  Future<Map<String, WeakPointDraft>> reformatWeakPoints({
     required String apiKey,
     required String modelId,
-    required WeakPoint point,
+    required List<WeakPoint> points,
     required String jlpt,
     required String language,
   }) async {
-    final source = jsonEncode({
-      'kind': point.kind.name,
-      'title': point.title,
-      'meaning': point.content,
-      'reading': point.reading,
-      'hanViet': point.hanViet,
-      'conjugation': point.conjugation,
-      'examples': point.examples,
-      'sourceSentence': point.sourceSentence,
-      'correctAnswer': point.correctAnswer,
-      'mistake': point.mistake,
-      'memoryTip': point.reminder,
-      'uncertain': point.warning,
-      'ocrText': point.ocrText,
-    });
+    if (points.isEmpty) return const {};
+    final source = jsonEncode([
+      for (final (index, point) in points.indexed)
+        {
+          'ref': '$index',
+          'kind': point.kind.name,
+          'title': point.title,
+          'meaning': point.content,
+          'reading': point.reading,
+          'hanViet': point.hanViet,
+          'conjugation': point.conjugation,
+          'examples': point.examples,
+          'sourceSentence': point.sourceSentence,
+          'correctAnswer': point.correctAnswer,
+          'mistake': point.mistake,
+          'memoryTip': point.reminder,
+          'uncertain': point.warning,
+          // The full OCR crop is only context; sending it for every item is
+          // the largest token cost, so include a short excerpt only when the
+          // item has no source sentence of its own.
+          if (point.sourceSentence.trim().isEmpty && point.ocrText.isNotEmpty)
+            'ocrExcerpt': point.ocrText.length > 240
+                ? point.ocrText.substring(0, 240)
+                : point.ocrText,
+        },
+    ]);
     final object = await _requestValidatedObject(
       apiKey: apiKey,
-      modelId: modelId,
+      modelId: modelId.trim(),
       instruction:
-          '''Bạn là giáo viên JLPT. Chuẩn hóa ĐÚNG MỘT điểm yếu cũ vào schema mới.
-Chỉ sửa nội dung sai định dạng, tách thông tin bị đặt nhầm trường, sửa lỗi OCR
-khi có bằng chứng. Giữ đúng từ/mẫu/kỹ năng gốc, không tạo điểm học khác.
-Không bịa nghĩa, cách đọc, Hán Việt hoặc ví dụ; ghi điều chưa chắc vào uncertain.
-Nếu thiếu thông tin, để trường tương ứng rỗng. Không chép ghi chú cá nhân.
-Trả về đúng một đối tượng. Ngôn ngữ: $language. Trình độ: $jlpt.''',
+          '''Bạn là giáo viên JLPT. Chuẩn hóa TỪNG điểm yếu cũ trong danh sách vào schema
+mới; mỗi mục đầu vào trả về đúng một mục với cùng ref.
+${answerLanguageRule(language)}
+$weakPointTitleGuide
+Chỉ sửa nội dung sai định dạng, đưa title về dạng chuẩn, tách thông tin bị đặt
+nhầm trường, sửa lỗi OCR khi có bằng chứng. Giữ đúng từ/mẫu/kỹ năng gốc, không
+gộp hay tạo điểm học khác. Không bịa nghĩa, cách đọc, Hán Việt hoặc ví dụ; ghi
+điều chưa chắc vào uncertain. Thiếu thông tin thì để trường tương ứng rỗng.
+questionLabel để rỗng. Trình độ: $jlpt.''',
       userContent: source,
       temperature: 0.1,
-      maxTokens: 1200,
+      maxTokens: (550 * points.length).clamp(900, 4000),
       spec: _StructuredOutputSpec(
-        'reformatted_weak_point',
-        _objectSchema(_weakPointItemProperties()),
+        'reformatted_weak_points',
+        _objectSchema({
+          'items': _objectArrayProperty('Một mục cho mỗi mục đầu vào.', {
+            'ref': _stringProperty('ref của mục đầu vào tương ứng.'),
+            ..._weakPointItemProperties(),
+          }),
+        }),
       ),
       operation: 'Chuẩn hóa điểm yếu',
+      effort: _cappedEffort(AiReasoningEffort.low),
     );
     if (object == null) {
       throw const FormatException('AI không trả về điểm yếu hợp lệ');
     }
-    final draft = WeakPointDraft.fromJson(object);
-    if (draft.title.isEmpty) {
-      throw const FormatException('Điểm yếu thiếu tiêu đề');
+    final drafts = <String, WeakPointDraft>{};
+    for (final raw in (object['items'] as List).whereType<Map>()) {
+      final item = Map<String, dynamic>.from(raw);
+      final index = int.tryParse(item['ref']?.toString() ?? '');
+      if (index == null || index < 0 || index >= points.length) continue;
+      final draft = WeakPointDraft.fromJson(item);
+      if (draft.title.isEmpty) continue;
+      drafts[points[index].id] = draft;
     }
-    return draft;
+    return drafts;
   }
 
   /// Kiểm tra nhanh: AI giải mọi câu trong vùng chọn, người học tự bấm đáp án
@@ -1041,6 +1247,7 @@ Trả về đúng một đối tượng. Ngôn ngữ: $language. Trình độ: $
         '''
 Bạn là giáo viên luyện thi JLPT, giải đề chính xác tuyệt đối. Người học đã tự làm
 các câu trong vùng khoanh và sẽ so đáp án với bạn.
+${answerLanguageRule(language)}
 $multiQuestionGuide
 $jlptQuestionTypeGuide
 Với mỗi câu: xác định questionType, chép stem và từng lựa chọn đúng thứ tự, đánh
@@ -1049,12 +1256,13 @@ explanation tối đa 2 câu, viết đơn giản cho người học $jlpt. Suy 
 trước khi chọn đáp án; nếu đề thiếu dữ kiện thì chọn phương án hợp lý nhất và ghi
 rõ vào warning. Không thêm câu hỏi không có trong đề.
 Bỏ qua nét viết tay, số trang, chữ rác. Dòng "Lưu ý OCR:" là metadata.
-Ngôn ngữ trả lời: $language.''';
+${answerLanguageRule(language)}''';
     return _requestQuickCheck(
       apiKey: apiKey,
       modelId: modelId,
       instruction: instruction,
       userContent: text,
+      language: language,
       operation: 'Kiểm tra đáp án',
     );
   }
@@ -1094,14 +1302,16 @@ $jlptQuestionTypeGuide
 Yêu cầu: 4 lựa chọn nhãn 1–4, đúng một đáp án; lựa chọn nhiễu phải hợp lý, ưu
 tiên dựa vào "Chỗ hay nhầm". Không dùng lại nguyên văn câu gốc. label là số thứ
 tự (#). point là tiêu đề điểm yếu tương ứng. reason tối đa 1 câu, explanation tối
-đa 2 câu. Ngôn ngữ giải thích: $language.''';
+đa 2 câu. ${answerLanguageRule(language)}''';
     return _requestQuickCheck(
       apiKey: apiKey,
       modelId: modelId,
       instruction: instruction,
       userContent: source,
+      language: language,
       operation: 'Tạo đề luyện tập',
       temperature: .6,
+      effort: _cappedEffort(AiReasoningEffort.medium),
     );
   }
 
@@ -1110,45 +1320,90 @@ tự (#). point là tiêu đề điểm yếu tương ứng. reason tối đa 1 
     required String modelId,
     required String instruction,
     required String userContent,
+    required String language,
     required String operation,
     double temperature = .1,
+    AiReasoningEffort? effort,
   }) async {
     final normalizedModelId = modelId.trim();
     if (normalizedModelId.isEmpty) throw ArgumentError('Chưa chọn model AI');
-    final object = await _requestValidatedObject(
-      apiKey: apiKey,
-      modelId: normalizedModelId,
-      instruction: instruction,
-      userContent: userContent,
-      temperature: temperature,
-      maxTokens: 3200,
-      spec: _quickCheckSpec,
-      operation: operation,
-    );
-    if (object == null) {
-      throw FormatException('$operation: AI trả về sai cấu trúc sau 2 lần thử');
-    }
-    final questions = (object['questions'] as List<dynamic>? ?? const [])
-        .whereType<Map>()
-        .map(
-          (item) =>
-              QuickCheckQuestion.fromJson(Map<String, dynamic>.from(item)),
-        )
-        .where(
-          (question) =>
-              question.choices.isNotEmpty || question.answer.isNotEmpty,
-        )
-        .toList(growable: false);
-    if (questions.isEmpty) {
-      throw const FormatException(
-        'Không tìm thấy câu hỏi nào trong vùng đã khoanh',
+    final spec = _quickCheckSpecFor(language);
+    Future<QuickCheckResult> request(String systemPrompt) async {
+      final object = await _requestValidatedObject(
+        apiKey: apiKey,
+        modelId: normalizedModelId,
+        instruction: systemPrompt,
+        userContent: userContent,
+        temperature: temperature,
+        maxTokens: 3200,
+        spec: spec,
+        operation: operation,
+        effort: effort ?? reasoningEffort,
+      );
+      if (object == null) {
+        throw FormatException(
+          '$operation: AI trả về sai cấu trúc sau 2 lần thử',
+        );
+      }
+      final questions = (object['questions'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) =>
+                QuickCheckQuestion.fromJson(Map<String, dynamic>.from(item)),
+          )
+          .where(
+            (question) =>
+                question.choices.isNotEmpty || question.answer.isNotEmpty,
+          )
+          .toList(growable: false);
+      if (questions.isEmpty) {
+        throw const FormatException(
+          'Không tìm thấy câu hỏi nào trong vùng đã khoanh',
+        );
+      }
+      return QuickCheckResult(
+        questions: questions,
+        warning: (object['warning'] as String? ?? '').trim(),
       );
     }
-    return QuickCheckResult(
-      questions: questions,
-      warning: (object['warning'] as String? ?? '').trim(),
-    );
+
+    final first = await request(instruction);
+    if (isJapaneseLanguage(language) || !_explainedInJapanese(first)) {
+      return first;
+    }
+    // The prompt and schema already demand the target language; one retry
+    // naming the concrete mistake fixes a model that still mirrors the
+    // Japanese of the exam text.
+    try {
+      final retried = await request(
+        '$instruction\n\nLần trước bạn đã viết explanation/reason bằng tiếng Nhật — '
+        'sai. Viết lại toàn bộ explanation, reason và warning bằng $language.',
+      );
+      return _explainedInJapanese(retried) ? first : retried;
+    } catch (_) {
+      return first;
+    }
   }
+
+  bool _explainedInJapanese(QuickCheckResult result) {
+    final texts = [
+      for (final question in result.questions) ...[
+        question.explanation,
+        for (final choice in question.choices) choice.reason,
+      ],
+    ].where((text) => text.trim().isNotEmpty).toList(growable: false);
+    if (texts.isEmpty) return false;
+    // The explanation is what the learner reads first; one in Japanese is
+    // already a failure even if the per-choice reasons came out right.
+    return result.questions.any(
+          (question) => looksJapaneseOnly(question.explanation),
+        ) ||
+        texts.where(looksJapaneseOnly).length * 2 > texts.length;
+  }
+
+  @visibleForTesting
+  bool explainedInJapaneseForTesting(QuickCheckResult result) =>
+      _explainedInJapanese(result);
 
   void dispose() => _client.close(force: true);
 
@@ -1216,7 +1471,7 @@ tự (#). point là tiêu đề điểm yếu tương ứng. reason tối đa 1 
       spec: _ocrSpec,
       operation: 'Nhận diện ảnh',
       retryRateLimit: true,
-      useReasoning: false,
+      preferLatency: true,
     );
     if (data == null) {
       throw const FormatException(
@@ -1284,7 +1539,8 @@ $jlptQuestionTypeGuide''',
 Nhiệm vụ: tra từ tiếng Nhật bằng AI cho người học $jlpt, trả lời bằng $language.
 Chỉ tra đúng từ/cụm từ người dùng đã khoanh. Nếu có nhiều cách đọc hoặc nghĩa, chọn cách thông dụng nhất và ghi các nghĩa ngắn gọn. Không tự bịa khi OCR không rõ; ghi lý do trong warning.''',
     };
-    return '$shared\n$taskPrompt';
+    if (task == AiTask.translate) return '$shared\n$taskPrompt';
+    return '$shared\n$taskPrompt\n${answerLanguageRule(language)}';
   }
 
   String _formatStructuredResult(AiTask task, String raw) {

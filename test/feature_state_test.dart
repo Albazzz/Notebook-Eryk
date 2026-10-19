@@ -17,7 +17,10 @@ void main() {
 
     expect(serviceSource, contains('_isStructuredOutputUnsupported(response)'));
     expect(serviceSource, contains('Every AI response must pass'));
-    expect(serviceSource, contains("..._structuredRequestOptions(spec)"));
+    expect(
+      serviceSource,
+      contains("..._structuredRequestOptions(spec, preferLatency"),
+    );
     expect(serviceSource, isNot(contains('compatibilityMode')));
   });
 
@@ -39,6 +42,16 @@ void main() {
     expect(plain['temperature'], isNotNull);
     expect(plain['max_tokens'], 1000);
     expect(plain.containsKey('reasoning'), isFalse);
+
+    // Claude 5 and GPT-6 reject temperature; sending it with
+    // require_parameters leaves OpenRouter without any provider.
+    for (final model in ['anthropic/claude-haiku-5.5', 'openai/gpt-6-luna']) {
+      final payload = service.chatPayloadForTesting(
+        modelId: model,
+        reasoning: false,
+      );
+      expect(payload.containsKey('temperature'), isFalse, reason: model);
+    }
   });
 
   test(
@@ -854,7 +867,7 @@ void main() {
     expect(state.strokesFor('book', 2), [otherStroke]);
   });
 
-  test('mỗi vở nhớ trang cuối và model mặc định là Luna', () {
+  test('mỗi vở nhớ trang cuối và model mặc định là Gemini Flash', () {
     final state = AppState();
     addTearDown(state.dispose);
     const notebook = NotebookData(
@@ -1028,6 +1041,153 @@ void main() {
     state.setNotebookTags('book', ['N3', ' dễ nhầm ', 'N3']);
     expect(state.notebooks.single.folderId, folder.id);
     expect(state.notebooks.single.tags, ['N3', 'dễ nhầm']);
+  });
+
+  test('old Luna default moves to Gemini once, custom models stay', () async {
+    final root = await Directory.systemTemp.createTemp('noteeryk_model_');
+    addTearDown(() => root.delete(recursive: true));
+    final originalProvider = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _TestPathProvider(root.path);
+    addTearDown(() => PathProviderPlatform.instance = originalProvider);
+    SharedPreferences.setMockInitialValues({
+      'autoSave': false,
+      'selectedModelId': 'openai/gpt-5.6-luna',
+      'selectedModelName': 'GPT-5.6 Luna',
+      'ai_model_ids': jsonEncode({
+        'translate': 'openai/gpt-5.6-luna',
+        'dictionary': 'anthropic/claude-haiku-5.5',
+      }),
+    });
+
+    final state = AppState();
+    addTearDown(state.dispose);
+    await state.initialize();
+    expect(state.selectedModelId, 'google/gemini-3.8-flash');
+    expect(state.modelIds[AiModelSlot.translate], 'google/gemini-3.8-flash');
+    expect(
+      state.modelIds[AiModelSlot.dictionary],
+      'anthropic/claude-haiku-5.5',
+    );
+    // Slots that were never assigned get the per-feature defaults.
+    expect(state.modelIds[AiModelSlot.solve], 'google/gemini-3.8-flash');
+
+    // After the one-time migration, picking Luna again is respected.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('selectedModelId', 'openai/gpt-5.6-luna');
+    await prefs.remove('ai_model_ids');
+    final again = AppState();
+    addTearDown(again.dispose);
+    await again.initialize();
+    expect(again.selectedModelId, 'openai/gpt-5.6-luna');
+  });
+
+  test('fresh install uses Haiku for AI lookup and Gemini elsewhere', () async {
+    final root = await Directory.systemTemp.createTemp('noteeryk_fresh_');
+    addTearDown(() => root.delete(recursive: true));
+    final originalProvider = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _TestPathProvider(root.path);
+    addTearDown(() => PathProviderPlatform.instance = originalProvider);
+    SharedPreferences.setMockInitialValues({'autoSave': false});
+
+    final state = AppState();
+    addTearDown(state.dispose);
+    await state.initialize();
+    expect(
+      state.modelIds[AiModelSlot.dictionary],
+      AppState.defaultDictionaryModelId,
+    );
+    for (final slot in AiModelSlot.values.where(
+      (slot) => slot != AiModelSlot.dictionary,
+    )) {
+      expect(state.modelIds[slot], AppState.defaultAiModelId, reason: '$slot');
+    }
+  });
+
+  test('ます titles map back to dictionary-form candidates', () {
+    expect(dictionaryFormCandidates('食べます'), contains('食べる'));
+    expect(dictionaryFormCandidates('書きます'), contains('書く'));
+    expect(dictionaryFormCandidates('帰ります').first, '帰る');
+    expect(dictionaryFormCandidates('勉強します'), ['勉強す', '勉強する', '勉強', '勉強しる']);
+    expect(dictionaryFormCandidates('来ます'), contains('来る'));
+    expect(dictionaryFormCandidates('勉強'), isEmpty);
+    expect(readingsMatch('たべます', 'たべる'), isTrue);
+    expect(readingsMatch('たべ ます', 'たべる'), isTrue);
+    expect(readingsMatch('のみます', 'たべる'), isFalse);
+  });
+
+  test('quick check explanations written in Japanese are detected', () {
+    final service = OpenRouterService();
+    addTearDown(service.dispose);
+    QuickCheckResult result(String explanation, String reason) =>
+        QuickCheckResult(
+          questions: [
+            QuickCheckQuestion(
+              label: '1',
+              stem: '彼は（　）来なかった。',
+              choices: [
+                QuickCheckChoice(
+                  label: '1',
+                  text: 'ついに',
+                  correct: true,
+                  reason: reason,
+                ),
+              ],
+              answer: '',
+              explanation: explanation,
+              point: 'ついに',
+              kind: WeaknessKind.vocabulary,
+            ),
+          ],
+        );
+    expect(
+      service.explainedInJapaneseForTesting(
+        result('「ついに」は最後まで期待したことが起こらない場合に使う。', '文脈に合うので正解です。'),
+      ),
+      isTrue,
+    );
+    expect(
+      service.explainedInJapaneseForTesting(
+        result(
+          '「ついに」nghĩa là "rốt cuộc", hợp với câu phủ định.',
+          'Đúng vì hợp ngữ cảnh.',
+        ),
+      ),
+      isFalse,
+    );
+    expect(looksJapaneseOnly('食べます'), isFalse); // too short to judge
+    expect(answerLanguageRule('日本語'), isNot(contains('QUY TẮC')));
+    expect(answerLanguageRule('Tiếng Việt'), contains('Tiếng Việt'));
+  });
+
+  test('format version and pen style survive JSON round trips', () {
+    final point = WeakPoint.fromJson({
+      'id': 'w',
+      'title': '食べます',
+      'kind': 'vocabulary',
+      'formatVersion': weakPointFormatVersion,
+    });
+    expect(point.isNormalized, isTrue);
+    expect(
+      WeakPoint.fromJson(point.toJson()).formatVersion,
+      weakPointFormatVersion,
+    );
+    expect(
+      WeakPoint.fromJson({'id': 'old', 'title': 'x'}).isNormalized,
+      isFalse,
+    );
+
+    final stroke = InkStroke(
+      points: const [StrokePoint(Offset.zero, 1), StrokePoint(Offset(4, 4), 1)],
+      color: const Color(0xff000000),
+      width: 3,
+      tool: EditorTool.pen,
+      createdAt: DateTime(2026),
+      penStyle: PenStyle.pencil,
+    );
+    expect(InkStroke.fromJson(stroke.toJson()).penStyle, PenStyle.pencil);
+    final legacy = Map<String, dynamic>.from(stroke.toJson())
+      ..remove('penStyle');
+    expect(InkStroke.fromJson(legacy).penStyle, PenStyle.calligraphy);
   });
 }
 

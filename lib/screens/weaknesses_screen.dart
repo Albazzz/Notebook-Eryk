@@ -46,6 +46,7 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
   bool selecting = false;
   bool _reformatting = false;
   int _reformatProgress = 0;
+  int _reformatTotal = 0;
 
   AppState get state => widget.state;
 
@@ -184,7 +185,7 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
                         ),
                         PopupMenuItem(
                           value: 'reformat',
-                          child: Text('Chuẩn hóa toàn bộ Điểm yếu'),
+                          child: Text('Chuẩn hóa Điểm yếu'),
                         ),
                       ],
                     ),
@@ -194,13 +195,11 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
               const SizedBox(height: 16),
               if (_reformatting) ...[
                 LinearProgressIndicator(
-                  value: state.weakPoints.isEmpty
+                  value: _reformatTotal == 0
                       ? null
-                      : _reformatProgress / state.weakPoints.length,
+                      : _reformatProgress / _reformatTotal,
                 ),
-                Text(
-                  'Đang chuẩn hóa $_reformatProgress/${state.weakPoints.length} mục…',
-                ),
+                Text('Đang chuẩn hóa $_reformatProgress/$_reformatTotal mục…'),
               ],
               if (state.weakPoints.isNotEmpty)
                 _StatsStrip(points: state.weakPoints),
@@ -403,32 +402,51 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
       showAppSnack(context, 'Hãy thiết lập OpenRouter trong Cài đặt AI');
       return;
     }
-    final accepted = await showDialog<bool>(
+    final pending = state.unnormalizedWeakPointCount;
+    final normalized = state.weakPoints.length - pending;
+    // 'pending': chỉ mục chưa chuẩn; 'all': làm lại cả mục đã chuẩn.
+    final choice = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Chuẩn hóa toàn bộ Điểm yếu?'),
+        title: const Text('Chuẩn hóa Điểm yếu?'),
         content: Text(
-          'AI sẽ xử lý ${state.weakPoints.length} mục và có thể mất vài phút. Nội dung học sẽ được cập nhật; ghi chú riêng, thẻ, nguồn và lịch ôn được giữ lại.',
+          [
+            pending == 0
+                ? 'Tất cả ${state.weakPoints.length} mục đã được chuẩn hóa.'
+                : '$pending mục chưa chuẩn hóa sẽ được AI xử lý theo lô.',
+            if (normalized > 0 && pending > 0)
+              '$normalized mục đã chuẩn hóa được bỏ qua để không tốn token.',
+            'Động từ đưa về thể ます, từ loại khác về dạng đứng đơn. Ghi chú riêng, thẻ, nguồn và lịch ôn được giữ lại.',
+          ].join('\n\n'),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(context),
             child: const Text('Hủy'),
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Bắt đầu'),
-          ),
+          if (normalized > 0)
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'all'),
+              child: Text('Làm lại tất cả (${state.weakPoints.length})'),
+            ),
+          if (pending > 0)
+            FilledButton(
+              onPressed: () => Navigator.pop(context, 'pending'),
+              child: Text('Chuẩn hóa $pending mục'),
+            ),
         ],
       ),
     );
-    if (accepted != true || !mounted) return;
+    if (choice == null || !mounted) return;
+    final includeNormalized = choice == 'all';
     setState(() {
       _reformatting = true;
       _reformatProgress = 0;
+      _reformatTotal = includeNormalized ? state.weakPoints.length : pending;
     });
     try {
       final result = await state.reformatAllWeakPoints(
+        includeNormalized: includeNormalized,
         onProgress: (done, _) {
           if (mounted) setState(() => _reformatProgress = done);
         },
@@ -436,7 +454,11 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
       if (mounted) {
         showAppSnack(
           context,
-          'Đã chuẩn hóa ${result.updated} mục; ${result.failed} mục cần kiểm tra lại.',
+          [
+            'Đã chuẩn hóa ${result.updated} mục',
+            if (result.failed > 0) '${result.failed} mục cần thử lại',
+            if (result.skipped > 0) 'bỏ qua ${result.skipped} mục đã chuẩn',
+          ].join(' · '),
         );
       }
     } catch (error) {

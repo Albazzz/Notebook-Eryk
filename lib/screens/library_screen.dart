@@ -501,7 +501,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     var paperStyle = PaperStyle.grid;
     var paperLineOpacity = widget.state.paperLineOpacity;
     var cover = AppColors.primary;
-    final openImporter = await showDialog<bool>(
+    final openImporter = await showDialog<_ImportSource>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => Dialog(
@@ -529,13 +529,23 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: OutlinedButton.icon(
-                      onPressed: () => Navigator.pop(context, true),
-                      icon: const Icon(Icons.file_upload_outlined),
-                      label: const Text('Nhập PDF · Word · nhiều ảnh'),
-                    ),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () =>
+                            Navigator.pop(context, _ImportSource.photos),
+                        icon: const Icon(Icons.photo_library_outlined),
+                        label: const Text('Nhập ảnh từ Photos'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () =>
+                            Navigator.pop(context, _ImportSource.files),
+                        icon: const Icon(Icons.file_upload_outlined),
+                        label: const Text('Nhập từ Tệp (PDF · Word · ảnh)'),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 8),
                   SegmentedButton<bool>(
@@ -561,7 +571,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       height: 180,
                       width: double.infinity,
                       child: OutlinedButton(
-                        onPressed: () => Navigator.pop(context, true),
+                        onPressed: () =>
+                            Navigator.pop(context, _ImportSource.files),
                         style: OutlinedButton.styleFrom(
                           backgroundColor: Theme.of(
                             context,
@@ -713,7 +724,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         onPressed: () {
                           if (importPdf) {
                             // Create the PDF notebook only after a real file is chosen.
-                            Navigator.pop(context, true);
+                            Navigator.pop(context, _ImportSource.files);
                             return;
                           }
                           final title = titleController.text.trim().isEmpty
@@ -733,7 +744,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           // Let the parent finish the dialog transition before
                           // opening the editor; this avoids replacing the route
                           // while the create dialog is still being dismissed.
-                          Navigator.pop(context, false);
+                          Navigator.pop(context);
                         },
                         child: Text(importPdf ? 'Nhập PDF' : 'Tạo vở'),
                       ),
@@ -751,7 +762,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     await Future<void>.delayed(const Duration(milliseconds: 300));
     titleController.dispose();
     if (!mounted) return;
-    if (openImporter != true) {
+    if (openImporter == null) {
       final notebook = createdNotebook;
       if (notebook == null) return;
       await WidgetsBinding.instance.endOfFrame;
@@ -762,7 +773,29 @@ class _LibraryScreenState extends State<LibraryScreen> {
       return;
     }
     await WidgetsBinding.instance.endOfFrame;
-    if (mounted) await _showImportFilesDialog();
+    if (!mounted) return;
+    if (openImporter == _ImportSource.photos) {
+      await _showImportPhotosDialog();
+    } else {
+      await _showImportFilesDialog();
+    }
+  }
+
+  /// FileType.image mở thư viện Photos (PHPicker) trên iPhone/iPad, còn
+  /// FileType.custom luôn mở app Tệp.
+  Future<void> _showImportPhotosDialog() async {
+    final result = await FilePicker.pickFiles(type: FileType.image);
+    if (!mounted || result.isEmpty) return;
+    final paths = result
+        .map((file) => file.path)
+        .whereType<String>()
+        .where((path) => File(path).existsSync())
+        .toList();
+    if (paths.isEmpty) {
+      showAppSnack(context, 'Không đọc được ảnh đã chọn');
+      return;
+    }
+    await _showImportPreview(paths);
   }
 
   Future<void> _showImportFilesDialog() async {
@@ -1757,3 +1790,5 @@ class _CreateCard extends StatelessWidget {
     ),
   );
 }
+
+enum _ImportSource { photos, files }
