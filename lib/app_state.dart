@@ -11,9 +11,11 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart' as pdfx;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'flashcard_decks.dart';
 import 'models.dart';
 import 'review.dart';
 import 'services.dart';
+import 'theme.dart';
 import 'widgets/common.dart';
 
 class AppState extends ChangeNotifier {
@@ -145,6 +147,24 @@ class AppState extends ChangeNotifier {
   final Set<String> blankPages = {};
   final Map<String, String> sourceDocuments = {};
   List<WeakPoint> weakPoints = [];
+  List<FlashcardDeck> decks = [];
+
+  /// Trộn ngẫu nhiên thứ tự thẻ khi ôn flashcard (như Quizlet).
+  bool flashcardShuffle = false;
+
+  // Cài đặt bút được nhớ giữa các lần mở vở (màu lưu ở dạng đặc, độ đậm
+  // riêng).
+  Color penColor = AppColors.ink;
+  double penOpacity = 1;
+  double penWidth = 3;
+  PenStyle penStyle = PenStyle.calligraphy;
+  Color highlightColor = const Color(0xfff4c542);
+  double highlightOpacity = .64;
+  double highlightWidth = 22;
+
+  /// Màu tự chọn gần đây, mới nhất trước.
+  List<Color> recentColors = [];
+  static const _maxRecentColors = 12;
   final ReviewScheduler reviewScheduler = const ReviewScheduler();
   Set<FlashcardField> flashcardFrontFields = {FlashcardField.word};
   Set<FlashcardField> flashcardBackFields = {
@@ -267,6 +287,9 @@ class AppState extends ChangeNotifier {
     } else {
       weakPoints = _seedWeakPoints();
     }
+    decks = _parseDecks(prefs.getString('flashcardDecks'));
+    flashcardShuffle = prefs.getBool('flashcardShuffle') ?? false;
+    _loadPenSettings(prefs);
     final storedStrokes = prefs.getString('strokes');
     if (storedStrokes != null) {
       try {
@@ -469,6 +492,7 @@ class AppState extends ChangeNotifier {
       data['sourceDocuments'] as Map? ?? {},
     );
     final rawWeakPoints = data['weakPoints'] as List?;
+    final rawDecks = data['flashcardDecks'] as List?;
     final parsedWeakPoints = rawWeakPoints == null
         ? null
         : _parseWeakPoints(rawWeakPoints);
@@ -518,6 +542,7 @@ class AppState extends ChangeNotifier {
     if (parsedWeakPoints != null) {
       weakPoints = parsedWeakPoints;
     }
+    if (rawDecks != null) decks = _parseDeckList(rawDecks);
     if (parsedLastPages != null) {
       lastPages
         ..clear()
@@ -666,6 +691,7 @@ class AppState extends ChangeNotifier {
     'sourceDocuments': Map<String, String>.of(sourceDocuments),
     'lastPages': Map<String, int>.of(lastPages),
     'weakPoints': weakPoints.map((item) => item.toJson()).toList(),
+    'flashcardDecks': decks.map((deck) => deck.toJson()).toList(),
   };
 
   void schedulePersistence() {
@@ -1366,6 +1392,7 @@ class AppState extends ChangeNotifier {
     library.putIfAbsent('sourceDocuments', () => <String, dynamic>{});
     library.putIfAbsent('lastPages', () => <String, dynamic>{});
     library.putIfAbsent('weakPoints', () => <dynamic>[]);
+    library.putIfAbsent('flashcardDecks', () => <dynamic>[]);
   }
 
   Set<String> _requiredImportedPagePaths(Map<String, dynamic> library) {
@@ -2427,6 +2454,191 @@ class AppState extends ChangeNotifier {
 
   List<({int index, WeakPoint point})> deleteWeakPoint(String id) =>
       deleteWeakPoints([id]);
+
+  List<FlashcardDeck> _parseDecks(String? raw) {
+    if (raw == null) return [];
+    try {
+      return _parseDeckList(jsonDecode(raw) as List);
+    } catch (error) {
+      debugPrint('[NoteEryk][Storage] unreadable flashcard decks: $error');
+      return [];
+    }
+  }
+
+  List<FlashcardDeck> _parseDeckList(List raw) {
+    final parsed = <FlashcardDeck>[];
+    for (final item in raw) {
+      try {
+        parsed.add(
+          FlashcardDeck.fromJson(Map<String, dynamic>.from(item as Map)),
+        );
+      } catch (error) {
+        debugPrint('[NoteEryk][Storage] skipped malformed deck: $error');
+      }
+    }
+    return parsed;
+  }
+
+  Future<void> _persistDecks() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'flashcardDecks',
+      jsonEncode(decks.map((deck) => deck.toJson()).toList()),
+    );
+  }
+
+  void _decksChanged() {
+    notifyListeners();
+    unawaited(_persistDecks());
+    schedulePersistence();
+  }
+
+  /// Thẻ của [deck] theo đúng thứ tự trong bộ; thẻ đã bị xóa được bỏ qua.
+  List<WeakPoint> pointsForDeck(FlashcardDeck deck) {
+    final byId = {for (final point in weakPoints) point.id: point};
+    return [
+      for (final id in deck.pointIds)
+        if (byId[id] != null) byId[id]!,
+    ];
+  }
+
+  /// Id các điểm yếu đã nằm trong ít nhất một bộ.
+  Set<String> get pointIdsInDecks => {
+    for (final deck in decks) ...deck.pointIds,
+  };
+
+  FlashcardDeck createDeck(String name, Iterable<WeakPoint> points) {
+    final deck = FlashcardDeck(
+      id: 'deck_${DateTime.now().microsecondsSinceEpoch}',
+      name: name.trim().isEmpty ? 'Bộ ${decks.length + 1}' : name.trim(),
+      pointIds: points.map((point) => point.id).toList(),
+      createdAt: DateTime.now(),
+    );
+    decks.add(deck);
+    _decksChanged();
+    return deck;
+  }
+
+  /// Tự chia [points] thành các bộ tối đa [maxSize] thẻ, đặt tên
+  /// "[prefix] n" nối tiếp số bộ đang có cùng tiền tố.
+  List<FlashcardDeck> createSplitDecks(
+    List<WeakPoint> points, {
+    required int maxSize,
+    bool shuffle = true,
+    String prefix = 'Bộ',
+  }) {
+    final groups = splitIntoDecks(points, maxSize, shuffle: shuffle);
+    final label = prefix.trim().isEmpty ? 'Bộ' : prefix.trim();
+    final existing = decks.where((deck) => deck.name.startsWith(label)).length;
+    final createdAt = DateTime.now();
+    final created = [
+      for (final (index, group) in groups.indexed)
+        FlashcardDeck(
+          id: 'deck_${createdAt.microsecondsSinceEpoch}_$index',
+          name: '$label ${existing + index + 1}',
+          pointIds: group.map((point) => point.id).toList(),
+          createdAt: createdAt,
+        ),
+    ];
+    decks.addAll(created);
+    _decksChanged();
+    return created;
+  }
+
+  void renameDeck(FlashcardDeck deck, String name) {
+    if (name.trim().isEmpty) return;
+    deck.name = name.trim();
+    _decksChanged();
+  }
+
+  void setDeckPoints(FlashcardDeck deck, Iterable<String> ids) {
+    deck.pointIds = ids.toList();
+    _decksChanged();
+  }
+
+  /// Xóa bộ (không xóa điểm yếu). Trả về vị trí cũ để Hoàn tác.
+  int deleteDeck(FlashcardDeck deck) {
+    final index = decks.indexOf(deck);
+    if (index < 0) return -1;
+    decks.removeAt(index);
+    _decksChanged();
+    return index;
+  }
+
+  void restoreDeck(FlashcardDeck deck, int index) {
+    if (decks.contains(deck)) return;
+    decks.insert(index.clamp(0, decks.length), deck);
+    _decksChanged();
+  }
+
+  void recordDeckSession(
+    FlashcardDeck deck,
+    DeckSession session, {
+    Iterable<String> wrongIds = const [],
+  }) {
+    deck.record(session, wrongIds);
+    _decksChanged();
+  }
+
+  void _loadPenSettings(SharedPreferences prefs) {
+    Color? color(String key) {
+      final value = prefs.getInt(key);
+      return value == null ? null : Color(value | 0xff000000);
+    }
+
+    penColor = color('penColor') ?? penColor;
+    penOpacity = (prefs.getDouble('penOpacity') ?? penOpacity).clamp(.1, 1);
+    penWidth = (prefs.getDouble('penWidth') ?? penWidth).clamp(1, 12);
+    penStyle = PenStyle.values.firstWhere(
+      (style) => style.name == prefs.getString('penStyle'),
+      orElse: () => penStyle,
+    );
+    highlightColor = color('highlightColor') ?? highlightColor;
+    highlightOpacity = (prefs.getDouble('highlightOpacity') ?? highlightOpacity)
+        .clamp(.2, .9);
+    highlightWidth = (prefs.getDouble('highlightWidth') ?? highlightWidth)
+        .clamp(10, 40);
+    recentColors = (prefs.getStringList('recentColors') ?? const [])
+        .map(int.tryParse)
+        .whereType<int>()
+        .map((value) => Color(value | 0xff000000))
+        .take(_maxRecentColors)
+        .toList();
+  }
+
+  /// Đưa [color] lên đầu danh sách màu gần đây (bỏ màu mẫu sẵn có).
+  void rememberColor(Color color, {Iterable<Color> presets = const []}) {
+    final value = color.toARGB32() | 0xff000000;
+    if (presets.any((preset) => preset.toARGB32() == value)) return;
+    recentColors
+      ..removeWhere((item) => item.toARGB32() == value)
+      ..insert(0, Color(value));
+    if (recentColors.length > _maxRecentColors) {
+      recentColors.removeRange(_maxRecentColors, recentColors.length);
+    }
+  }
+
+  Future<void> savePenSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('penColor', penColor.toARGB32());
+    await prefs.setDouble('penOpacity', penOpacity);
+    await prefs.setDouble('penWidth', penWidth);
+    await prefs.setString('penStyle', penStyle.name);
+    await prefs.setInt('highlightColor', highlightColor.toARGB32());
+    await prefs.setDouble('highlightOpacity', highlightOpacity);
+    await prefs.setDouble('highlightWidth', highlightWidth);
+    await prefs.setStringList(
+      'recentColors',
+      recentColors.map((color) => '${color.toARGB32()}').toList(),
+    );
+  }
+
+  Future<void> setFlashcardShuffle(bool value) async {
+    flashcardShuffle = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('flashcardShuffle', value);
+  }
 
   Future<void> _persistWeakPoints() async {
     final prefs = await SharedPreferences.getInstance();

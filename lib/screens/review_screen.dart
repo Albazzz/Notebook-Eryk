@@ -3,21 +3,31 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../flashcard_decks.dart';
 import '../models.dart';
 import '../review.dart';
 import '../services.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/paged_point_picker.dart';
 import '../widgets/quick_check_sheet.dart';
 import 'settings_screen.dart';
 
 /// Ôn flashcard từ điểm yếu theo lịch lặp lại ngắt quãng.
 class ReviewScreen extends StatefulWidget {
-  const ReviewScreen({super.key, required this.state, this.initialQueue});
+  const ReviewScreen({
+    super.key,
+    required this.state,
+    this.initialQueue,
+    this.deck,
+  });
   final AppState state;
 
   /// Ôn đúng các mục này (ví dụ các mục đã chọn) thay vì hàng đợi đến hạn.
   final List<WeakPoint>? initialQueue;
+
+  /// Học theo một bộ thẻ: chỉ chọn trong bộ và ghi kết quả vào báo cáo bộ.
+  final FlashcardDeck? deck;
 
   @override
   State<ReviewScreen> createState() => _ReviewScreenState();
@@ -36,8 +46,15 @@ class _ReviewScreenState extends State<ReviewScreen>
 
   /// Thẻ bấm "Quên" trong phiên được ôn lại ở cuối phiên và gợi ý luyện đề.
   final List<WeakPoint> _forgotten = [];
+  DateTime _startedAt = DateTime.now();
 
   AppState get state => widget.state;
+
+  /// Mục được phép chọn: cả sổ điểm yếu, hoặc chỉ các thẻ của bộ.
+  List<WeakPoint> get _eligible {
+    final deck = widget.deck;
+    return deck == null ? state.weakPoints : state.pointsForDeck(deck);
+  }
 
   @override
   void initState() {
@@ -46,7 +63,12 @@ class _ReviewScreenState extends State<ReviewScreen>
       vsync: this,
       duration: const Duration(milliseconds: 560),
     );
-    _queue = List.of(widget.initialQueue ?? state.dueWeakPoints);
+    _queue = List.of(
+      widget.initialQueue ??
+          (widget.deck == null
+              ? state.dueWeakPoints
+              : state.pointsForDeck(widget.deck!)),
+    );
     _selectedIds = _queue.map((point) => point.id).toSet();
   }
 
@@ -94,11 +116,29 @@ class _ReviewScreenState extends State<ReviewScreen>
       _revealed = false;
       _flipController.value = 0;
     });
+    if (_index >= _queue.length) _recordDeckSession();
+  }
+
+  void _recordDeckSession() {
+    final deck = widget.deck;
+    if (deck == null || _reviewed == 0) return;
+    state.recordDeckSession(
+      deck,
+      DeckSession(
+        at: DateTime.now(),
+        activity: DeckActivity.flashcard,
+        correct: _reviewed - _again,
+        total: _reviewed,
+        seconds: DateTime.now().difference(_startedAt).inSeconds,
+        detail: state.flashcardShuffle ? 'Trộn ngẫu nhiên' : '',
+      ),
+      wrongIds: _forgotten.map((point) => point.id),
+    );
   }
 
   void _studyAll() {
     setState(() {
-      _selectedIds = state.weakPoints.map((point) => point.id).toSet();
+      _selectedIds = _eligible.map((point) => point.id).toSet();
       _started = false;
     });
   }
@@ -117,7 +157,9 @@ class _ReviewScreenState extends State<ReviewScreen>
       showAppSnack(context, 'Không có thẻ đủ dữ liệu theo cài đặt mặt thẻ');
       return;
     }
+    if (state.flashcardShuffle) cards.shuffle();
     setState(() {
+      _startedAt = DateTime.now();
       _queue = cards;
       _index = 0;
       _revealed = false;
@@ -247,107 +289,103 @@ class _ReviewScreenState extends State<ReviewScreen>
   }
 
   Widget _buildSetup() {
-    final eligible = state.weakPoints;
+    final eligible = _eligible;
     final selected = eligible
         .where((point) => _selectedIds.contains(point.id))
         .toList();
-    final missing = selected
-        .where(
-          (point) => !canShowConfiguredFlashcard(
-            point,
-            state.flashcardFrontFields,
-            state.flashcardBackFields,
-          ),
-        )
-        .toList();
+    bool missingData(WeakPoint point) => !canShowConfiguredFlashcard(
+      point,
+      state.flashcardFrontFields,
+      state.flashcardBackFields,
+    );
+    final missing = selected.where(missingData).toList();
     final forgotten = eligible.where((point) => point.needsRevisit).toList();
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 760),
-        child: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            Text(
-              'Tạo phiên flashcard',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'Mặt trước: ${state.flashcardFrontFields.map((field) => field.label).join(', ')}',
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Mặt sau: ${state.flashcardBackFields.map((field) => field.label).join(', ')}',
-            ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: _showFlashcardSettings,
-                icon: const Icon(Icons.tune_rounded),
-                label: const Text('Tùy chỉnh mặt thẻ'),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                widget.deck == null
+                    ? 'Tạo phiên flashcard'
+                    : 'Flashcard · ${widget.deck!.name}',
+                style: Theme.of(context).textTheme.headlineMedium,
               ),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Chọn mục để học (${selected.length})',
-                    style: Theme.of(context).textTheme.titleMedium,
+              const SizedBox(height: 8),
+              Text(
+                'Mặt trước: ${state.flashcardFrontFields.map((field) => field.label).join(', ')}'
+                ' · Mặt sau: ${state.flashcardBackFields.map((field) => field.label).join(', ')}',
+              ),
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                children: [
+                  TextButton.icon(
+                    onPressed: _showFlashcardSettings,
+                    icon: const Icon(Icons.tune_rounded),
+                    label: const Text('Tùy chỉnh mặt thẻ'),
                   ),
-                ),
-                TextButton(
-                  onPressed: () => setState(
-                    () => _selectedIds = eligible
-                        .map((point) => point.id)
-                        .toSet(),
+                  FilterChip(
+                    avatar: const Icon(Icons.shuffle_rounded, size: 18),
+                    label: const Text('Trộn ngẫu nhiên'),
+                    selected: state.flashcardShuffle,
+                    onSelected: (value) async {
+                      await state.setFlashcardShuffle(value);
+                      if (mounted) setState(() {});
+                    },
                   ),
-                  child: const Text('Chọn tất cả'),
-                ),
-                TextButton(
-                  onPressed: () => setState(_selectedIds.clear),
-                  child: const Text('Bỏ chọn'),
-                ),
-              ],
-            ),
-            if (missing.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Chọn mục để học (${selected.length}/${eligible.length})',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              if (missing.isNotEmpty)
+                Text(
                   '${missing.length} mục thiếu dữ liệu theo cài đặt mặt thẻ sẽ được bỏ qua.',
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
-              ),
-            for (final point in eligible)
-              CheckboxListTile(
-                value: _selectedIds.contains(point.id),
-                title: Text(point.title),
-                subtitle: Text(
-                  point.content,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              Expanded(
+                child: PagedPointPicker(
+                  points: eligible,
+                  selectedIds: _selectedIds,
+                  isDisabled: missingData,
+                  onChanged: (ids) => setState(() => _selectedIds = ids),
                 ),
-                onChanged: (value) => setState(() {
-                  if (value == true) {
-                    _selectedIds.add(point.id);
-                  } else {
-                    _selectedIds.remove(point.id);
-                  }
-                }),
               ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: selected.isEmpty ? null : () => _startWith(selected),
-              icon: const Icon(Icons.style_outlined),
-              label: Text('Bắt đầu · ${selected.length - missing.length} thẻ'),
-            ),
-            if (forgotten.isNotEmpty)
-              OutlinedButton.icon(
-                onPressed: () => _startWith(forgotten),
-                icon: const Icon(Icons.replay),
-                label: Text('Ôn lại ${forgotten.length} thẻ chưa nhớ'),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.end,
+                children: [
+                  if (forgotten.isNotEmpty)
+                    OutlinedButton.icon(
+                      onPressed: () => _startWith(forgotten),
+                      icon: const Icon(Icons.replay),
+                      label: Text('Ôn lại ${forgotten.length} thẻ chưa nhớ'),
+                    ),
+                  FilledButton.icon(
+                    onPressed: selected.isEmpty
+                        ? null
+                        : () => _startWith(selected),
+                    icon: Icon(
+                      state.flashcardShuffle
+                          ? Icons.shuffle_rounded
+                          : Icons.style_outlined,
+                    ),
+                    label: Text(
+                      'Bắt đầu · ${selected.length - missing.length} thẻ',
+                    ),
+                  ),
+                ],
               ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -382,17 +420,18 @@ class _ReviewScreenState extends State<ReviewScreen>
             runSpacing: 10,
             alignment: WrapAlignment.center,
             children: [
-              if (state.weakPoints.isNotEmpty)
+              if (_eligible.isNotEmpty)
                 OutlinedButton.icon(
                   onPressed: _studyAll,
                   icon: const Icon(Icons.replay),
-                  label: const Text('Ôn thêm tất cả'),
-                ),
-              if (state.weakPoints.any((item) => item.needsRevisit))
-                FilledButton.icon(
-                  onPressed: () => _startWith(
-                    state.weakPoints.where((item) => item.needsRevisit),
+                  label: Text(
+                    widget.deck == null ? 'Ôn thêm tất cả' : 'Học lại cả bộ',
                   ),
+                ),
+              if (_eligible.any((item) => item.needsRevisit))
+                FilledButton.icon(
+                  onPressed: () =>
+                      _startWith(_eligible.where((item) => item.needsRevisit)),
                   icon: const Icon(Icons.replay),
                   label: const Text('Ôn lại các thẻ chưa nhớ'),
                 ),

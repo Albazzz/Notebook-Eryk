@@ -17,6 +17,7 @@ import '../app_state.dart';
 import '../models.dart';
 import '../services.dart';
 import '../theme.dart';
+import '../widgets/color_panel.dart';
 import '../widgets/common.dart';
 import '../widgets/ocr_highlight_sheet.dart';
 import '../widgets/quick_check_sheet.dart';
@@ -58,7 +59,18 @@ class _EditorScreenState extends State<EditorScreen>
   double _rulerGestureStartAngle = -.08;
   bool pageLocked = false;
   bool annotationsVisible = true;
-  int pageRotation = 0;
+
+  /// Góc xoay trang để viết (độ, 0–360). Chỉ đổi cách hiển thị; nét vẽ vẫn
+  /// lưu theo toạ độ trang nên không bị lệch khi xoay lại.
+  double pageAngle = 0;
+
+  /// Xoay bằng hai ngón chỉ bắt đầu sau khi vượt ngưỡng, để chụm/zoom không
+  /// làm trang nghiêng.
+  static const _rotationStartThreshold = 12.0;
+  static const _rotationSnap = 5.0;
+  double? _rotationStartVector;
+  double _rotationStartPageAngle = 0;
+  bool _rotationActive = false;
   double zoom = 1;
   late List<InkStroke> strokes;
   final List<List<InkStroke>> _undoStrokeHistory = [];
@@ -121,6 +133,14 @@ class _EditorScreenState extends State<EditorScreen>
     WidgetsBinding.instance.addObserver(this);
     _strokesPage = widget.state.openPage;
     _strokesNotebookId = widget.notebook.id;
+    final state = widget.state;
+    penColor = state.penColor;
+    penOpacity = state.penOpacity;
+    penWidth = state.penWidth;
+    penStyle = state.penStyle;
+    highlightColor = state.highlightColor;
+    highlightOpacity = state.highlightOpacity;
+    highlightWidth = state.highlightWidth;
     strokes = List.of(
       widget.state.strokesFor(widget.notebook.id, _strokesPage),
     );
@@ -455,6 +475,15 @@ class _EditorScreenState extends State<EditorScreen>
                                 ),
                               Positioned(
                                 right: 20,
+                                bottom: 70,
+                                child: _RotationControl(
+                                  angle: pageAngle,
+                                  enabled: !pageLocked,
+                                  onChanged: _setPageAngle,
+                                ),
+                              ),
+                              Positioned(
+                                right: 20,
                                 bottom: 18,
                                 child: _ZoomControl(
                                   zoom: zoom,
@@ -564,8 +593,8 @@ class _EditorScreenState extends State<EditorScreen>
                           : 'Đã ẩn annotations',
                     );
                   case 'rotate':
-                    setState(() => pageRotation = (pageRotation + 1) % 4);
-                    showAppSnack(context, 'Đã xoay trang');
+                    _setPageAngle(pageAngle + 90);
+                    showAppSnack(context, 'Đã xoay trang 90°');
                   case 'export':
                     _exportNotebookPdf();
                   case 'paper':
@@ -1257,7 +1286,7 @@ class _EditorScreenState extends State<EditorScreen>
                   width: targetWidth,
                   height: targetHeight,
                   child: Transform.rotate(
-                    angle: pageRotation * math.pi / 2,
+                    angle: pageAngle * math.pi / 180,
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         color: AppColors.paper,
@@ -1480,6 +1509,28 @@ class _EditorScreenState extends State<EditorScreen>
 
   int get _minimumCanvasTouches => widget.state.drawWithFinger ? 2 : 1;
 
+  static double _normalizeAngle(double degrees) {
+    final value = degrees % 360;
+    return value < 0 ? value + 360 : value;
+  }
+
+  /// Hít về 0/90/180/270° khi gần, để dễ trả trang về thẳng.
+  static double _snapAngle(double degrees) {
+    final value = _normalizeAngle(degrees);
+    final nearest = (value / 90).round() * 90.0;
+    return (value - nearest).abs() <= _rotationSnap
+        ? _normalizeAngle(nearest)
+        : value;
+  }
+
+  void _setPageAngle(double degrees) =>
+      setState(() => pageAngle = _snapAngle(degrees));
+
+  double _touchVectorAngle(List<Offset> positions) {
+    final vector = positions[1] - positions[0];
+    return math.atan2(vector.dy, vector.dx) * 180 / math.pi;
+  }
+
   void _onCanvasPointerDown(PointerDownEvent event) {
     if (event.kind != PointerDeviceKind.touch) return;
     _canvasTouches[event.pointer] = event.localPosition;
@@ -1495,6 +1546,11 @@ class _EditorScreenState extends State<EditorScreen>
     _canvasGestureStartFocal = _centroid(positions);
     _canvasGestureStartSpan = _span(positions);
     _canvasGestureReady = true;
+    _rotationStartVector = positions.length >= 2
+        ? _touchVectorAngle(positions)
+        : null;
+    _rotationStartPageAngle = pageAngle;
+    _rotationActive = false;
   }
 
   void _onCanvasPointerMove(PointerMoveEvent event) {
@@ -1533,6 +1589,22 @@ class _EditorScreenState extends State<EditorScreen>
       1,
     );
     _canvasController.value = matrix;
+    final rotationStart = _rotationStartVector;
+    if (positions.length >= 2 && rotationStart != null) {
+      final current = _touchVectorAngle(positions);
+      var delta = (current - rotationStart + 540) % 360 - 180;
+      if (!_rotationActive && delta.abs() >= _rotationStartThreshold) {
+        // Start from the current finger angle so the page does not jump by
+        // the threshold.
+        _rotationActive = true;
+        _rotationStartVector = current;
+        _rotationStartPageAngle = pageAngle;
+        delta = 0;
+      }
+      if (_rotationActive) {
+        pageAngle = _snapAngle(_rotationStartPageAngle + delta);
+      }
+    }
     if (mounted) setState(() => zoom = nextScale);
   }
 
@@ -2691,61 +2763,32 @@ class _EditorScreenState extends State<EditorScreen>
                 const SizedBox(height: 16),
               ],
               if (selectedTool != EditorTool.eraser) ...[
-                Wrap(
-                  spacing: 12,
-                  children:
-                      (selectedTool == EditorTool.pen
-                              ? [
-                                  AppColors.ink,
-                                  const Color(0xff244a98),
-                                  const Color(0xffb53a3a),
-                                  AppColors.dictionary,
-                                  const Color(0xff8a5a44),
-                                  AppColors.explain,
-                                ]
-                              : [
-                                  const Color(0x88f4c542),
-                                  const Color(0x8859ca89),
-                                  const Color(0x886aa9e9),
-                                  const Color(0x88ef83a7),
-                                  const Color(0x88a98ade),
-                                ])
-                          .map(
-                            (color) => InkWell(
-                              onTap: () {
-                                setSheetState(() {});
-                                setState(() {
-                                  if (selectedTool == EditorTool.pen) {
-                                    penColor = color;
-                                  } else {
-                                    highlightColor = color;
-                                  }
-                                });
-                              },
-                              child: CircleAvatar(
-                                backgroundColor: color,
-                                radius: 18,
-                                child:
-                                    ((selectedTool == EditorTool.pen
-                                            ? penColor
-                                            : highlightColor) ==
-                                        color)
-                                    ? const Icon(
-                                        Icons.check,
-                                        color: Colors.white,
-                                        size: 18,
-                                      )
-                                    : null,
-                              ),
-                            ),
-                          )
-                          .toList(),
-                ),
-                const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: () => _showColorPicker(selectedTool),
-                  icon: const Icon(Icons.palette_outlined),
-                  label: const Text('Chọn màu nâng cao'),
+                ColorPanel(
+                  key: ValueKey('color-panel-${selectedTool.name}'),
+                  color: selectedTool == EditorTool.pen
+                      ? penColor
+                      : highlightColor,
+                  opacity: selectedTool == EditorTool.pen
+                      ? penOpacity
+                      : highlightOpacity,
+                  minOpacity: selectedTool == EditorTool.pen ? .1 : .2,
+                  maxOpacity: selectedTool == EditorTool.pen ? 1 : .9,
+                  opacityLabel: selectedTool == EditorTool.pen
+                      ? 'Độ đậm'
+                      : 'Độ mờ',
+                  recentColors: widget.state.recentColors,
+                  onChanged: (color, opacity) {
+                    setState(() {
+                      if (selectedTool == EditorTool.pen) {
+                        penColor = color;
+                        penOpacity = opacity;
+                      } else {
+                        highlightColor = color;
+                        highlightOpacity = opacity;
+                      }
+                    });
+                    setSheetState(() {});
+                  },
                 ),
                 const SizedBox(height: 18),
               ],
@@ -2784,18 +2827,6 @@ class _EditorScreenState extends State<EditorScreen>
                 },
               ),
               if (selectedTool == EditorTool.pen) ...[
-                const Text('Độ đậm'),
-                Slider(
-                  value: penOpacity,
-                  min: .35,
-                  max: 1,
-                  divisions: 13,
-                  label: '${(penOpacity * 100).round()}%',
-                  onChanged: (value) {
-                    setState(() => penOpacity = value);
-                    setSheetState(() {});
-                  },
-                ),
                 Container(
                   width: double.infinity,
                   height: 52,
@@ -2828,18 +2859,6 @@ class _EditorScreenState extends State<EditorScreen>
                 ),
               ],
               if (selectedTool == EditorTool.highlighter) ...[
-                const Text('Độ trong suốt · chồng nét sẽ đậm hơn'),
-                Slider(
-                  value: highlightOpacity,
-                  min: .35,
-                  max: .85,
-                  divisions: 10,
-                  label: '${(highlightOpacity * 100).round()}%',
-                  onChanged: (value) {
-                    setState(() => highlightOpacity = value);
-                    setSheetState(() {});
-                  },
-                ),
                 Container(
                   width: double.infinity,
                   height: 52,
@@ -2857,7 +2876,7 @@ class _EditorScreenState extends State<EditorScreen>
                 ),
                 const SizedBox(height: 6),
                 const Text(
-                  'Đầu dẹt vát 45° · không đổi độ rộng theo lực bút',
+                  'Đầu dẹt vát 45° · chồng nét sẽ đậm hơn',
                   style: TextStyle(fontSize: 12, color: Colors.black54),
                 ),
               ],
@@ -2879,85 +2898,25 @@ class _EditorScreenState extends State<EditorScreen>
         ),
       ),
     );
+    if (selectedTool != EditorTool.eraser) _savePenDefaults(selectedTool);
   }
 
-  Future<void> _showColorPicker(EditorTool selectedTool) async {
-    final initial = selectedTool == EditorTool.highlighter
-        ? highlightColor
-        : penColor;
-    final picked = await showDialog<Color>(
-      context: context,
-      builder: (context) {
-        var hsv = HSVColor.fromColor(initial);
-        return StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: const Text('Chọn màu'),
-            content: SizedBox(
-              width: 380,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: double.infinity,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      color: hsv.toColor(),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  _ColorSlider(
-                    label: 'Sắc độ',
-                    value: hsv.hue,
-                    min: 0,
-                    max: 360,
-                    color: HSVColor.fromAHSV(1, hsv.hue, 1, 1).toColor(),
-                    onChanged: (value) =>
-                        setDialogState(() => hsv = hsv.withHue(value)),
-                  ),
-                  _ColorSlider(
-                    label: 'Độ bão hòa',
-                    value: hsv.saturation,
-                    min: 0,
-                    max: 1,
-                    color: hsv.toColor(),
-                    onChanged: (value) =>
-                        setDialogState(() => hsv = hsv.withSaturation(value)),
-                  ),
-                  _ColorSlider(
-                    label: 'Độ sáng',
-                    value: hsv.value,
-                    min: 0,
-                    max: 1,
-                    color: hsv.toColor(),
-                    onChanged: (value) =>
-                        setDialogState(() => hsv = hsv.withValue(value)),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Hủy'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, hsv.toColor()),
-                child: const Text('Dùng màu này'),
-              ),
-            ],
-          ),
-        );
-      },
+  /// Màu, độ đậm, độ dày và kiểu bút vừa chỉnh trở thành mặc định cho các
+  /// lần mở vở sau; màu tự chọn được thêm vào "Màu đã dùng gần đây".
+  void _savePenDefaults(EditorTool selectedTool) {
+    final state = widget.state
+      ..penColor = penColor
+      ..penOpacity = penOpacity
+      ..penWidth = penWidth
+      ..penStyle = penStyle
+      ..highlightColor = highlightColor
+      ..highlightOpacity = highlightOpacity
+      ..highlightWidth = highlightWidth;
+    state.rememberColor(
+      selectedTool == EditorTool.pen ? penColor : highlightColor,
+      presets: colorPanelPresets,
     );
-    if (!mounted || picked == null) return;
-    setState(() {
-      if (selectedTool == EditorTool.highlighter) {
-        highlightColor = picked.withValues(alpha: 1);
-      } else {
-        penColor = picked.withValues(alpha: 1);
-      }
-    });
+    unawaited(state.savePenSettings());
   }
 
   void _eraseNear(Offset point) {
@@ -3992,42 +3951,6 @@ class _ToolButton extends StatelessWidget {
       ),
     );
   }
-}
-
-class _ColorSlider extends StatelessWidget {
-  const _ColorSlider({
-    required this.label,
-    required this.value,
-    required this.min,
-    required this.max,
-    required this.color,
-    required this.onChanged,
-  });
-  final String label;
-  final double value;
-  final double min;
-  final double max;
-  final Color color;
-  final ValueChanged<double> onChanged;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(label, style: const TextStyle(fontSize: 12)),
-      SliderTheme(
-        data: SliderTheme.of(
-          context,
-        ).copyWith(activeTrackColor: color, thumbColor: color),
-        child: Slider(
-          value: value.clamp(min, max),
-          min: min,
-          max: max,
-          onChanged: onChanged,
-        ),
-      ),
-    ],
-  );
 }
 
 Color _toolColor(EditorTool tool) => switch (tool) {
@@ -5572,6 +5495,55 @@ class _ErrorCard extends StatelessWidget {
       ),
     ),
   );
+}
+
+class _RotationControl extends StatelessWidget {
+  const _RotationControl({
+    required this.angle,
+    required this.enabled,
+    required this.onChanged,
+  });
+  final double angle;
+  final bool enabled;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    // Show -15° rather than 345° for small counter-clockwise tilts.
+    final shown = angle > 180 ? angle - 360 : angle;
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(20),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: 'Xoay trái 15°',
+            onPressed: enabled ? () => onChanged(angle - 15) : null,
+            icon: const Icon(Icons.rotate_left_rounded, size: 18),
+          ),
+          SizedBox(
+            width: 42,
+            child: Text(
+              '${shown.round()}°',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Xoay phải 15°',
+            onPressed: enabled ? () => onChanged(angle + 15) : null,
+            icon: const Icon(Icons.rotate_right_rounded, size: 18),
+          ),
+          IconButton(
+            tooltip: 'Trả trang về thẳng',
+            onPressed: enabled && angle != 0 ? () => onChanged(0) : null,
+            icon: const Icon(Icons.crop_rotate_rounded, size: 18),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _ZoomControl extends StatelessWidget {

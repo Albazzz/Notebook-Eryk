@@ -23,6 +23,8 @@ APK debug được tạo tại `build/app/outputs/flutter-apk/app-debug.apk`.
 
 - Thư viện vở, tạo vở và luồng nhập PDF; nhập ảnh trực tiếp từ Photos hoặc từ app Tệp.
 - Editor tablet với page rail, Pen (thư pháp, bút máy, bút bi, bút dạ, bút chì) làm mượt, pressure, Highlight, Tẩy, Thước, undo/redo, zoom và lưu stroke vector.
+- Bảng màu cho Bút/Highlight: R/G/B, mã hex, màu mẫu, màu đã dùng gần đây, vòng sắc độ và độ đậm; màu, độ đậm, độ dày và kiểu bút được nhớ làm mặc định.
+- Xoay trang tự do bằng hai ngón (hít về 0/90/180/270°) hoặc nút xoay ±15° cạnh nút zoom.
 - Chạm đồng thời hai ngón trên canvas để hoàn tác nét vừa vẽ.
 - Gesture vùng chọn riêng cho Tra từ, AI Dịch, AI Giải thích và Điểm yếu; kết quả AI là popup có thể kéo và đóng.
 - Tra từ ngoại tuyến qua `DictionaryRepository`, tách khỏi AI.
@@ -35,6 +37,9 @@ APK debug được tạo tại `build/app/outputs/flutter-apk/app-debug.apk`.
   - Gặp lại điểm đã lưu thì không tạo bản trùng mà đưa về ôn ngay.
   - Chọn nhiều, vuốt để xóa kèm Hoàn tác, sắp xếp/lọc theo loại, JLPT, dạng đề, đến hạn.
 - Kiểm tra nhanh đáp án: khoanh một hoặc nhiều câu, bấm đáp án của mình ngay trong lúc AI giải, app chấm tại chỗ và lưu câu sai thành điểm yếu.
+- Danh sách chọn thẻ chia trang 10 mục, vuốt ngang để sang trang; tùy chọn trộn ngẫu nhiên thứ tự thẻ.
+- Thư viện bộ flashcard: tạo bộ từ mục đã chọn hoặc tự chia theo số thẻ tối đa (có trộn ngẫu nhiên), gợi ý bộ nên học hôm nay, báo cáo từng bộ (đã thuộc, đến hạn, điểm Quiz, thẻ hay sai, lịch sử học).
+- Quiz trắc nghiệm theo bộ: hỏi bằng Hán Việt/Nghĩa/Kanji/Cách đọc và chọn đáp án theo một trường khác (hoặc ngẫu nhiên), làm lại câu sai.
 - Ôn tập flashcard theo lịch lặp lại ngắt quãng (Quên/Khó/Được/Dễ), thẻ điền chỗ trống cho ngữ pháp, luyện đề AI từ các điểm hay quên, xuất TSV cho Anki (Tệp › Note Eryk › Exports).
 - Mức suy luận AI (Nhanh/Cân bằng/Kỹ) trong Cài đặt AI; mặc định Kỹ (high). Dịch và tra từ AI không dùng suy luận, Giải thích tối đa mức Nhanh, chỉ Kiểm tra nhanh dùng đúng mức đã chọn.
 - Light/dark mode và layout thích nghi tablet/khổ hẹp.

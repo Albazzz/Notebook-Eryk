@@ -7,6 +7,7 @@ import '../models.dart';
 import '../review.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'deck_library_screen.dart';
 import 'review_screen.dart';
 
 enum _WeaknessSort { newest, oldest, title, notebook, due, lapses }
@@ -142,6 +143,19 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
                       icon: const Icon(Icons.style_outlined),
                       label: Text(
                         dueCount == 0 ? 'Ôn tập' : 'Ôn tập ($dueCount)',
+                      ),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => DeckLibraryScreen(state: state),
+                        ),
+                      ),
+                      icon: const Icon(Icons.collections_bookmark_outlined),
+                      label: Text(
+                        state.decks.isEmpty
+                            ? 'Bộ flashcard'
+                            : 'Bộ flashcard (${state.decks.length})',
                       ),
                     ),
                     SearchBox(
@@ -359,6 +373,11 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
             label: const Text('Ôn các mục này'),
           ),
           TextButton.icon(
+            onPressed: chosen.isEmpty ? null : () => _createDeckFrom(chosen),
+            icon: const Icon(Icons.collections_bookmark_outlined),
+            label: const Text('Tạo bộ'),
+          ),
+          TextButton.icon(
             onPressed: chosen.isEmpty ? null : () => _exportAnki(chosen),
             icon: const Icon(Icons.ios_share_outlined),
             label: const Text('Xuất Anki'),
@@ -379,6 +398,51 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
             child: const Text('Xong'),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _createDeckFrom(List<WeakPoint> points) async {
+    final controller = TextEditingController(
+      text: 'Bộ ${state.decks.length + 1}',
+    );
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Tạo bộ từ ${points.length} mục'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Tên bộ'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: const Text('Tạo bộ'),
+          ),
+        ],
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    controller.dispose();
+    if (name == null || !mounted) return;
+    final deck = state.createDeck(name, points);
+    setState(() {
+      selecting = false;
+      selected.clear();
+    });
+    showAppSnack(
+      context,
+      'Đã tạo ${deck.name} (${points.length} thẻ)',
+      actionLabel: 'Mở',
+      onAction: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => DeckDetailScreen(state: state, deck: deck),
+        ),
       ),
     );
   }

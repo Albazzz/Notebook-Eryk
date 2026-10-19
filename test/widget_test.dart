@@ -9,6 +9,7 @@ import 'package:noteeryk/models.dart';
 import 'package:noteeryk/review.dart';
 import 'package:noteeryk/screens/settings_screen.dart';
 import 'package:flutter/rendering.dart';
+import 'package:noteeryk/widgets/color_panel.dart';
 import 'package:noteeryk/widgets/ocr_highlight_sheet.dart';
 import 'package:noteeryk/widgets/quick_check_sheet.dart';
 
@@ -473,6 +474,77 @@ void main() {
 
     expect(controller.value.storage, equals(beforePencil));
     expect(state.strokesFor('n3', 1), hasLength(1));
+  });
+
+  testWidgets('xoay trang theo góc và trả về thẳng', (tester) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    state.open(state.notebooks.first, page: 1);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    expect(find.text('0°'), findsOneWidget);
+    await tester.tap(find.byTooltip('Xoay phải 15°'));
+    await tester.pump();
+    expect(find.text('15°'), findsOneWidget);
+    await tester.tap(find.byTooltip('Xoay trái 15°'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Xoay trái 15°'));
+    await tester.pump();
+    expect(find.text('-15°'), findsOneWidget);
+    await tester.tap(find.byTooltip('Trả trang về thẳng'));
+    await tester.pump();
+    expect(find.text('0°'), findsOneWidget);
+  });
+
+  testWidgets('bảng màu nhận mã hex, màu mẫu và độ đậm', (tester) async {
+    tester.view.physicalSize = const Size(900, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    Color? picked;
+    double? opacity;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: SizedBox(
+              width: 420,
+              child: ColorPanel(
+                color: const Color(0xff1f2633),
+                opacity: 1,
+                onChanged: (color, value) {
+                  picked = color;
+                  opacity = value;
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('color-panel-hex')),
+      '66CC99',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(picked?.toARGB32(), 0xff66cc99);
+    expect(find.text('102'), findsOneWidget); // R
+    expect(find.text('204'), findsOneWidget); // G
+
+    // Drag the opacity thumb to the far left.
+    final slider = find.byKey(const ValueKey('color-panel-opacity'));
+    await tester.tapAt(tester.getTopLeft(slider) + const Offset(1, 14));
+    await tester.pump();
+    expect(opacity, closeTo(.1, .01));
+    expect(find.text('10%'), findsOneWidget);
   });
 
   testWidgets('chỉ điều hướng trang từ hai vùng mép ngoài', (tester) async {
