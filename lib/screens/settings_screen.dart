@@ -7,6 +7,7 @@ import '../models.dart';
 import '../review.dart';
 import '../shared_import_service.dart';
 import '../theme.dart';
+import '../widgets/color_panel.dart';
 import '../widgets/common.dart';
 
 enum _SettingsSection { general, flashcards, pencil, ai, privacy, about }
@@ -231,28 +232,22 @@ class _GeneralSettings extends StatelessWidget {
               trailing: Icon(Icons.chevron_right),
             ),
             const Divider(),
-            ListTile(
+            const ListTile(
               contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.grid_4x4_rounded),
-              title: const Text(
-                'Độ đậm đường kẻ mặc định',
+              leading: Icon(Icons.grid_4x4_rounded),
+              title: Text(
+                'Màu đường kẻ mặc định',
                 style: TextStyle(fontWeight: FontWeight.w700),
               ),
-              subtitle: Slider(
-                value: state.paperLineOpacity,
-                min: .03,
-                max: .35,
-                divisions: 32,
-                label: '${(state.paperLineOpacity * 100).round()}%',
-                onChanged: state.setPaperLineOpacity,
-              ),
-              trailing: SizedBox(
-                width: 46,
-                child: Text(
-                  '${(state.paperLineOpacity * 100).round()}%',
-                  textAlign: TextAlign.end,
-                ),
-              ),
+              subtitle: Text('Áp dụng cho vở tạo mới'),
+            ),
+            ColorPanel(
+              color: state.paperLineColor,
+              opacity: state.paperLineOpacity,
+              minOpacity: .03,
+              maxOpacity: .6,
+              wheelSize: 170,
+              onChanged: state.setPaperLine,
             ),
             const Divider(),
             SwitchListTile(
@@ -422,6 +417,22 @@ class _PencilSettings extends StatelessWidget {
               value: state.autoReturnToPenAfterAssistiveTool,
               onChanged: (value) {
                 state.autoReturnToPenAfterAssistiveTool = value;
+                state.saveGeneralSettings();
+              },
+            ),
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              title: const Text(
+                'Tự về bút sau khi tẩy',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: const Text(
+                'Nhấc bút khỏi màn hình sau khi tẩy thì tự chuyển lại về Bút',
+              ),
+              secondary: const Icon(Icons.auto_fix_off_outlined),
+              value: state.returnToPenAfterEraser,
+              onChanged: (value) {
+                state.returnToPenAfterEraser = value;
                 state.saveGeneralSettings();
               },
             ),

@@ -41,6 +41,7 @@ class AppState extends ChangeNotifier {
     EditorTool.pen,
     EditorTool.highlighter,
     EditorTool.eraser,
+    EditorTool.lasso,
     EditorTool.ruler,
     EditorTool.image,
     EditorTool.dictionary,
@@ -55,7 +56,10 @@ class AppState extends ChangeNotifier {
   /// Tools added after a user may already have saved a custom toolbar. They
   /// are shown once so existing users discover them; removing them later is
   /// respected because the introduction flag is stored.
-  static const _introducedToolbarTools = <EditorTool>[EditorTool.quickCheck];
+  static const _introducedToolbarTools = <EditorTool>[
+    EditorTool.quickCheck,
+    EditorTool.lasso,
+  ];
   static const _keyStorageName = 'openrouter_api_key';
   static const _modelIdsStorageName = 'ai_model_ids';
   static const _modelNamesStorageName = 'ai_model_names';
@@ -82,7 +86,11 @@ class AppState extends ChangeNotifier {
   bool palmRejection = true;
   bool doubleTapEraser = true;
   bool autoReturnToPenAfterAssistiveTool = false;
+
+  /// Nhấc bút sau khi tẩy thì tự chuyển lại về Bút.
+  bool returnToPenAfterEraser = false;
   double paperLineOpacity = .09;
+  Color paperLineColor = defaultPaperLineColor;
   String studentName = 'Eryk';
   String jlpt = 'N3';
   String explanationLanguage = 'Tiếng Việt';
@@ -162,6 +170,10 @@ class AppState extends ChangeNotifier {
   double highlightOpacity = .64;
   double highlightWidth = 22;
 
+  /// Kích thước trang trong editor (toạ độ nét vẽ tính theo khung này).
+  /// Bìa vở dùng nó để thu nhỏ nét đúng tỉ lệ.
+  Size pageCanvasSize = const Size(554.4, 770);
+
   /// Màu tự chọn gần đây, mới nhất trước.
   List<Color> recentColors = [];
   static const _maxRecentColors = 12;
@@ -201,9 +213,13 @@ class AppState extends ChangeNotifier {
     doubleTapEraser = prefs.getBool('doubleTapEraser') ?? true;
     autoReturnToPenAfterAssistiveTool =
         prefs.getBool('autoReturnToPenAfterAssistiveTool') ?? false;
+    returnToPenAfterEraser = prefs.getBool('returnToPenAfterEraser') ?? false;
     paperLineOpacity = (prefs.getDouble('paperLineOpacity') ?? .09).clamp(
       .03,
-      .35,
+      .6,
+    );
+    paperLineColor = Color(
+      prefs.getInt('paperLineColor') ?? defaultPaperLineColor.toARGB32(),
     );
     studentName = prefs.getString('studentName') ?? 'Eryk';
     jlpt = prefs.getString('jlpt') ?? 'N3';
@@ -290,6 +306,11 @@ class AppState extends ChangeNotifier {
     decks = _parseDecks(prefs.getString('flashcardDecks'));
     flashcardShuffle = prefs.getBool('flashcardShuffle') ?? false;
     _loadPenSettings(prefs);
+    final pageWidth = prefs.getDouble('pageCanvasWidth');
+    final pageHeight = prefs.getDouble('pageCanvasHeight');
+    if (pageWidth != null && pageHeight != null && pageWidth > 0) {
+      pageCanvasSize = Size(pageWidth, pageHeight);
+    }
     final storedStrokes = prefs.getString('strokes');
     if (storedStrokes != null) {
       try {
@@ -2633,6 +2654,23 @@ class AppState extends ChangeNotifier {
     );
   }
 
+  /// Editor báo kích thước trang khi bố cục thay đổi; chỉ lưu khi khác
+  /// đáng kể để không ghi liên tục.
+  void rememberPageCanvasSize(Size size) {
+    if (size.width <= 0 ||
+        ((size.width - pageCanvasSize.width).abs() < 1 &&
+            (size.height - pageCanvasSize.height).abs() < 1)) {
+      return;
+    }
+    pageCanvasSize = size;
+    unawaited(
+      SharedPreferences.getInstance().then((prefs) async {
+        await prefs.setDouble('pageCanvasWidth', size.width);
+        await prefs.setDouble('pageCanvasHeight', size.height);
+      }),
+    );
+  }
+
   Future<void> setFlashcardShuffle(bool value) async {
     flashcardShuffle = value;
     notifyListeners();
@@ -2661,7 +2699,9 @@ class AppState extends ChangeNotifier {
       'autoReturnToPenAfterAssistiveTool',
       autoReturnToPenAfterAssistiveTool,
     );
+    await prefs.setBool('returnToPenAfterEraser', returnToPenAfterEraser);
     await prefs.setDouble('paperLineOpacity', paperLineOpacity);
+    await prefs.setInt('paperLineColor', paperLineColor.toARGB32());
     await prefs.setStringList(
       'editorToolbarTools',
       toolbarTools.map((tool) => tool.name).toList(),
@@ -2920,7 +2960,15 @@ class AppState extends ChangeNotifier {
   }
 
   void setPaperLineOpacity(double value) {
-    paperLineOpacity = value.clamp(.03, .35);
+    paperLineOpacity = value.clamp(.03, .6);
+    notifyListeners();
+    saveGeneralSettings();
+  }
+
+  /// Màu và độ đậm đường kẻ mặc định cho vở mới.
+  void setPaperLine(Color color, double opacity) {
+    paperLineColor = color.withValues(alpha: 1);
+    paperLineOpacity = opacity.clamp(.03, .6);
     notifyListeners();
     saveGeneralSettings();
   }

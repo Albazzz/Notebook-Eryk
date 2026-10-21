@@ -21,9 +21,11 @@ APK debug được tạo tại `build/app/outputs/flutter-apk/app-debug.apk`.
 
 ## Chức năng đã có
 
-- Thư viện vở, tạo vở và luồng nhập PDF; nhập ảnh trực tiếp từ Photos hoặc từ app Tệp.
+- Thư viện vở hiển thị bìa là ảnh thu nhỏ trang 1 (trang PDF, ảnh, giấy kẻ và nét viết tay); tạo vở và luồng nhập PDF; nhập ảnh trực tiếp từ Photos hoặc từ app Tệp.
 - Editor tablet với page rail, Pen (thư pháp, bút máy, bút bi, bút dạ, bút chì) làm mượt, pressure, Highlight, Tẩy, Thước, undo/redo, zoom và lưu stroke vector.
-- Bảng màu cho Bút/Highlight: R/G/B, mã hex, màu mẫu, màu đã dùng gần đây, vòng sắc độ và độ đậm; màu, độ đậm, độ dày và kiểu bút được nhớ làm mặc định.
+- Bảng màu gọn cho Bút/Highlight: màu mẫu, màu đã dùng gần đây, độ đậm, độ dày, làm mượt bên trái và vòng sắc độ bên phải; màu, độ đậm, độ dày và kiểu bút được nhớ làm mặc định. Đường kẻ giấy cũng chọn màu + độ đậm bằng bảng này.
+- Công cụ Khoanh vùng: khoanh các nét mực rồi kéo để di chuyển hoặc xóa (có hoàn tác).
+- Tùy chọn "Tự về bút sau khi tẩy" trong Cài đặt.
 - Xoay trang tự do bằng hai ngón (hít về 0/90/180/270°) hoặc nút xoay ±15° cạnh nút zoom.
 - Chạm đồng thời hai ngón trên canvas để hoàn tác nét vừa vẽ.
 - Gesture vùng chọn riêng cho Tra từ, AI Dịch, AI Giải thích và Điểm yếu; kết quả AI là popup có thể kéo và đóng.
@@ -43,6 +45,10 @@ APK debug được tạo tại `build/app/outputs/flutter-apk/app-debug.apk`.
 - Ôn tập flashcard theo lịch lặp lại ngắt quãng (Quên/Khó/Được/Dễ), thẻ điền chỗ trống cho ngữ pháp, luyện đề AI từ các điểm hay quên, xuất TSV cho Anki (Tệp › Note Eryk › Exports).
 - Mức suy luận AI (Nhanh/Cân bằng/Kỹ) trong Cài đặt AI; mặc định Kỹ (high). Dịch và tra từ AI không dùng suy luận, Giải thích tối đa mức Nhanh, chỉ Kiểm tra nhanh dùng đúng mức đã chọn.
 - Light/dark mode và layout thích nghi tablet/khổ hẹp.
+
+## Dữ liệu từ điển
+
+Nguồn từ vựng/ngữ pháp được copy vào `data/sources/` (từ dự án AIcall). Hướng dẫn dựng lại `assets/japanese_dictionary.sql` cho agent khác nằm ở `data/PROMPT_ANTIGRAVITY.md`. Khi đổi asset, tăng `_databaseVersion` trong `lib/services.dart` để app nạp lại bảng.
 
 ## Điểm tích hợp cần dữ liệu/native service
 

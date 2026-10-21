@@ -2,14 +2,13 @@ import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 /// Màu mẫu cố định của bảng màu (hàng swatch đầu tiên).
 const colorPanelPresets = <Color>[
   Color(0xff1f2633),
   Color(0xff000000),
   Color(0xff5f6368),
-  Color(0xffffffff),
+  Color(0xff758ab4),
   Color(0xffc8453b),
   Color(0xffe8710a),
   Color(0xfff4c542),
@@ -24,8 +23,9 @@ const colorPanelPresets = <Color>[
   Color(0xffef83a7),
 ];
 
-/// Bảng màu kiểu ứng dụng vẽ: xem trước màu mới/cũ, thanh R/G/B, mã hex,
-/// màu mẫu + màu gần đây, vòng sắc độ với ô bão hòa/độ sáng và độ mờ.
+/// Bảng màu gọn: màu mẫu + màu gần đây, thanh độ đậm và các điều khiển
+/// riêng của công cụ ([sideChildren]) ở cột trái; vòng sắc độ quanh ô bão
+/// hòa/độ sáng ở cột phải. Màn hẹp thì xếp dọc.
 /// [color] là màu đặc (alpha bỏ qua), [opacity] là độ đậm 0..1.
 class ColorPanel extends StatefulWidget {
   const ColorPanel({
@@ -37,6 +37,8 @@ class ColorPanel extends StatefulWidget {
     this.minOpacity = .1,
     this.maxOpacity = 1,
     this.opacityLabel = 'Độ đậm',
+    this.sideChildren = const [],
+    this.wheelSize = 220,
   });
 
   final Color color;
@@ -47,39 +49,24 @@ class ColorPanel extends StatefulWidget {
   final double maxOpacity;
   final String opacityLabel;
 
+  /// Điều khiển thêm đặt dưới thanh độ đậm (độ dày, làm mượt, xem trước...).
+  final List<Widget> sideChildren;
+  final double wheelSize;
+
   @override
   State<ColorPanel> createState() => _ColorPanelState();
 }
 
 class _ColorPanelState extends State<ColorPanel> {
   late HSVColor _hsv = HSVColor.fromColor(widget.color.withValues(alpha: 1));
-  late double _opacity = widget.opacity;
-  late final Color _original = widget.color.withValues(alpha: 1);
-  late final TextEditingController _hex = TextEditingController(
-    text: _hexOf(_hsv.toColor()),
+  late double _opacity = widget.opacity.clamp(
+    widget.minOpacity,
+    widget.maxOpacity,
   );
-  final FocusNode _hexFocus = FocusNode();
-
-  @override
-  void dispose() {
-    _hex.dispose();
-    _hexFocus.dispose();
-    super.dispose();
-  }
-
-  static int _channel(double value) => (value * 255).round().clamp(0, 255);
-
-  static String _hexOf(Color color) => [color.r, color.g, color.b]
-      .map((value) => _channel(value).toRadixString(16).padLeft(2, '0'))
-      .join()
-      .toUpperCase();
 
   Color get _color => _hsv.toColor();
 
-  void _emit() {
-    if (!_hexFocus.hasFocus) _hex.text = _hexOf(_color);
-    widget.onChanged(_color, _opacity);
-  }
+  void _emit() => widget.onChanged(_color, _opacity);
 
   void _setHsv(HSVColor value) {
     setState(() => _hsv = value);
@@ -92,286 +79,107 @@ class _ColorPanelState extends State<ColorPanel> {
     _setHsv(next.saturation == 0 ? next.withHue(_hsv.hue) : next);
   }
 
-  void _setChannel(int index, double value) {
-    final color = _color;
-    final channels = [color.r, color.g, color.b]..[index] = value;
-    _setColor(
-      Color.from(
-        alpha: 1,
-        red: channels[0],
-        green: channels[1],
-        blue: channels[2],
+  Widget _opacityRow(Color color) => Row(
+    children: [
+      SizedBox(
+        width: 64,
+        child: Text(
+          widget.opacityLabel,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
       ),
-    );
-  }
-
-  void _onHexSubmitted(String raw) {
-    final value = raw.replaceAll('#', '').trim();
-    final parsed = int.tryParse(value, radix: 16);
-    if (value.length == 6 && parsed != null) {
-      _setColor(Color(0xff000000 | parsed));
-    } else {
-      _hex.text = _hexOf(_color);
-    }
-  }
+      Expanded(
+        child: _GradientSlider(
+          key: const ValueKey('color-panel-opacity'),
+          value:
+              ((_opacity - widget.minOpacity) /
+                      (widget.maxOpacity - widget.minOpacity))
+                  .clamp(0.0, 1.0),
+          colors: [
+            color.withValues(alpha: widget.minOpacity),
+            color.withValues(alpha: widget.maxOpacity),
+          ],
+          checkerboard: true,
+          onChanged: (value) {
+            setState(
+              () => _opacity =
+                  widget.minOpacity +
+                  value * (widget.maxOpacity - widget.minOpacity),
+            );
+            _emit();
+          },
+        ),
+      ),
+      SizedBox(
+        width: 44,
+        child: Text(
+          '${(_opacity * 100).round()}%',
+          textAlign: TextAlign.end,
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+      ),
+    ],
+  );
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final color = _color;
-    final channelColors = [
-      (const Color(0xffe53935), 'R'),
-      (const Color(0xff43a047), 'G'),
-      (const Color(0xff1e88e5), 'B'),
-    ];
-    final channels = [color.r, color.g, color.b];
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _PreviewSwatch(
-              current: color.withValues(alpha: _opacity),
-              previous: _original,
-              onRestore: () => _setColor(_original),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                children: [
-                  for (var index = 0; index < 3; index++)
-                    _ChannelRow(
-                      label: channelColors[index].$2,
-                      value: channels[index],
-                      start: Color.from(
-                        alpha: 1,
-                        red: index == 0 ? 0 : color.r,
-                        green: index == 1 ? 0 : color.g,
-                        blue: index == 2 ? 0 : color.b,
-                      ),
-                      end: Color.from(
-                        alpha: 1,
-                        red: index == 0 ? 1 : color.r,
-                        green: index == 1 ? 1 : color.g,
-                        blue: index == 2 ? 1 : color.b,
-                      ),
-                      onChanged: (value) => _setChannel(index, value),
-                    ),
-                ],
-              ),
-            ),
-          ],
+    final controls = <Widget>[
+      _SwatchRow(colors: colorPanelPresets, selected: color, onTap: _setColor),
+      if (widget.recentColors.isNotEmpty) ...[
+        const SizedBox(height: 6),
+        Text(
+          'Màu đã dùng gần đây',
+          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
         ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Text('#', style: TextStyle(color: scheme.onSurfaceVariant)),
-            const SizedBox(width: 6),
-            SizedBox(
-              width: 120,
-              child: TextField(
-                key: const ValueKey('color-panel-hex'),
-                controller: _hex,
-                focusNode: _hexFocus,
-                maxLength: 7,
-                inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp('[#0-9a-fA-F]')),
-                ],
-                decoration: const InputDecoration(
-                  counterText: '',
-                  isDense: true,
-                ),
-                onSubmitted: _onHexSubmitted,
-                onTapOutside: (_) {
-                  if (_hexFocus.hasFocus) {
-                    _onHexSubmitted(_hex.text);
-                    _hexFocus.unfocus();
-                  }
-                },
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 4),
         _SwatchRow(
-          colors: colorPanelPresets,
+          colors: widget.recentColors,
           selected: color,
           onTap: _setColor,
         ),
-        if (widget.recentColors.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          Text(
-            'Màu đã dùng gần đây',
-            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-          ),
-          const SizedBox(height: 4),
-          _SwatchRow(
-            colors: widget.recentColors,
-            selected: color,
-            onTap: _setColor,
-          ),
-        ],
-        const SizedBox(height: 14),
-        Center(
-          child: _HueRingPicker(hsv: _hsv, onChanged: _setHsv),
-        ),
-        const SizedBox(height: 14),
-        Row(
+      ],
+      const SizedBox(height: 12),
+      _opacityRow(color),
+      ...widget.sideChildren,
+    ];
+    final wheel = _HueRingPicker(
+      hsv: _hsv,
+      size: widget.wheelSize,
+      onChanged: _setHsv,
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < widget.wheelSize + 260) {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ...controls.take(widget.recentColors.isEmpty ? 1 : 4),
+              const SizedBox(height: 12),
+              Center(child: wheel),
+              ...controls.skip(widget.recentColors.isEmpty ? 1 : 4),
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SizedBox(width: 70, child: Text(widget.opacityLabel)),
             Expanded(
-              child: _GradientSlider(
-                key: const ValueKey('color-panel-opacity'),
-                value:
-                    ((_opacity - widget.minOpacity) /
-                            (widget.maxOpacity - widget.minOpacity))
-                        .clamp(0.0, 1.0),
-                colors: [
-                  color.withValues(alpha: widget.minOpacity),
-                  color.withValues(alpha: widget.maxOpacity),
-                ],
-                checkerboard: true,
-                onChanged: (value) {
-                  setState(
-                    () => _opacity =
-                        widget.minOpacity +
-                        value * (widget.maxOpacity - widget.minOpacity),
-                  );
-                  _emit();
-                },
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: controls,
               ),
             ),
-            SizedBox(
-              width: 48,
-              child: Text(
-                '${(_opacity * 100).round()}%',
-                textAlign: TextAlign.end,
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-            ),
+            const SizedBox(width: 20),
+            wheel,
           ],
-        ),
-      ],
+        );
+      },
     );
   }
-}
-
-class _PreviewSwatch extends StatelessWidget {
-  const _PreviewSwatch({
-    required this.current,
-    required this.previous,
-    required this.onRestore,
-  });
-
-  final Color current;
-  final Color previous;
-  final VoidCallback onRestore;
-
-  @override
-  Widget build(BuildContext context) {
-    final border = Theme.of(context).colorScheme.outlineVariant;
-    return SizedBox(
-      width: 64,
-      height: 92,
-      child: Stack(
-        children: [
-          Positioned(
-            left: 0,
-            top: 0,
-            child: Tooltip(
-              message: 'Màu mới',
-              child: Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: border),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(7),
-                  child: CustomPaint(
-                    painter: _CheckerPainter(),
-                    child: ColoredBox(color: current),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            left: 26,
-            top: 58,
-            child: Tooltip(
-              message: 'Màu trước đó · chạm để dùng lại',
-              child: GestureDetector(
-                onTap: onRestore,
-                child: Container(
-                  width: 32,
-                  height: 32,
-                  decoration: BoxDecoration(
-                    color: previous,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: border),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ChannelRow extends StatelessWidget {
-  const _ChannelRow({
-    required this.label,
-    required this.value,
-    required this.start,
-    required this.end,
-    required this.onChanged,
-  });
-
-  final String label;
-  final double value;
-  final Color start;
-  final Color end;
-  final ValueChanged<double> onChanged;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 3),
-    child: Row(
-      children: [
-        SizedBox(
-          width: 18,
-          child: Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.w800),
-          ),
-        ),
-        Expanded(
-          child: _GradientSlider(
-            key: ValueKey('color-panel-$label'),
-            value: value,
-            colors: [start, end],
-            onChanged: onChanged,
-          ),
-        ),
-        SizedBox(
-          width: 40,
-          child: Text(
-            '${(value * 255).round()}',
-            textAlign: TextAlign.end,
-            style: const TextStyle(
-              fontFeatures: [FontFeature.tabularFigures()],
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
 }
 
 /// Thanh trượt có nền dải màu; kéo hoặc chạm để chọn giá trị 0..1.
@@ -463,24 +271,25 @@ class _SwatchRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final outline = Theme.of(context).colorScheme.outline;
+    final scheme = Theme.of(context).colorScheme;
     return Wrap(
-      spacing: 4,
-      runSpacing: 4,
+      spacing: 5,
+      runSpacing: 5,
       children: [
         for (final color in colors)
           GestureDetector(
+            key: ValueKey('swatch-${color.toARGB32()}'),
             onTap: () => onTap(color),
             child: Container(
-              width: 26,
-              height: 26,
+              width: 28,
+              height: 28,
               decoration: BoxDecoration(
                 color: color,
-                borderRadius: BorderRadius.circular(4),
+                borderRadius: BorderRadius.circular(6),
                 border: Border.all(
                   color: color.toARGB32() == selected.toARGB32()
-                      ? Theme.of(context).colorScheme.primary
-                      : outline.withValues(alpha: .4),
+                      ? scheme.primary
+                      : scheme.outline.withValues(alpha: .4),
                   width: color.toARGB32() == selected.toARGB32() ? 3 : 1,
                 ),
               ),
@@ -493,13 +302,17 @@ class _SwatchRow extends StatelessWidget {
 
 /// Vòng sắc độ bao quanh ô vuông bão hòa (ngang) × độ sáng (dọc).
 class _HueRingPicker extends StatefulWidget {
-  const _HueRingPicker({required this.hsv, required this.onChanged});
+  const _HueRingPicker({
+    required this.hsv,
+    required this.onChanged,
+    required this.size,
+  });
 
   final HSVColor hsv;
   final ValueChanged<HSVColor> onChanged;
+  final double size;
 
-  static const size = 240.0;
-  static const ringWidth = 22.0;
+  static const ringWidth = 20.0;
 
   @override
   State<_HueRingPicker> createState() => _HueRingPickerState();
@@ -510,15 +323,12 @@ enum _RingTarget { none, ring, square }
 class _HueRingPickerState extends State<_HueRingPicker> {
   _RingTarget _target = _RingTarget.none;
 
-  static const _center = Offset(
-    _HueRingPicker.size / 2,
-    _HueRingPicker.size / 2,
-  );
-  static const _outer = _HueRingPicker.size / 2;
-  static const _inner = _outer - _HueRingPicker.ringWidth;
+  Offset get _center => Offset(widget.size / 2, widget.size / 2);
+  double get _outer => widget.size / 2;
+  double get _inner => _outer - _HueRingPicker.ringWidth;
 
   /// Ô vuông nội tiếp vòng trong, chừa khoảng trống nhỏ.
-  static Rect get _square {
+  Rect get _square {
     final half = (_inner - 8) / math.sqrt2;
     return Rect.fromCenter(center: _center, width: half * 2, height: half * 2);
   }
@@ -578,7 +388,7 @@ class _HueRingPickerState extends State<_HueRingPicker> {
           ),
     },
     child: CustomPaint(
-      size: const Size.square(_HueRingPicker.size),
+      size: Size.square(widget.size),
       painter: _HueRingPainter(widget.hsv, _square),
     ),
   );
@@ -660,7 +470,7 @@ class _HueRingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _HueRingPainter oldDelegate) =>
-      oldDelegate.hsv != hsv;
+      oldDelegate.hsv != hsv || oldDelegate.square != square;
 }
 
 class _CheckerPainter extends CustomPainter {

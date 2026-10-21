@@ -6,6 +6,7 @@ enum EditorTool {
   pen,
   highlighter,
   eraser,
+  lasso,
   ruler,
   image,
   dictionary,
@@ -19,13 +20,16 @@ enum EditorTool {
 
 enum PaperStyle { blank, lined, grid, dotted, genkou }
 
+/// Màu đường kẻ giấy mặc định (vở cũ chưa lưu màu dùng màu này).
+const defaultPaperLineColor = Color(0xff758ab4);
+
 /// Kiểu nét của công cụ Bút. Nét cũ không lưu kiểu được đọc là thư pháp.
 enum PenStyle {
-  calligraphy('Thư pháp', 'Đầu vát, nét đổi độ rộng theo hướng và lực'),
+  calligraphy('Bút thư pháp', 'Đầu vát, nét đổi độ rộng theo hướng và lực'),
   fountain('Bút máy', 'Nét mảnh, đậm dần theo lực, thuôn hai đầu'),
   ballpoint('Bút bi', 'Nét đều, hơi đổi theo lực'),
   marker('Bút dạ', 'Nét dày đều, đầu tròn, không thuôn'),
-  pencil('Bút chì', 'Nét mảnh, nhạt, có vân giấy');
+  pencil('Bút chì', 'Nét mảnh, rõ, có vân chì');
 
   const PenStyle(this.label, this.helper);
   final String label;
@@ -262,6 +266,7 @@ class NotebookData {
     this.isTrashed = false,
     this.paperStyle = PaperStyle.grid,
     this.paperLineOpacity = .09,
+    this.paperLineColor = defaultPaperLineColor,
     this.lastOpened = 'Vừa xong',
   });
 
@@ -279,6 +284,7 @@ class NotebookData {
   final bool isTrashed;
   final PaperStyle paperStyle;
   final double paperLineOpacity;
+  final Color paperLineColor;
   final String lastOpened;
 
   bool get isPdf => type == 'PDF';
@@ -295,6 +301,7 @@ class NotebookData {
     'isTrashed': isTrashed,
     'paperStyle': paperStyle.name,
     'paperLineOpacity': paperLineOpacity,
+    'paperLineColor': paperLineColor.toARGB32(),
     'lastOpened': lastOpened,
   };
 
@@ -313,6 +320,10 @@ class NotebookData {
       orElse: () => PaperStyle.grid,
     ),
     paperLineOpacity: (json['paperLineOpacity'] as num?)?.toDouble() ?? .09,
+    paperLineColor: Color(
+      (json['paperLineColor'] as num?)?.toInt() ??
+          defaultPaperLineColor.toARGB32(),
+    ),
     lastOpened: json['lastOpened'] as String? ?? 'Vừa xong',
   );
 
@@ -328,6 +339,7 @@ class NotebookData {
     bool? isTrashed,
     PaperStyle? paperStyle,
     double? paperLineOpacity,
+    Color? paperLineColor,
     String? lastOpened,
   }) => NotebookData(
     id: id,
@@ -341,6 +353,7 @@ class NotebookData {
     isTrashed: isTrashed ?? this.isTrashed,
     paperStyle: paperStyle ?? this.paperStyle,
     paperLineOpacity: paperLineOpacity ?? this.paperLineOpacity,
+    paperLineColor: paperLineColor ?? this.paperLineColor,
     lastOpened: lastOpened ?? this.lastOpened,
   );
 }
@@ -922,6 +935,43 @@ class DictionaryEntry {
   final String exampleMeaning;
   final List<DictionaryEntry> similarEntries;
 }
+
+/// Một chữ kanji trong bảng `japanese_kanji` của từ điển ngoại tuyến.
+class KanjiEntry {
+  const KanjiEntry({
+    required this.character,
+    this.hanViet = '',
+    this.onReading = '',
+    this.kunReading = '',
+    this.meaning = '',
+    this.strokes,
+    this.level = '',
+  });
+
+  final String character;
+
+  /// Các âm Hán Việt viết hoa, âm chính đứng đầu: "HÀNH, HẠNH".
+  final String hanViet;
+  final String onReading;
+  final String kunReading;
+  final String meaning;
+  final int? strokes;
+  final String level;
+
+  /// Âm Hán Việt chính (đầu tiên), dùng để ghép Hán Việt cho từ.
+  String get primaryHanViet => hanViet.split(',').first.trim();
+}
+
+/// Các chữ kanji khác nhau trong [text], theo thứ tự xuất hiện.
+List<String> kanjiCharacters(String text) => [
+  ...{
+    for (final rune in text.runes)
+      if ((rune >= 0x4e00 && rune <= 0x9fff) ||
+          (rune >= 0x3400 && rune <= 0x4dbf) ||
+          rune == 0x3005)
+        String.fromCharCode(rune),
+  },
+];
 
 class OpenRouterModel {
   const OpenRouterModel({

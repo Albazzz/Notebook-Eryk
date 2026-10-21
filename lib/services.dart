@@ -16,6 +16,28 @@ abstract class DictionaryRepository {
   /// Tra đúng từ, không tính gợi ý gần nghĩa (nhanh, dùng để kiểm chứng
   /// cách đọc/Hán Việt do AI trả về).
   Future<DictionaryEntry?> lookupBasic(String text);
+
+  /// Thông tin từng chữ kanji trong [text], theo thứ tự xuất hiện. Chữ không
+  /// có trong bảng kanji bị bỏ qua; từ điển cũ chưa có bảng thì trả về rỗng.
+  Future<List<KanjiEntry>> kanjiIn(String text);
+}
+
+/// Ghép Hán Việt cho một từ từ âm chính của từng chữ kanji; trả về chuỗi rỗng
+/// nếu có chữ chưa biết âm.
+String composeHanViet(String word, List<KanjiEntry> kanji) {
+  final byChar = {for (final entry in kanji) entry.character: entry};
+  final parts = <String>[];
+  for (final character in word.runes.map(String.fromCharCode)) {
+    if (character == '々' && parts.isNotEmpty) {
+      parts.add(parts.last); // 人々 → NHÂN NHÂN
+      continue;
+    }
+    if (kanjiCharacters(character).isEmpty) continue; // kana, okurigana
+    final reading = byChar[character]?.primaryHanViet ?? '';
+    if (reading.isEmpty) return '';
+    parts.add(reading.toUpperCase());
+  }
+  return parts.join(' ');
 }
 
 const _iRowToURow = {
@@ -65,7 +87,7 @@ bool readingsMatch(String aiReading, String dictionaryReading) {
 }
 
 class LocalDictionaryRepository implements DictionaryRepository {
-  static const _databaseVersion = 2;
+  static const _databaseVersion = 3;
   static const _dictionaryAsset = 'assets/japanese_dictionary.sql';
   static const _similarResultLimit = 5;
   static const _ignoredMeaningWords = <String>{
@@ -180,12 +202,11 @@ class LocalDictionaryRepository implements DictionaryRepository {
       version: _databaseVersion,
       onCreate: (db, version) => _importBundledDictionary(db),
       onUpgrade: (db, oldVersion, newVersion) async {
-        if (oldVersion < 2) {
-          // The dictionary is read-only bundled data, so replacing the old
-          // sample schema is safer than trying to infer a level per row.
-          await db.execute('DROP TABLE IF EXISTS japanese_dictionary');
-          await _importBundledDictionary(db);
-        }
+        // The dictionary is read-only bundled data: every version bump means
+        // a rebuilt asset, so replace the table instead of migrating rows.
+        await db.execute('DROP TABLE IF EXISTS japanese_dictionary');
+        await db.execute('DROP TABLE IF EXISTS japanese_kanji');
+        await _importBundledDictionary(db);
       },
     );
     return _databaseInstance!;
@@ -196,12 +217,18 @@ class LocalDictionaryRepository implements DictionaryRepository {
     List<DictionaryEntry> similarEntries = const [],
   }) {
     final kanji = (row['kanji'] as String? ?? '').trim();
+    // word_type / example_* exist only in dictionary assets built with the
+    // extended schema; older databases simply omit the keys.
+    String optional(String column) => (row[column] as String? ?? '').trim();
     return DictionaryEntry(
       word: kanji.isEmpty ? row['hiragana'] as String : kanji,
       reading: row['hiragana'] as String,
       hanViet: (row['han_viet'] as String? ?? '').trim(),
       meaning: row['meaning'] as String,
       level: (row['level'] as String? ?? '').trim(),
+      partOfSpeech: optional('word_type'),
+      example: optional('example_ja'),
+      exampleMeaning: optional('example_vi'),
       similarEntries: similarEntries,
     );
   }
@@ -356,6 +383,30 @@ class LocalDictionaryRepository implements DictionaryRepository {
   }
 
   @override
+  Future<List<KanjiEntry>> kanjiIn(String text) async {
+    final characters = kanjiCharacters(text);
+    if (characters.isEmpty) return const [];
+    try {
+      final rows = await (await _database).query(
+        'japanese_kanji',
+        where:
+            'character IN (${List.filled(characters.length, '?').join(', ')})',
+        whereArgs: characters,
+      );
+      final byChar = {
+        for (final row in rows) row['character'] as String: _kanjiFromRow(row),
+      };
+      return [
+        for (final character in characters)
+          if (byChar[character] != null) byChar[character]!,
+      ];
+    } on DatabaseException {
+      // Dictionary built before the kanji table existed.
+      return const [];
+    }
+  }
+
+  @override
   Future<List<DictionaryEntry>> search(String text, {int limit = 30}) async {
     final value = text.trim();
     if (value.isEmpty) return const [];
@@ -377,20 +428,24 @@ class LocalDictionaryRepository implements DictionaryRepository {
     }
     final rows = await (await _database).query(
       'japanese_dictionary',
-      columns: const [
-        'id',
-        'hiragana',
-        'kanji',
-        'han_viet',
-        'meaning',
-        'level',
-      ],
       where: clauses.join(' OR '),
       whereArgs: args,
       limit: safeLimit,
     );
     return rows.map(_entryFromRow).toList(growable: false);
   }
+}
+
+extension on LocalDictionaryRepository {
+  KanjiEntry _kanjiFromRow(Map<String, Object?> row) => KanjiEntry(
+    character: row['character'] as String,
+    hanViet: (row['han_viet'] as String? ?? '').trim(),
+    onReading: (row['on_reading'] as String? ?? '').trim(),
+    kunReading: (row['kun_reading'] as String? ?? '').trim(),
+    meaning: (row['meaning'] as String? ?? '').trim(),
+    strokes: (row['strokes'] as num?)?.toInt(),
+    level: (row['level'] as String? ?? '').trim(),
+  );
 }
 
 abstract class OcrService {

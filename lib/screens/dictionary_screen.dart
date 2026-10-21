@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../models.dart';
+import '../services.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
@@ -118,7 +119,11 @@ class _DictionaryScreenState extends State<DictionaryScreen> {
           ),
           const SizedBox(height: 18),
           if (_selected != null) ...[
-            _DictionaryDetail(entry: _selected!),
+            _DictionaryDetail(
+              key: ValueKey(_selected!.word + _selected!.reading),
+              entry: _selected!,
+              dictionary: widget.state.dictionary,
+            ),
             const SizedBox(height: 16),
           ],
           Expanded(
@@ -202,12 +207,28 @@ class _DictionaryResultTile extends StatelessWidget {
   }
 }
 
-class _DictionaryDetail extends StatelessWidget {
-  const _DictionaryDetail({required this.entry});
+class _DictionaryDetail extends StatefulWidget {
+  const _DictionaryDetail({
+    super.key,
+    required this.entry,
+    required this.dictionary,
+  });
   final DictionaryEntry entry;
+  final DictionaryRepository dictionary;
+
+  @override
+  State<_DictionaryDetail> createState() => _DictionaryDetailState();
+}
+
+class _DictionaryDetailState extends State<_DictionaryDetail> {
+  late final Future<List<KanjiEntry>> _kanji = widget.dictionary.kanjiIn(
+    widget.entry.word,
+  );
 
   @override
   Widget build(BuildContext context) {
+    final entry = widget.entry;
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
     return Card(
       margin: EdgeInsets.zero,
       color: AppColors.dictionary.withValues(alpha: .08),
@@ -229,10 +250,11 @@ class _DictionaryDetail extends StatelessWidget {
             ),
             const SizedBox(height: 3),
             Text(
-              entry.reading,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
+              [
+                entry.reading,
+                if (entry.partOfSpeech.isNotEmpty) entry.partOfSpeech,
+              ].join(' · '),
+              style: TextStyle(color: muted),
             ),
             const SizedBox(height: 9),
             Text(entry.meaning, style: const TextStyle(fontSize: 15)),
@@ -240,8 +262,101 @@ class _DictionaryDetail extends StatelessWidget {
               const SizedBox(height: 5),
               Text('Hán Việt: ${entry.hanViet}'),
             ],
+            if (entry.example.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Ví dụ',
+                style: TextStyle(color: muted, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 3),
+              Text(entry.example, style: const TextStyle(fontSize: 15)),
+              if (entry.exampleMeaning.isNotEmpty)
+                Text(entry.exampleMeaning, style: TextStyle(color: muted)),
+            ],
+            FutureBuilder<List<KanjiEntry>>(
+              future: _kanji,
+              builder: (context, snapshot) {
+                final kanji = snapshot.data ?? const <KanjiEntry>[];
+                if (kanji.isEmpty) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Kanji',
+                        style: TextStyle(
+                          color: muted,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      for (final item in kanji) KanjiTile(entry: item),
+                    ],
+                  ),
+                );
+              },
+            ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Một chữ kanji: chữ lớn bên trái, Hán Việt, âm On/Kun, nghĩa và số nét.
+class KanjiTile extends StatelessWidget {
+  const KanjiTile({super.key, required this.entry});
+  final KanjiEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            ),
+            child: Text(entry.character, style: const TextStyle(fontSize: 28)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  [
+                    if (entry.hanViet.isNotEmpty) entry.hanViet,
+                    if (entry.level.isNotEmpty) entry.level,
+                    if (entry.strokes != null) '${entry.strokes} nét',
+                  ].join(' · '),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                if (entry.onReading.isNotEmpty)
+                  Text(
+                    'On: ${entry.onReading}',
+                    style: TextStyle(color: muted),
+                  ),
+                if (entry.kunReading.isNotEmpty)
+                  Text(
+                    'Kun: ${entry.kunReading}',
+                    style: TextStyle(color: muted),
+                  ),
+                if (entry.meaning.isNotEmpty) Text(entry.meaning),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

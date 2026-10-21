@@ -10,6 +10,8 @@ import 'package:noteeryk/review.dart';
 import 'package:noteeryk/screens/settings_screen.dart';
 import 'package:flutter/rendering.dart';
 import 'package:noteeryk/widgets/color_panel.dart';
+import 'package:noteeryk/widgets/notebook_cover.dart';
+import 'package:noteeryk/widgets/page_rendering.dart';
 import 'package:noteeryk/widgets/ocr_highlight_sheet.dart';
 import 'package:noteeryk/widgets/quick_check_sheet.dart';
 
@@ -502,7 +504,42 @@ void main() {
     expect(find.text('0°'), findsOneWidget);
   });
 
-  testWidgets('bảng màu nhận mã hex, màu mẫu và độ đậm', (tester) async {
+  testWidgets('bìa vở vẽ giấy và nét viết tay của trang 1', (tester) async {
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    state.saveStrokes('n3', [
+      InkStroke(
+        points: const [
+          StrokePoint(Offset(40, 40), 1),
+          StrokePoint(Offset(90, 60), 1),
+        ],
+        color: const Color(0xff000000),
+        width: 3,
+        tool: EditorTool.pen,
+        createdAt: DateTime(2026),
+      ),
+    ], 1);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Center(
+          child: SizedBox(
+            width: 200,
+            height: 260,
+            child: NotebookCover(state: state, notebook: state.notebooks.first),
+          ),
+        ),
+      ),
+    );
+    final painters = tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((paint) => paint.painter)
+        .toList();
+    final ink = painters.whereType<InkStrokesPainter>().single;
+    expect(ink.strokes, hasLength(1));
+    expect(painters.whereType<PaperPainter>(), hasLength(1));
+  });
+
+  testWidgets('bảng màu: vòng màu bên phải, màu mẫu và độ đậm', (tester) async {
     tester.view.physicalSize = const Size(900, 1200);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -515,7 +552,7 @@ void main() {
         home: Scaffold(
           body: SingleChildScrollView(
             child: SizedBox(
-              width: 420,
+              width: 600,
               child: ColorPanel(
                 color: const Color(0xff1f2633),
                 opacity: 1,
@@ -523,23 +560,28 @@ void main() {
                   picked = color;
                   opacity = value;
                 },
+                sideChildren: const [Text('Độ dày')],
               ),
             ),
           ),
         ),
       ),
     );
-    await tester.enterText(
-      find.byKey(const ValueKey('color-panel-hex')),
-      '66CC99',
+    expect(find.byKey(const ValueKey('color-panel-hex')), findsNothing);
+    expect(find.text('Độ dày'), findsOneWidget);
+    // Wheel on the right, controls on the left.
+    expect(
+      tester.getCenter(find.byKey(const ValueKey('color-panel-wheel'))).dx,
+      greaterThan(
+        tester.getCenter(find.byKey(const ValueKey('color-panel-opacity'))).dx,
+      ),
     );
-    await tester.testTextInput.receiveAction(TextInputAction.done);
+
+    await tester.tap(find.byKey(const ValueKey('swatch-4284927129')));
     await tester.pump();
     expect(picked?.toARGB32(), 0xff66cc99);
-    expect(find.text('102'), findsOneWidget); // R
-    expect(find.text('204'), findsOneWidget); // G
 
-    // Drag the opacity thumb to the far left.
+    // Tap the far left of the opacity track.
     final slider = find.byKey(const ValueKey('color-panel-opacity'));
     await tester.tapAt(tester.getTopLeft(slider) + const Offset(1, 14));
     await tester.pump();
@@ -606,6 +648,86 @@ void main() {
     expect(controller.value.storage, isNot(equals(identity)));
     expect(controller.value.getMaxScaleOnAxis(), greaterThan(1));
     expect(state.strokesFor('n3', 1), hasLength(1));
+  });
+
+  testWidgets('khoanh vùng chọn nét, kéo di chuyển; tẩy xong tự về bút', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook()
+      ..drawWithFinger = true
+      ..returnToPenAfterEraser = true;
+    addTearDown(state.dispose);
+    state.open(state.notebooks.first, page: 1);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    Future<void> drag(List<Offset> points, int id) async {
+      final pointer = TestPointer(id, PointerDeviceKind.touch);
+      await tester.sendEventToBinding(pointer.down(points.first));
+      for (final point in points.skip(1)) {
+        await tester.sendEventToBinding(pointer.move(point));
+      }
+      await tester.sendEventToBinding(pointer.up());
+      await tester.pump();
+    }
+
+    await drag(const [
+      Offset(600, 310),
+      Offset(650, 330),
+      Offset(700, 320),
+    ], 50);
+    await drag(const [
+      Offset(600, 500),
+      Offset(650, 520),
+      Offset(700, 510),
+    ], 51);
+    expect(state.strokesFor('n3', 1), hasLength(2));
+    final before = state.strokesFor('n3', 1).first.points.first.offset;
+    final other = state.strokesFor('n3', 1).last.points.first.offset;
+
+    await tester.tap(find.byTooltip('Khoanh vùng'));
+    await tester.pump();
+    // Loop around the first stroke only.
+    await drag(const [
+      Offset(570, 280),
+      Offset(730, 280),
+      Offset(730, 360),
+      Offset(570, 360),
+      Offset(570, 285),
+    ], 52);
+    expect(find.textContaining('Đã chọn 1 nét'), findsOneWidget);
+
+    // Drag from inside the selection moves only the selected stroke.
+    await drag(const [
+      Offset(650, 325),
+      Offset(700, 345),
+      Offset(750, 365),
+    ], 53);
+    expect(
+      state.strokesFor('n3', 1).first.points.first.offset - before,
+      const Offset(100, 40),
+    );
+    expect(state.strokesFor('n3', 1).last.points.first.offset, other);
+
+    await tester.tap(find.text('Bỏ chọn'));
+    await tester.pump();
+    expect(find.textContaining('Đã chọn'), findsNothing);
+
+    // Erasing then lifting the finger returns to the pen.
+    await tester.tap(find.byTooltip('Tẩy'));
+    await tester.pump();
+    await drag(const [Offset(600, 620), Offset(625, 625)], 54);
+    await drag(const [
+      Offset(600, 660),
+      Offset(650, 680),
+      Offset(700, 670),
+    ], 55);
+    expect(state.strokesFor('n3', 1), hasLength(3));
   });
 }
 

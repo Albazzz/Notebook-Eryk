@@ -1189,6 +1189,19 @@ void main() {
       ..remove('penStyle');
     expect(InkStroke.fromJson(legacy).penStyle, PenStyle.calligraphy);
   });
+  test('Han-Viet is composed from the kanji table in written order', () {
+    const kanji = [
+      KanjiEntry(character: '仮', hanViet: 'GIẢ, GIÁ'),
+      KanjiEntry(character: '設', hanViet: 'Thiết'),
+      KanjiEntry(character: '人', hanViet: 'NHÂN'),
+    ];
+    expect(kanjiCharacters('受け入れる仮設'), ['受', '入', '仮', '設']);
+    expect(composeHanViet('仮設', kanji), 'GIẢ THIẾT');
+    expect(composeHanViet('人々', kanji), 'NHÂN NHÂN');
+    // A character without a known reading means no guess at all.
+    expect(composeHanViet('仮名', kanji), '');
+    expect(composeHanViet('ばったり', kanji), '');
+  });
 }
 
 class _TestPathProvider extends PathProviderPlatform {

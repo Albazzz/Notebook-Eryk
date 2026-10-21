@@ -10,7 +10,9 @@ import 'package:pdfx/pdfx.dart' as pdfx;
 import '../app_state.dart';
 import '../models.dart';
 import '../theme.dart';
+import '../widgets/color_panel.dart';
 import '../widgets/common.dart';
+import '../widgets/notebook_cover.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({
@@ -421,8 +423,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           : _draggableNotebook(
                               notebooks[index],
                               _NotebookCard(
+                                state: widget.state,
                                 notebook: notebooks[index],
-                                coverPath: _coverPath(notebooks[index]),
                                 onTap: () => _selectionMode
                                     ? _toggleNotebookSelection(
                                         notebooks[index].id,
@@ -455,8 +457,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       : _draggableNotebook(
                           notebooks[index],
                           _NotebookCard(
+                            state: widget.state,
                             notebook: notebooks[index],
-                            coverPath: _coverPath(notebooks[index]),
                             onTap: () => _selectionMode
                                 ? _toggleNotebookSelection(notebooks[index].id)
                                 : widget.state.open(notebooks[index]),
@@ -476,9 +478,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ),
     );
   }
-
-  String? _coverPath(NotebookData notebook) =>
-      widget.state.imagesForPage(notebook.id, 1).firstOrNull;
 
   Widget _draggableNotebook(NotebookData notebook, Widget child) =>
       LongPressDraggable<String>(
@@ -500,6 +499,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     var importPdf = false;
     var paperStyle = PaperStyle.grid;
     var paperLineOpacity = widget.state.paperLineOpacity;
+    var paperLineColor = widget.state.paperLineColor;
     var cover = AppColors.primary;
     final openImporter = await showDialog<_ImportSource>(
       context: context,
@@ -640,75 +640,24 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       paperStyle: paperStyle,
                       cover: cover,
                       lineOpacity: paperLineOpacity,
+                      lineColor: paperLineColor,
                     ),
                     const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        const Expanded(
-                          child: Text(
-                            'Độ đậm đường kẻ',
-                            style: TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                        Text('${(paperLineOpacity * 100).round()}%'),
-                      ],
-                    ),
-                    Slider(
-                      value: paperLineOpacity,
-                      min: .03,
-                      max: .35,
-                      divisions: 32,
-                      label: '${(paperLineOpacity * 100).round()}%',
-                      onChanged: (value) =>
-                          setDialogState(() => paperLineOpacity = value),
-                    ),
-                    const SizedBox(height: 18),
                     const Text(
-                      'Màu bìa',
+                      'Màu đường kẻ',
                       style: TextStyle(fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 10,
-                      children:
-                          [
-                                AppColors.primary,
-                                AppColors.dictionary,
-                                AppColors.explain,
-                                AppColors.weakness,
-                                const Color(0xff9b5d48),
-                              ]
-                              .map(
-                                (color) => InkWell(
-                                  onTap: () =>
-                                      setDialogState(() => cover = color),
-                                  borderRadius: BorderRadius.circular(30),
-                                  child: Container(
-                                    width: 36,
-                                    height: 36,
-                                    decoration: BoxDecoration(
-                                      color: color,
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: Colors.white,
-                                        width: cover == color ? 4 : 1,
-                                      ),
-                                      boxShadow: cover == color
-                                          ? [
-                                              BoxShadow(
-                                                color: color.withValues(
-                                                  alpha: .35,
-                                                ),
-                                                blurRadius: 0,
-                                                spreadRadius: 3,
-                                              ),
-                                            ]
-                                          : null,
-                                    ),
-                                  ),
-                                ),
-                              )
-                              .toList(),
+                    ColorPanel(
+                      color: paperLineColor,
+                      opacity: paperLineOpacity,
+                      minOpacity: .03,
+                      maxOpacity: .6,
+                      wheelSize: 170,
+                      onChanged: (color, value) => setDialogState(() {
+                        paperLineColor = color;
+                        paperLineOpacity = value;
+                      }),
                     ),
                   ],
                   const SizedBox(height: 26),
@@ -739,6 +688,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                             color: cover,
                             paperStyle: paperStyle,
                             paperLineOpacity: paperLineOpacity,
+                            paperLineColor: paperLineColor,
                           );
                           widget.state.addNotebook(createdNotebook!);
                           // Let the parent finish the dialog transition before
@@ -1413,6 +1363,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Future<void> _showNotebookPaperSettings(NotebookData notebook) async {
     var style = notebook.paperStyle;
     var opacity = notebook.paperLineOpacity;
+    var lineColor = notebook.paperLineColor;
     final accepted = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -1443,29 +1394,28 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       .toList(),
                 ),
                 const SizedBox(height: 18),
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'Độ đậm đường kẻ',
-                        style: TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                    Text('${(opacity * 100).round()}%'),
-                  ],
+                const Text(
+                  'Màu đường kẻ',
+                  style: TextStyle(fontWeight: FontWeight.w700),
                 ),
-                Slider(
-                  value: opacity,
-                  min: .03,
-                  max: .35,
-                  divisions: 32,
-                  label: '${(opacity * 100).round()}%',
-                  onChanged: (value) => setDialogState(() => opacity = value),
+                const SizedBox(height: 8),
+                ColorPanel(
+                  color: lineColor,
+                  opacity: opacity,
+                  minOpacity: .03,
+                  maxOpacity: .6,
+                  wheelSize: 170,
+                  onChanged: (color, value) => setDialogState(() {
+                    lineColor = color;
+                    opacity = value;
+                  }),
                 ),
+                const SizedBox(height: 12),
                 _NotebookPreview(
                   paperStyle: style,
                   cover: notebook.color,
                   lineOpacity: opacity,
+                  lineColor: lineColor,
                 ),
               ],
             ),
@@ -1485,7 +1435,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
     if (!mounted || accepted != true) return;
     widget.state.updateNotebook(
-      notebook.copyWith(paperStyle: style, paperLineOpacity: opacity),
+      notebook.copyWith(
+        paperStyle: style,
+        paperLineOpacity: opacity,
+        paperLineColor: lineColor,
+      ),
     );
     showAppSnack(context, 'Đã cập nhật giấy của ${notebook.title}');
   }
@@ -1496,10 +1450,12 @@ class _NotebookPreview extends StatelessWidget {
     required this.paperStyle,
     required this.cover,
     required this.lineOpacity,
+    this.lineColor = defaultPaperLineColor,
   });
   final PaperStyle paperStyle;
   final Color cover;
   final double lineOpacity;
+  final Color lineColor;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -1522,7 +1478,7 @@ class _NotebookPreview extends StatelessWidget {
         ),
         Expanded(
           child: CustomPaint(
-            painter: _PreviewPaperPainter(paperStyle, lineOpacity),
+            painter: _PreviewPaperPainter(paperStyle, lineOpacity, lineColor),
             child: const Padding(
               padding: EdgeInsets.all(14),
               child: Text(
@@ -1542,14 +1498,15 @@ class _NotebookPreview extends StatelessWidget {
 }
 
 class _PreviewPaperPainter extends CustomPainter {
-  const _PreviewPaperPainter(this.style, this.lineOpacity);
+  const _PreviewPaperPainter(this.style, this.lineOpacity, this.lineColor);
   final PaperStyle style;
   final double lineOpacity;
+  final Color lineColor;
   @override
   void paint(Canvas canvas, Size size) {
     if (style == PaperStyle.blank) return;
     final paint = Paint()
-      ..color = const Color(0xff758ab4).withValues(alpha: lineOpacity)
+      ..color = lineColor.withValues(alpha: lineOpacity)
       ..strokeWidth = .6;
     final step = style == PaperStyle.lined ? 24.0 : 18.0;
     for (double y = step; y < size.height; y += step) {
@@ -1564,7 +1521,9 @@ class _PreviewPaperPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _PreviewPaperPainter oldDelegate) =>
-      oldDelegate.style != style || oldDelegate.lineOpacity != lineOpacity;
+      oldDelegate.style != style ||
+      oldDelegate.lineOpacity != lineOpacity ||
+      oldDelegate.lineColor != lineColor;
 }
 
 class _CropSlider extends StatelessWidget {
@@ -1591,15 +1550,15 @@ class _CropSlider extends StatelessWidget {
 
 class _NotebookCard extends StatelessWidget {
   const _NotebookCard({
+    required this.state,
     required this.notebook,
-    this.coverPath,
     required this.onTap,
     required this.onMenu,
     this.selected = false,
     this.onLongPress,
   });
+  final AppState state;
   final NotebookData notebook;
-  final String? coverPath;
   final VoidCallback onTap;
   final VoidCallback onMenu;
   final bool selected;
@@ -1619,105 +1578,29 @@ class _NotebookCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: notebook.color,
-                    borderRadius: BorderRadius.circular(16),
-                    border: selected
-                        ? Border.all(color: AppColors.primary, width: 3)
-                        : null,
-                  ),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      if (coverPath != null)
-                        Image.file(
-                          File(coverPath!),
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                        ),
-                      if (coverPath != null)
-                        DecoratedBox(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                notebook.color.withValues(alpha: .2),
-                                notebook.color.withValues(alpha: .82),
-                              ],
-                            ),
-                          ),
-                        ),
-                      if (selected)
-                        const Positioned(
-                          right: 10,
-                          top: 10,
-                          child: CircleAvatar(
-                            radius: 14,
-                            backgroundColor: Colors.white,
-                            child: Icon(
-                              Icons.check,
-                              color: AppColors.primary,
-                              size: 18,
-                            ),
-                          ),
-                        ),
-                      Positioned(
-                        right: -14,
-                        top: 0,
-                        bottom: 0,
-                        child: Container(
-                          width: 32,
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: .13),
-                            borderRadius: BorderRadius.circular(20),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    NotebookCover(
+                      state: state,
+                      notebook: notebook,
+                      selected: selected,
+                    ),
+                    if (selected)
+                      const Positioned(
+                        right: 6,
+                        top: 6,
+                        child: CircleAvatar(
+                          radius: 14,
+                          backgroundColor: AppColors.primary,
+                          child: Icon(
+                            Icons.check,
+                            color: Colors.white,
+                            size: 18,
                           ),
                         ),
                       ),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 9,
-                              vertical: 5,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: .18),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              notebook.type,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 11,
-                              ),
-                            ),
-                          ),
-                          const Spacer(),
-                          Text(
-                            notebook.isPdf ? '日本語\n総まとめ' : '日本語\nノート',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 24,
-                              height: 1.35,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Container(
-                            height: 2,
-                            width: 50,
-                            color: Colors.white.withValues(alpha: .7),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+                  ],
                 ),
               ),
               const SizedBox(height: 14),
