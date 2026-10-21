@@ -463,7 +463,7 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
   Future<void> _reformatAll() async {
     if (_reformatting || state.weakPoints.isEmpty) return;
     if (!state.aiConnected) {
-      showAppSnack(context, 'Hãy thiết lập OpenRouter trong Cài đặt AI');
+      showAppSnack(context, 'Hãy thiết lập API key trong Cài đặt AI');
       return;
     }
     final pending = state.unnormalizedWeakPointCount;

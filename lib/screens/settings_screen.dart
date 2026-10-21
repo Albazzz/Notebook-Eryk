@@ -503,6 +503,7 @@ class _AiSettingsState extends State<_AiSettings> {
   @override
   Widget build(BuildContext context) {
     final configured = widget.state.hasApiKey && !replacing;
+    final provider = widget.state.aiProvider;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -511,7 +512,7 @@ class _AiSettingsState extends State<_AiSettings> {
             const Icon(Icons.auto_awesome, color: AppColors.explain),
             const SizedBox(width: 10),
             Text(
-              'AI qua OpenRouter',
+              'AI qua ${provider.label}',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
           ],
@@ -542,22 +543,42 @@ class _AiSettingsState extends State<_AiSettings> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _FieldLabel('PROVIDER'),
-              const ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: CircleAvatar(
-                  backgroundColor: Color(0xff1f2633),
-                  child: Icon(Icons.route_rounded, color: Colors.white),
-                ),
-                title: Text(
-                  'OpenRouter',
-                  style: TextStyle(fontWeight: FontWeight.w800),
-                ),
-                subtitle: Text('Một API key, nhiều model theo từng chức năng'),
-                trailing: Chip(label: Text('Cố định')),
+              const _FieldLabel('NHÀ CUNG CẤP AI'),
+              const SizedBox(height: 8),
+              SegmentedButton<AiProvider>(
+                segments: const [
+                  ButtonSegment(
+                    value: AiProvider.openRouter,
+                    icon: Icon(Icons.route_rounded),
+                    label: Text('OpenRouter'),
+                  ),
+                  ButtonSegment(
+                    value: AiProvider.gemini,
+                    icon: Icon(Icons.auto_awesome_outlined),
+                    label: Text('Gemini (Google AI Studio)'),
+                  ),
+                ],
+                selected: {provider},
+                onSelectionChanged: (values) async {
+                  await widget.state.setAiProvider(values.first);
+                  if (!mounted) return;
+                  setState(() {
+                    replacing = false;
+                    tested = false;
+                    error = null;
+                    keyController.clear();
+                  });
+                },
+              ),
+              const SizedBox(height: 6),
+              Text(
+                provider == AiProvider.gemini
+                    ? '${provider.description}. Mặc định mọi chức năng dùng ${AppState.defaultGeminiModelName}.'
+                    : provider.description,
+                style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
               ),
               const Divider(height: 28),
-              const _FieldLabel('OPENROUTER API KEY'),
+              _FieldLabel('${provider.label.toUpperCase()} API KEY'),
               const SizedBox(height: 8),
               if (configured)
                 Container(
@@ -610,7 +631,7 @@ class _AiSettingsState extends State<_AiSettings> {
                   enableSuggestions: false,
                   autocorrect: false,
                   decoration: InputDecoration(
-                    hintText: 'sk-or-v1-...',
+                    hintText: provider.keyHint,
                     suffixIcon: IconButton(
                       onPressed: () => setState(() => reveal = !reveal),
                       icon: Icon(
@@ -622,9 +643,12 @@ class _AiSettingsState extends State<_AiSettings> {
                   ),
                 ),
                 const SizedBox(height: 7),
-                const Text(
-                  'Lấy API key tại openrouter.ai/keys',
-                  style: TextStyle(color: AppColors.primary, fontSize: 12),
+                Text(
+                  'Lấy API key tại ${provider.keyUrl}',
+                  style: const TextStyle(
+                    color: AppColors.primary,
+                    fontSize: 12,
+                  ),
                 ),
               ],
               if (error != null) ...[
@@ -996,7 +1020,7 @@ class _AiSettingsState extends State<_AiSettings> {
                       children: [
                         Expanded(
                           child: Text(
-                            'Chọn model OpenRouter',
+                            'Chọn model ${widget.state.aiProvider.label}',
                             style: Theme.of(context).textTheme.headlineMedium,
                           ),
                         ),

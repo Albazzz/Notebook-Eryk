@@ -28,6 +28,10 @@ class AppState extends ChangeNotifier {
   static const defaultDictionaryModelId = 'anthropic/claude-haiku-5.5';
   static const defaultDictionaryModelName = 'Claude Haiku 5.5';
 
+  /// Mặc định khi dùng key Gemini trực tiếp: mọi chức năng dùng 3.8 Flash.
+  static const defaultGeminiModelId = 'gemini-3.8-flash';
+  static const defaultGeminiModelName = 'Gemini 3.8 Flash';
+
   static ({String id, String name}) defaultModelFor(AiModelSlot slot) =>
       slot == AiModelSlot.dictionary
       ? (id: defaultDictionaryModelId, name: defaultDictionaryModelName)
@@ -61,6 +65,7 @@ class AppState extends ChangeNotifier {
     EditorTool.lasso,
   ];
   static const _keyStorageName = 'openrouter_api_key';
+  static const _geminiKeyStorageName = 'gemini_api_key';
   static const _modelIdsStorageName = 'ai_model_ids';
   static const _modelNamesStorageName = 'ai_model_names';
   static const _savedModelsStorageName = 'ai_saved_models';
@@ -109,6 +114,10 @@ class AppState extends ChangeNotifier {
   final Map<AiModelSlot, String> modelNames = {};
   List<OpenRouterModel> savedModels = [];
   bool useAiVision = false;
+
+  /// Gọi AI qua OpenRouter hay thẳng Gemini. Mỗi bên có key, model và danh
+  /// sách model đã lưu riêng nên đổi qua lại không mất cấu hình.
+  AiProvider aiProvider = AiProvider.openRouter;
   bool aiConnected = false;
   List<OpenRouterModel> availableModels = [];
   List<EditorTool> toolbarTools = List.of(defaultToolbarTools);
@@ -244,14 +253,12 @@ class AppState extends ChangeNotifier {
       FlashcardField.reading,
       FlashcardField.hanViet,
     });
-    final storedModelId = prefs.getString('selectedModelId');
-    final storedModelName = prefs.getString('selectedModelName');
-    selectedModelId = storedModelId?.trim().isNotEmpty == true
-        ? storedModelId!
-        : defaultAiModelId;
-    selectedModelName = storedModelName?.trim().isNotEmpty == true
-        ? storedModelName!
-        : defaultAiModelName;
+    aiProvider = AiProvider.values.firstWhere(
+      (provider) => provider.name == prefs.getString('aiProvider'),
+      orElse: () => AiProvider.openRouter,
+    );
+    aiService.provider = aiProvider;
+    _loadSelectedModel(prefs);
     useAiVision = prefs.getBool('useAiVision') ?? false;
     final savedToolbarTools = prefs.getStringList('editorToolbarTools');
     if (savedToolbarTools != null) {
@@ -281,11 +288,7 @@ class AppState extends ChangeNotifier {
     final migrateDefaultModel =
         !(prefs.getBool(_defaultModelMigrationKey) ?? false) &&
         _replaceLegacyDefaultModel();
-    try {
-      _apiKey = await _secureStorage.read(key: _keyStorageName) ?? '';
-    } catch (_) {
-      _apiKey = '';
-    }
+    _apiKey = await _readApiKey();
     aiConnected = _apiKey.isNotEmpty && _hasTextAiModel;
     if (migrateDefaultModel) await saveAiSettings(key: '');
     // Mark the migration even when nothing changed, so choosing Luna again
@@ -2314,7 +2317,7 @@ class AppState extends ChangeNotifier {
     void Function(int completed, int total)? onProgress,
   }) async {
     if (!aiConnected) {
-      throw StateError('Hãy thiết lập OpenRouter trong Cài đặt AI');
+      throw StateError('Hãy thiết lập API key trong Cài đặt AI');
     }
     final points = weakPoints
         .where((point) => includeNormalized || !point.isNormalized)
@@ -2779,7 +2782,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> saveAiSettings({required String key}) async {
     if (key.isNotEmpty && key != _apiKey) {
-      await _secureStorage.write(key: _keyStorageName, value: key);
+      await _secureStorage.write(key: _currentKeyStorageName, value: key);
       _apiKey = key;
     }
     final prefs = await SharedPreferences.getInstance();
@@ -2788,19 +2791,20 @@ class AppState extends ChangeNotifier {
     await prefs.setString('translationStyle', translationStyle.name);
     await prefs.setBool('showOcrInAiResults', showOcrInAiResults);
     await prefs.setBool('weaknessHighlightMode', weaknessHighlightMode);
-    await prefs.setString('selectedModelId', selectedModelId);
-    await prefs.setString('selectedModelName', selectedModelName);
+    await prefs.setString('aiProvider', aiProvider.name);
+    await prefs.setString(_providerKey('selectedModelId'), selectedModelId);
+    await prefs.setString(_providerKey('selectedModelName'), selectedModelName);
     await prefs.setBool('useAiVision', useAiVision);
     await prefs.setString(
-      _modelIdsStorageName,
+      _providerKey(_modelIdsStorageName),
       jsonEncode(modelIds.map((slot, value) => MapEntry(slot.name, value))),
     );
     await prefs.setString(
-      _modelNamesStorageName,
+      _providerKey(_modelNamesStorageName),
       jsonEncode(modelNames.map((slot, value) => MapEntry(slot.name, value))),
     );
     await prefs.setString(
-      _savedModelsStorageName,
+      _providerKey(_savedModelsStorageName),
       jsonEncode(savedModels.map((model) => model.toJson()).toList()),
     );
     aiConnected = _apiKey.isNotEmpty && _hasTextAiModel;
@@ -2827,11 +2831,66 @@ class AppState extends ChangeNotifier {
     return changed;
   }
 
+  /// Khóa lưu trữ theo nhà cung cấp. OpenRouter giữ tên cũ để cấu hình đã
+  /// có không bị mất.
+  String _providerKey(String base) =>
+      aiProvider == AiProvider.openRouter ? base : '${base}_${aiProvider.name}';
+
+  String get _currentKeyStorageName => aiProvider == AiProvider.openRouter
+      ? _keyStorageName
+      : _geminiKeyStorageName;
+
+  ({String id, String name}) _providerDefault(AiModelSlot slot) =>
+      aiProvider == AiProvider.gemini
+      ? (id: defaultGeminiModelId, name: defaultGeminiModelName)
+      : defaultModelFor(slot);
+
+  void _loadSelectedModel(SharedPreferences prefs) {
+    final fallback = _providerDefault(AiModelSlot.translate);
+    final storedId = prefs.getString(_providerKey('selectedModelId'));
+    final storedName = prefs.getString(_providerKey('selectedModelName'));
+    selectedModelId = storedId?.trim().isNotEmpty == true
+        ? storedId!
+        : fallback.id;
+    selectedModelName = storedName?.trim().isNotEmpty == true
+        ? storedName!
+        : fallback.name;
+  }
+
+  Future<String> _readApiKey() async {
+    try {
+      return await _secureStorage.read(key: _currentKeyStorageName) ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// Đổi nhà cung cấp AI: lưu cấu hình bên cũ rồi nạp key và model của bên
+  /// mới (lần đầu dùng Gemini thì mọi chức năng mặc định Gemini 3.8 Flash).
+  Future<void> setAiProvider(AiProvider provider) async {
+    if (provider == aiProvider) return;
+    await saveAiSettings(key: '');
+    aiProvider = provider;
+    aiService.provider = provider;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('aiProvider', provider.name);
+    _loadSelectedModel(prefs);
+    _loadModelAssignments(prefs);
+    _apiKey = await _readApiKey();
+    availableModels = [];
+    aiConnected = _apiKey.isNotEmpty && _hasTextAiModel;
+    notifyListeners();
+  }
+
   void _loadModelAssignments(SharedPreferences prefs) {
     modelIds.clear();
     modelNames.clear();
-    final ids = _decodeStringMap(prefs.getString(_modelIdsStorageName));
-    final names = _decodeStringMap(prefs.getString(_modelNamesStorageName));
+    final ids = _decodeStringMap(
+      prefs.getString(_providerKey(_modelIdsStorageName)),
+    );
+    final names = _decodeStringMap(
+      prefs.getString(_providerKey(_modelNamesStorageName)),
+    );
     for (final slot in AiModelSlot.values) {
       final id = ids[slot.name] ?? '';
       if (id.isNotEmpty) modelIds[slot] = id;
@@ -2842,10 +2901,11 @@ class AppState extends ChangeNotifier {
     // every feature from the selected model. While that is still the app
     // default, each feature gets its own default (Haiku for AI lookup); a
     // model the learner chose is used everywhere.
-    final usesAppDefault = selectedModelId == defaultAiModelId;
+    final usesAppDefault =
+        selectedModelId == _providerDefault(AiModelSlot.translate).id;
     for (final slot in AiModelSlot.values) {
       final model = usesAppDefault
-          ? defaultModelFor(slot)
+          ? _providerDefault(slot)
           : (id: selectedModelId, name: selectedModelName);
       if (!modelIds.containsKey(slot)) {
         modelIds[slot] = model.id;
@@ -2853,7 +2913,8 @@ class AppState extends ChangeNotifier {
       }
       modelNames.putIfAbsent(slot, () => model.name);
     }
-    final rawSaved = prefs.getString(_savedModelsStorageName);
+    savedModels = [];
+    final rawSaved = prefs.getString(_providerKey(_savedModelsStorageName));
     if (rawSaved != null) {
       try {
         savedModels = (jsonDecode(rawSaved) as List)
@@ -2943,13 +3004,23 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> deleteApiKey() async {
-    await _secureStorage.delete(key: _keyStorageName);
+    await _secureStorage.delete(key: _currentKeyStorageName);
     _apiKey = '';
     aiConnected = false;
     selectedModelId = '';
     selectedModelName = '';
     modelIds.clear();
     modelNames.clear();
+    if (aiProvider == AiProvider.gemini) {
+      // Gemini has a known default; keep it so a new key works immediately.
+      final model = _providerDefault(AiModelSlot.translate);
+      selectedModelId = model.id;
+      selectedModelName = model.name;
+      for (final slot in AiModelSlot.values) {
+        modelIds[slot] = model.id;
+        modelNames[slot] = model.name;
+      }
+    }
     availableModels = [];
     await saveAiSettings(key: '');
   }

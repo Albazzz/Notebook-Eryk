@@ -30,7 +30,7 @@ APK debug được tạo tại `build/app/outputs/flutter-apk/app-debug.apk`.
 - Chạm đồng thời hai ngón trên canvas để hoàn tác nét vừa vẽ.
 - Gesture vùng chọn riêng cho Tra từ, AI Dịch, AI Giải thích và Điểm yếu; kết quả AI là popup có thể kéo và đóng.
 - Tra từ ngoại tuyến qua `DictionaryRepository`, tách khỏi AI.
-- OpenRouter service dùng chung, tải model động, tùy chọn JLPT/ngôn ngữ.
+- Chọn nhà cung cấp AI: OpenRouter (nhiều model) hoặc Gemini trực tiếp bằng key Google AI Studio (mặc định Gemini 3.8 Flash); mỗi bên có key và model riêng. Tải model động, tùy chọn JLPT/ngôn ngữ.
 - API key lưu bằng secure storage và không hiển thị lại sau khi lưu.
 - Tạo, sửa, lọc, xóa Điểm yếu; mở lại đúng vở/trang nguồn.
   - AI tách từng điểm theo câu hỏi, nhận dạng dạng đề JLPT (漢字読み, 文脈規定, 文の組み立て★, 読解...) và ghi "Chỗ dễ nhầm", "Đáp án đúng"; cách đọc/Hán Việt được đối chiếu với từ điển ngoại tuyến.

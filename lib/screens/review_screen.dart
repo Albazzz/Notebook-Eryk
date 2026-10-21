@@ -212,7 +212,7 @@ class _ReviewScreenState extends State<ReviewScreen>
       return;
     }
     if (!state.aiConnected) {
-      showAppSnack(context, 'Hãy thiết lập OpenRouter trong Cài đặt AI');
+      showAppSnack(context, 'Hãy thiết lập API key trong Cài đặt AI');
       return;
     }
     final future = state.aiService.completePracticeQuestions(

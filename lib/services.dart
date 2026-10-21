@@ -549,7 +549,10 @@ const multiQuestionGuide = '''
 Vùng khoanh có thể chứa NHIỀU câu hỏi (đánh số 1, 2, 問1, (1), ①...). Tách và xử lý TỪNG câu riêng theo đúng thứ tự xuất hiện; không trộn lựa chọn hay ngữ cảnh giữa các câu. Số của lựa chọn (1 2 3 4) khác số câu hỏi: nhóm 4 phương án ngắn liên tiếp là lựa chọn của câu ngay phía trên. Câu hỏi đọc hiểu dùng chung một bài đọc thì mỗi câu vẫn là một mục riêng. Nếu một câu bị cắt mất lựa chọn thì vẫn xử lý phần còn lại và ghi vào warning.''';
 
 class OpenRouterService {
-  static const _baseUrl = 'https://openrouter.ai/api/v1';
+  /// Nhà cung cấp đang dùng; AppState đồng bộ từ Cài đặt AI.
+  AiProvider provider = AiProvider.openRouter;
+  String get _baseUrl => provider.baseUrl;
+  bool get _isGemini => provider == AiProvider.gemini;
   static const _completionTimeout = Duration(seconds: 150);
   final HttpClient _client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 15);
@@ -568,6 +571,10 @@ class OpenRouterService {
   /// require_parameters, gửi kèm tham số này làm OpenRouter không tìm được
   /// provider nào và trả lỗi; model lạ được phát hiện ở lần gọi đầu.
   final Set<String> _temperatureUnsupportedModels = {};
+
+  /// Model Gemini đã từ chối JSON Schema chặt; lần sau xin JSON thường kèm
+  /// schema trong prompt. Kết quả vẫn được kiểm tra theo schema ở app.
+  final Set<String> _jsonObjectOnlyModels = {};
 
   bool _acceptsTemperature(String modelId) {
     final id = modelId.toLowerCase();
@@ -602,20 +609,31 @@ class OpenRouterService {
   Map<String, dynamic> _structuredRequestOptions(
     _StructuredOutputSpec spec, {
     bool preferLatency = false,
+    bool jsonObjectOnly = false,
   }) => {
     'stream': false,
-    'provider': {
-      'require_parameters': true,
-      // Route short interactive tasks to the provider answering fastest.
-      if (preferLatency) 'sort': 'latency',
-    },
-    'response_format': {
-      'type': 'json_schema',
-      'json_schema': {'name': spec.name, 'strict': true, 'schema': spec.schema},
-    },
-    'plugins': [
-      {'id': 'response-healing'},
-    ],
+    // `provider` and `plugins` are OpenRouter extensions; Gemini's
+    // OpenAI-compatible endpoint rejects unknown fields.
+    if (!_isGemini)
+      'provider': {
+        'require_parameters': true,
+        // Route short interactive tasks to the provider answering fastest.
+        if (preferLatency) 'sort': 'latency',
+      },
+    'response_format': jsonObjectOnly
+        ? {'type': 'json_object'}
+        : {
+            'type': 'json_schema',
+            'json_schema': {
+              'name': spec.name,
+              'strict': true,
+              'schema': spec.schema,
+            },
+          },
+    if (!_isGemini)
+      'plugins': [
+        {'id': 'response-healing'},
+      ],
   };
 
   Map<String, dynamic> _chatCompletionPayload({
@@ -627,19 +645,30 @@ class OpenRouterService {
     required _StructuredOutputSpec spec,
     AiReasoningEffort? effort,
     bool preferLatency = false,
+    bool geminiThinking = false,
+    bool jsonObjectOnly = false,
   }) {
     // GPT-5/Luna endpoints expose max_completion_tokens and may reject
     // temperature. Omitting that unsupported parameter lets OpenRouter route
     // the request to a provider that can enforce the schema.
     final gpt5Family = modelId.toLowerCase().contains('gpt-5');
     final reasoning = effort != null;
+    // Gemini 3 always thinks; "minimal" is the fastest level it accepts and
+    // its thinking tokens count against the output limit.
     final tokenLimit = reasoning
         ? maxTokens + _reasoningBudget(effort)
+        : geminiThinking
+        ? maxTokens + 1024
         : maxTokens;
+    final systemPrompt = jsonObjectOnly
+        ? '$instruction\n\nTrả về DUY NHẤT một đối tượng JSON đúng JSON Schema '
+              'sau (đủ mọi trường bắt buộc, không thêm trường khác):\n'
+              '${jsonEncode(spec.schema)}'
+        : instruction;
     return {
       'model': modelId,
       'messages': [
-        {'role': 'system', 'content': instruction},
+        {'role': 'system', 'content': systemPrompt},
         {'role': 'user', 'content': userContent},
       ],
       // Reasoning models ignore/refuse temperature; sampling only matters
@@ -650,8 +679,15 @@ class OpenRouterService {
       if (!gpt5Family) 'max_tokens': tokenLimit,
       // The hidden reasoning text is never shown, so exclude it from the
       // response to save bandwidth and parsing time.
-      if (reasoning) 'reasoning': {'effort': effort.name, 'exclude': true},
-      ..._structuredRequestOptions(spec, preferLatency: preferLatency),
+      if (reasoning && !_isGemini)
+        'reasoning': {'effort': effort.name, 'exclude': true},
+      if (_isGemini && (reasoning || geminiThinking))
+        'reasoning_effort': effort?.name ?? 'minimal',
+      ..._structuredRequestOptions(
+        spec,
+        preferLatency: preferLatency,
+        jsonObjectOnly: jsonObjectOnly,
+      ),
     };
   }
 
@@ -659,6 +695,7 @@ class OpenRouterService {
   Map<String, dynamic> chatPayloadForTesting({
     required String modelId,
     bool reasoning = true,
+    bool jsonObjectOnly = false,
   }) => _chatCompletionPayload(
     modelId: modelId,
     instruction: 'test',
@@ -667,12 +704,24 @@ class OpenRouterService {
     maxTokens: 1000,
     spec: _quickCheckSpec,
     effort: reasoning ? reasoningEffort : null,
+    geminiThinking: _isGemini,
+    jsonObjectOnly: jsonObjectOnly,
   );
 
   bool _isReasoningRejected(_HttpResult response) {
     if (response.statusCode < 400 || response.statusCode >= 500) return false;
     final detail = response.body.toLowerCase();
     return detail.contains('reasoning') || _isParameterRejected(response);
+  }
+
+  /// Gemini báo lỗi 400 khi một phần JSON Schema (ví dụ additionalProperties)
+  /// không được hỗ trợ.
+  bool _isSchemaRejected(_HttpResult response) {
+    if (response.statusCode != 400) return false;
+    final detail = response.body.toLowerCase();
+    return detail.contains('schema') ||
+        detail.contains('response_format') ||
+        detail.contains('additionalproperties');
   }
 
   bool _isParameterRejected(_HttpResult response) {
@@ -708,6 +757,9 @@ class OpenRouterService {
           : (maxTokens * 3 ~/ 2).clamp(maxTokens, maxTokens + 1600);
       final reasoning =
           effort != null && !_reasoningUnsupportedModels.contains(modelId);
+      final geminiThinking =
+          _isGemini && !_reasoningUnsupportedModels.contains(modelId);
+      final jsonObjectOnly = _jsonObjectOnlyModels.contains(modelId);
       final sentTemperature = !reasoning && _acceptsTemperature(modelId);
       final response = await _request(
         'POST',
@@ -724,10 +776,16 @@ class OpenRouterService {
             spec: spec,
             effort: reasoning ? effort : null,
             preferLatency: preferLatency,
+            geminiThinking: geminiThinking,
+            jsonObjectOnly: jsonObjectOnly,
           ),
         ),
       );
-      if (reasoning && _isReasoningRejected(response)) {
+      if (_isGemini && !jsonObjectOnly && _isSchemaRejected(response)) {
+        _jsonObjectOnlyModels.add(modelId);
+        continue;
+      }
+      if ((reasoning || geminiThinking) && _isReasoningRejected(response)) {
         // Non-reasoning models have no endpoint that accepts the parameter
         // while require_parameters is on. Remember it and resend without it;
         // this does not consume a schema attempt.
@@ -1006,9 +1064,13 @@ class OpenRouterService {
   );
 
   Future<void> testConnection(String apiKey) async {
-    final response = await _request('GET', '/key', apiKey);
+    final response = await _request(
+      'GET',
+      _isGemini ? '/models' : '/key',
+      apiKey,
+    );
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw HttpException('OpenRouter trả về mã ${response.statusCode}');
+      throw HttpException('${provider.label} trả về mã ${response.statusCode}');
     }
   }
 
@@ -1019,6 +1081,7 @@ class OpenRouterService {
     }
     final body = jsonDecode(response.body) as Map<String, dynamic>;
     final data = body['data'] as List<dynamic>? ?? const [];
+    if (_isGemini) return parseGeminiModels(data);
     return data
         .take(120)
         .map((raw) {
@@ -1039,6 +1102,48 @@ class OpenRouterService {
         })
         .where((model) => model.id.isNotEmpty)
         .toList();
+  }
+
+  /// Danh sách model của Gemini (dạng `models/gemini-...`): chỉ giữ model
+  /// sinh văn bản, bỏ embedding/ảnh/video/âm thanh.
+  @visibleForTesting
+  static List<OpenRouterModel> parseGeminiModels(List<dynamic> data) {
+    const excluded = [
+      'embedding',
+      'image',
+      'imagen',
+      'veo',
+      'tts',
+      'audio',
+      'live',
+      'aqa',
+    ];
+    final models = <OpenRouterModel>[];
+    for (final raw in data.whereType<Map>()) {
+      var id = raw['id']?.toString() ?? '';
+      if (id.startsWith('models/')) id = id.substring('models/'.length);
+      if (!id.startsWith('gemini') || excluded.any(id.contains)) continue;
+      final name = id
+          .split('-')
+          .map(
+            (part) => part.isEmpty
+                ? part
+                : '${part[0].toUpperCase()}${part.substring(1)}',
+          )
+          .join(' ');
+      models.add(
+        OpenRouterModel(
+          id: id,
+          name: name,
+          contextLength: 0,
+          vision: true,
+          free: false,
+        ),
+      );
+    }
+    // Newest/highest version first, so the default suggestions are modern.
+    models.sort((a, b) => b.id.compareTo(a.id));
+    return models;
   }
 
   Future<String> complete({
@@ -2093,8 +2198,10 @@ Chỉ tra đúng từ/cụm từ người dùng đã khoanh. Nếu có nhiều c
       'Bearer $normalizedApiKey',
     );
     request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
-    request.headers.set('HTTP-Referer', 'https://nihongo-notebook.local');
-    request.headers.set('X-Title', 'Note Eryk');
+    if (!_isGemini) {
+      request.headers.set('HTTP-Referer', 'https://nihongo-notebook.local');
+      request.headers.set('X-Title', 'Note Eryk');
+    }
     // HttpClientRequest.write can reject non-ASCII chunks on some Android
     // runtimes. Sending explicit UTF-8 bytes is deterministic for Japanese
     // and Vietnamese prompts.

@@ -219,7 +219,38 @@ extension TranslationStyleLabel on TranslationStyle {
   };
 }
 
-/// Các ngăn model độc lập. Một OpenRouter API key có thể dùng nhiều model.
+/// Nơi gọi AI. Cả hai đều dùng API kiểu OpenAI `/chat/completions`.
+enum AiProvider {
+  openRouter(
+    label: 'OpenRouter',
+    description: 'Một API key, nhiều model của nhiều hãng',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    keyHint: 'sk-or-v1-...',
+    keyUrl: 'openrouter.ai/keys',
+  ),
+  gemini(
+    label: 'Gemini',
+    description: 'Key Google AI Studio, gọi thẳng model Gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    keyHint: 'AIza...',
+    keyUrl: 'aistudio.google.com/apikey',
+  );
+
+  const AiProvider({
+    required this.label,
+    required this.description,
+    required this.baseUrl,
+    required this.keyHint,
+    required this.keyUrl,
+  });
+  final String label;
+  final String description;
+  final String baseUrl;
+  final String keyHint;
+  final String keyUrl;
+}
+
+/// Các ngăn model độc lập. Một API key có thể dùng nhiều model.
 enum AiModelSlot { vision, translate, explain, solve, weakness, dictionary }
 
 extension AiModelSlotLabel on AiModelSlot {

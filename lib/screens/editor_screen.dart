@@ -2898,7 +2898,7 @@ class _EditorScreenState extends State<EditorScreen>
       context: context,
       builder: (context) => AlertDialog(
         icon: const Icon(Icons.lock_outline_rounded, color: AppColors.explain),
-        title: const Text('Chưa thiết lập OpenRouter'),
+        title: const Text('Chưa thiết lập AI'),
         content: const Text(
           'Chỉ công cụ AI cần API key. Bút, Highlight, PDF và Tra từ ngoại tuyến vẫn dùng bình thường.',
         ),

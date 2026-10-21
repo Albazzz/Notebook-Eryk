@@ -19,7 +19,7 @@ void main() {
     expect(serviceSource, contains('Every AI response must pass'));
     expect(
       serviceSource,
-      contains("..._structuredRequestOptions(spec, preferLatency"),
+      contains(RegExp(r'\.\.\._structuredRequestOptions\(\s*spec,')),
     );
     expect(serviceSource, isNot(contains('compatibilityMode')));
   });
@@ -1201,6 +1201,79 @@ void main() {
     // A character without a known reading means no guess at all.
     expect(composeHanViet('仮名', kanji), '');
     expect(composeHanViet('ばったり', kanji), '');
+  });
+
+  test('Gemini payload drops OpenRouter fields and uses reasoning_effort', () {
+    final service = OpenRouterService()
+      ..provider = AiProvider.gemini
+      ..reasoningEffort = AiReasoningEffort.medium;
+    addTearDown(service.dispose);
+
+    final fast = service.chatPayloadForTesting(
+      modelId: 'gemini-3.8-flash',
+      reasoning: false,
+    );
+    expect(fast.containsKey('provider'), isFalse);
+    expect(fast.containsKey('plugins'), isFalse);
+    expect(fast.containsKey('reasoning'), isFalse);
+    expect(fast['reasoning_effort'], 'minimal');
+    expect((fast['response_format'] as Map)['type'], 'json_schema');
+
+    final thinking = service.chatPayloadForTesting(modelId: 'gemini-3.8-flash');
+    expect(thinking['reasoning_effort'], 'medium');
+
+    final fallback = service.chatPayloadForTesting(
+      modelId: 'gemini-3.8-flash',
+      jsonObjectOnly: true,
+    );
+    expect(fallback['response_format'], {'type': 'json_object'});
+    final system = (fallback['messages'] as List).first as Map;
+    expect(system['content'], contains('JSON Schema'));
+
+    final models = OpenRouterService.parseGeminiModels([
+      {'id': 'models/gemini-3.8-flash'},
+      {'id': 'models/gemini-embedding-001'},
+      {'id': 'models/veo-3.1-generate-preview'},
+      {'id': 'gemini-4-argon'},
+    ]);
+    expect(models.map((model) => model.id), [
+      'gemini-4-argon',
+      'gemini-3.8-flash',
+    ]);
+  });
+
+  test('switching AI provider keeps separate models per provider', () async {
+    final root = await Directory.systemTemp.createTemp('noteeryk_provider_');
+    addTearDown(() => root.delete(recursive: true));
+    final originalProvider = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _TestPathProvider(root.path);
+    addTearDown(() => PathProviderPlatform.instance = originalProvider);
+    SharedPreferences.setMockInitialValues({'autoSave': false});
+
+    final state = AppState();
+    addTearDown(state.dispose);
+    await state.initialize();
+    expect(state.aiProvider, AiProvider.openRouter);
+    expect(state.modelIds[AiModelSlot.translate], AppState.defaultAiModelId);
+
+    await state.setAiProvider(AiProvider.gemini);
+    expect(state.aiService.provider, AiProvider.gemini);
+    for (final slot in AiModelSlot.values) {
+      expect(state.modelIds[slot], AppState.defaultGeminiModelId);
+    }
+
+    await state.setAiProvider(AiProvider.openRouter);
+    expect(
+      state.modelIds[AiModelSlot.dictionary],
+      AppState.defaultDictionaryModelId,
+    );
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('aiProvider'), 'openRouter');
+    expect(
+      prefs.getString('ai_model_ids_gemini'),
+      contains('gemini-3.8-flash'),
+    );
   });
 }
 
