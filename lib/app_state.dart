@@ -169,6 +169,10 @@ class AppState extends ChangeNotifier {
   /// Trộn ngẫu nhiên thứ tự thẻ khi ôn flashcard (như Quizlet).
   bool flashcardShuffle = false;
 
+  /// Kiểu Quiz lần trước: trường hỏi (rỗng = ngẫu nhiên) và trường đáp.
+  Set<QuizField> quizAskFields = {};
+  QuizField? quizAnswerField;
+
   // Cài đặt bút được nhớ giữa các lần mở vở (màu lưu ở dạng đặc, độ đậm
   // riêng).
   Color penColor = AppColors.ink;
@@ -308,6 +312,13 @@ class AppState extends ChangeNotifier {
     }
     decks = _parseDecks(prefs.getString('flashcardDecks'));
     flashcardShuffle = prefs.getBool('flashcardShuffle') ?? false;
+    quizAskFields = {
+      for (final name in prefs.getStringList('quizAskFields') ?? const [])
+        ...QuizField.values.where((field) => field.name == name),
+    };
+    quizAnswerField = QuizField.values
+        .where((field) => field.name == prefs.getString('quizAnswerField'))
+        .firstOrNull;
     _loadPenSettings(prefs);
     final pageWidth = prefs.getDouble('pageCanvasWidth');
     final pageHeight = prefs.getDouble('pageCanvasHeight');
@@ -2672,6 +2683,21 @@ class AppState extends ChangeNotifier {
         await prefs.setDouble('pageCanvasHeight', size.height);
       }),
     );
+  }
+
+  Future<void> setQuizFields(Set<QuizField> ask, QuizField? answer) async {
+    quizAskFields = Set.of(ask);
+    quizAnswerField = answer;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      'quizAskFields',
+      ask.map((field) => field.name).toList(),
+    );
+    if (answer == null) {
+      await prefs.remove('quizAnswerField');
+    } else {
+      await prefs.setString('quizAnswerField', answer.name);
+    }
   }
 
   Future<void> setFlashcardShuffle(bool value) async {

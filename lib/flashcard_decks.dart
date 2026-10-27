@@ -2,23 +2,29 @@ import 'dart:math' as math;
 
 import 'models.dart';
 
-/// Trường dùng làm câu hỏi hoặc đáp án trong Quiz của một bộ thẻ.
+/// Trường dùng làm câu hỏi hoặc đáp án trong Quiz của một bộ thẻ (cùng bộ
+/// trường với mặt thẻ flashcard).
 enum QuizField {
+  word('Từ / mẫu'),
+  kanji('Kanji'),
+  reading('Cách đọc'),
   hanViet('Hán Việt'),
   meaning('Nghĩa'),
-  kanji('Kanji'),
-  reading('Cách đọc');
+  example('Ví dụ');
 
   const QuizField(this.label);
   final String label;
 
   String valueOf(WeakPoint point) => switch (this) {
-    QuizField.hanViet => point.hanViet,
-    QuizField.meaning => point.content,
+    QuizField.word => point.title,
     // The written form of the word, only when it actually uses kanji.
     QuizField.kanji =>
-      RegExp(r'[㐀-鿿]').hasMatch(point.title) ? point.title : '',
+      RegExp(r'[\u3400-\u9fff]').hasMatch(point.title) ? point.title : '',
     QuizField.reading => point.reading,
+    QuizField.hanViet => point.hanViet,
+    QuizField.meaning => point.content,
+    QuizField.example =>
+      point.examples.isEmpty ? '' : point.examples.first.split(' — ').first,
   }.trim();
 }
 
@@ -178,52 +184,72 @@ List<List<WeakPoint>> splitIntoDecks(
 class QuizQuestion {
   const QuizQuestion({
     required this.point,
-    required this.ask,
+    required this.promptLines,
     required this.answer,
-    required this.prompt,
     required this.options,
     required this.correctIndex,
   });
 
   final WeakPoint point;
-  final QuizField ask;
+
+  /// Các trường hiển thị ở câu hỏi, trường đầu là dòng chính.
+  final List<(QuizField, String)> promptLines;
   final QuizField answer;
-  final String prompt;
   final List<String> options;
   final int correctIndex;
 
+  QuizField get ask => promptLines.first.$1;
+  String get prompt => promptLines.first.$2;
   String get correctText => options[correctIndex];
 }
 
 String _normalized(String value) =>
     value.toLowerCase().replaceAll(RegExp(r'[\s・、,。.]'), '');
 
-/// Các cặp (hỏi, đáp) dùng được cho [point]: hai trường khác nhau, đều có dữ
-/// liệu. [ask]/[answer] null nghĩa là ngẫu nhiên.
-List<(QuizField, QuizField)> quizPairsFor(
+/// Câu hỏi (các dòng hiển thị) và trường đáp có thể dùng cho [point].
+/// [ask] rỗng: chọn ngẫu nhiên một trường hỏi; [answer] null: ngẫu nhiên.
+/// Trường hỏi trùng giá trị với đáp án bị bỏ để không lộ đáp án (ví dụ
+/// hỏi Cách đọc của một từ chỉ có kana).
+List<(List<(QuizField, String)>, QuizField)> quizLayoutsFor(
   WeakPoint point, {
-  QuizField? ask,
+  Set<QuizField> ask = const {},
   QuizField? answer,
-}) => [
-  for (final question in QuizField.values)
-    for (final reply in QuizField.values)
-      if (question != reply &&
-          (ask == null || ask == question) &&
-          (answer == null || answer == reply) &&
-          question.valueOf(point).isNotEmpty &&
-          reply.valueOf(point).isNotEmpty &&
-          // Asking the reading of a kana-only word gives the answer away.
-          _normalized(question.valueOf(point)) !=
-              _normalized(reply.valueOf(point)))
-        (question, reply),
-];
+}) {
+  final layouts = <(List<(QuizField, String)>, QuizField)>[];
+  for (final reply in QuizField.values) {
+    if (answer != null && reply != answer) continue;
+    if (ask.contains(reply)) continue;
+    final replyValue = reply.valueOf(point);
+    if (replyValue.isEmpty) continue;
+    bool usable(QuizField field) {
+      final value = field.valueOf(point);
+      return field != reply &&
+          value.isNotEmpty &&
+          _normalized(value) != _normalized(replyValue);
+    }
+
+    if (ask.isEmpty) {
+      for (final question in QuizField.values.where(usable)) {
+        layouts.add(([(question, question.valueOf(point))], reply));
+      }
+    } else {
+      final lines = [
+        for (final field in QuizField.values)
+          if (ask.contains(field) && usable(field))
+            (field, field.valueOf(point)),
+      ];
+      if (lines.isNotEmpty) layouts.add((lines, reply));
+    }
+  }
+  return layouts;
+}
 
 /// Sinh câu hỏi trắc nghiệm cho [deck]. Đáp án nhiễu lấy trong bộ trước rồi
 /// mới tới [distractorPool] (thường là toàn bộ điểm yếu) để bộ nhỏ vẫn đủ 4
 /// lựa chọn. Thẻ không đủ dữ liệu hoặc không đủ đáp án nhiễu bị bỏ qua.
 List<QuizQuestion> buildQuiz(
   List<WeakPoint> deck, {
-  QuizField? ask,
+  Set<QuizField> ask = const {},
   QuizField? answer,
   Iterable<WeakPoint> distractorPool = const [],
   bool shuffle = true,
@@ -239,9 +265,9 @@ List<QuizQuestion> buildQuiz(
   ];
   final questions = <QuizQuestion>[];
   for (final point in order) {
-    final pairs = quizPairsFor(point, ask: ask, answer: answer);
-    if (pairs.isEmpty) continue;
-    final (question, reply) = pairs[rng.nextInt(pairs.length)];
+    final layouts = quizLayoutsFor(point, ask: ask, answer: answer);
+    if (layouts.isEmpty) continue;
+    final (lines, reply) = layouts[rng.nextInt(layouts.length)];
     final correct = reply.valueOf(point);
     final seen = {_normalized(correct)};
     final deckDistractors = <String>[];
@@ -263,9 +289,8 @@ List<QuizQuestion> buildQuiz(
     questions.add(
       QuizQuestion(
         point: point,
-        ask: question,
+        promptLines: lines,
         answer: reply,
-        prompt: question.valueOf(point),
         options: options,
         correctIndex: options.indexOf(correct),
       ),

@@ -20,8 +20,13 @@ class ReviewScreen extends StatefulWidget {
     required this.state,
     this.initialQueue,
     this.deck,
+    this.autoStart = false,
   });
   final AppState state;
+
+  /// Vào học ngay với toàn bộ hàng đợi, bỏ qua trang chọn thẻ (dùng khi đã
+  /// chọn chế độ ở trang bộ thẻ).
+  final bool autoStart;
 
   /// Ôn đúng các mục này (ví dụ các mục đã chọn) thay vì hàng đợi đến hạn.
   final List<WeakPoint>? initialQueue;
@@ -40,6 +45,10 @@ class _ReviewScreenState extends State<ReviewScreen>
   bool _revealed = false;
   bool _started = false;
   late final AnimationController _flipController;
+
+  /// Khoảng kéo ngang hiện tại của thẻ: phải = đã nhớ, trái = chưa nhớ.
+  double _dragDx = 0;
+  static const _flipDuration = Duration(milliseconds: 260);
   late Set<String> _selectedIds;
   int _reviewed = 0;
   int _again = 0;
@@ -59,10 +68,7 @@ class _ReviewScreenState extends State<ReviewScreen>
   @override
   void initState() {
     super.initState();
-    _flipController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 560),
-    );
+    _flipController = AnimationController(vsync: this, duration: _flipDuration);
     _queue = List.of(
       widget.initialQueue ??
           (widget.deck == null
@@ -70,6 +76,11 @@ class _ReviewScreenState extends State<ReviewScreen>
               : state.pointsForDeck(widget.deck!)),
     );
     _selectedIds = _queue.map((point) => point.id).toSet();
+    if (widget.autoStart) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _startWith(_queue);
+      });
+    }
   }
 
   WeakPoint? get _current => _index < _queue.length ? _queue[_index] : null;
@@ -79,7 +90,7 @@ class _ReviewScreenState extends State<ReviewScreen>
     super.didChangeDependencies();
     _flipController.duration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
-        : const Duration(milliseconds: 560);
+        : _flipDuration;
   }
 
   @override
@@ -114,6 +125,7 @@ class _ReviewScreenState extends State<ReviewScreen>
       }
       _index++;
       _revealed = false;
+      _dragDx = 0;
       _flipController.value = 0;
     });
     if (_index >= _queue.length) _recordDeckSession();
@@ -328,15 +340,16 @@ class _ReviewScreenState extends State<ReviewScreen>
                     icon: const Icon(Icons.tune_rounded),
                     label: const Text('Tùy chỉnh mặt thẻ'),
                   ),
-                  FilterChip(
-                    avatar: const Icon(Icons.shuffle_rounded, size: 18),
-                    label: const Text('Trộn ngẫu nhiên'),
-                    selected: state.flashcardShuffle,
-                    onSelected: (value) async {
-                      await state.setFlashcardShuffle(value);
-                      if (mounted) setState(() {});
-                    },
-                  ),
+                  if (widget.deck == null)
+                    FilterChip(
+                      avatar: const Icon(Icons.shuffle_rounded, size: 18),
+                      label: const Text('Trộn ngẫu nhiên'),
+                      selected: state.flashcardShuffle,
+                      onSelected: (value) async {
+                        await state.setFlashcardShuffle(value);
+                        if (mounted) setState(() {});
+                      },
+                    ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -458,6 +471,7 @@ class _ReviewScreenState extends State<ReviewScreen>
   Widget _buildCard(WeakPoint point) {
     final front = flashcardSideContent(point, state.flashcardFrontFields);
     final back = flashcardSideContent(point, state.flashcardBackFields);
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
     return Column(
       children: [
         LinearProgressIndicator(
@@ -470,35 +484,73 @@ class _ReviewScreenState extends State<ReviewScreen>
                 440.0,
                 math.max(120.0, constraints.maxHeight - 32),
               );
+              final width = math.min(760.0, constraints.maxWidth);
+              final progress = (_dragDx / (width * .3)).clamp(-1.0, 1.0);
               return Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 760),
-                  child: SizedBox(
-                    width: double.infinity,
-                    height: height,
-                    child: AnimatedBuilder(
-                      animation: _flipController,
-                      builder: (context, _) {
-                        final angle = _flipController.value * math.pi;
-                        final showingBack = angle > math.pi / 2;
-                        return Transform(
-                          key: const ValueKey('flashcard-rotation'),
-                          alignment: Alignment.center,
-                          transform: Matrix4.identity()
-                            ..setEntry(3, 2, .0012)
-                            ..rotateY(angle),
-                          child: Transform(
-                            alignment: Alignment.center,
-                            transform: Matrix4.rotationY(
-                              showingBack ? math.pi : 0,
+                  child: GestureDetector(
+                    key: const ValueKey('flashcard-swipe'),
+                    onHorizontalDragUpdate: (details) =>
+                        setState(() => _dragDx += details.delta.dx),
+                    onHorizontalDragEnd: (details) {
+                      final velocity = details.primaryVelocity ?? 0;
+                      if (_dragDx > width * .3 || velocity > 900) {
+                        _rate(ReviewRating.good);
+                      } else if (_dragDx < -width * .3 || velocity < -900) {
+                        _rate(ReviewRating.again);
+                      } else {
+                        setState(() => _dragDx = 0);
+                      }
+                    },
+                    onHorizontalDragCancel: () => setState(() => _dragDx = 0),
+                    child: Transform.translate(
+                      offset: Offset(_dragDx, 0),
+                      child: Transform.rotate(
+                        angle: progress * .12,
+                        child: Stack(
+                          children: [
+                            SizedBox(
+                              width: double.infinity,
+                              height: height,
+                              child: AnimatedBuilder(
+                                animation: _flipController,
+                                builder: (context, _) {
+                                  final angle = _flipController.value * math.pi;
+                                  final showingBack = angle > math.pi / 2;
+                                  return Transform(
+                                    key: const ValueKey('flashcard-rotation'),
+                                    alignment: Alignment.center,
+                                    transform: Matrix4.identity()
+                                      ..setEntry(3, 2, .0012)
+                                      ..rotateY(angle),
+                                    child: Transform(
+                                      alignment: Alignment.center,
+                                      transform: Matrix4.rotationY(
+                                        showingBack ? math.pi : 0,
+                                      ),
+                                      child: _cardFace(
+                                        showingBack ? back : front,
+                                        showingBack: showingBack,
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
                             ),
-                            child: _cardFace(
-                              showingBack ? back : front,
-                              showingBack: showingBack,
-                            ),
-                          ),
-                        );
-                      },
+                            if (progress.abs() > .05)
+                              Positioned(
+                                top: 18,
+                                left: progress > 0 ? 40 : null,
+                                right: progress < 0 ? 40 : null,
+                                child: Opacity(
+                                  opacity: progress.abs(),
+                                  child: _SwipeStamp(remembered: progress > 0),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -506,24 +558,29 @@ class _ReviewScreenState extends State<ReviewScreen>
             },
           ),
         ),
-        if (_revealed)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 760),
-              child: Row(
-                children: [
-                  for (final rating in [
-                    ReviewRating.again,
-                    ReviewRating.good,
-                  ]) ...[
-                    Expanded(child: _ratingButton(point, rating)),
-                    if (rating == ReviewRating.again) const SizedBox(width: 8),
-                  ],
+        Text(
+          'Vuốt phải: đã nhớ · vuốt trái: chưa nhớ',
+          style: TextStyle(color: muted, fontSize: 12),
+        ),
+        const SizedBox(height: 8),
+        // Rating is available on either face, not only after flipping.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: Row(
+              children: [
+                for (final rating in [
+                  ReviewRating.again,
+                  ReviewRating.good,
+                ]) ...[
+                  Expanded(child: _ratingButton(point, rating)),
+                  if (rating == ReviewRating.again) const SizedBox(width: 8),
                 ],
-              ),
+              ],
             ),
           ),
+        ),
       ],
     );
   }
@@ -630,6 +687,32 @@ class _ReviewScreenState extends State<ReviewScreen>
           ),
           Text(next, style: const TextStyle(fontSize: 11)),
         ],
+      ),
+    );
+  }
+}
+
+class _SwipeStamp extends StatelessWidget {
+  const _SwipeStamp({required this.remembered});
+  final bool remembered;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = remembered ? AppColors.correct : AppColors.wrong;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color, width: 2),
+      ),
+      child: Text(
+        remembered ? 'Đã nhớ' : 'Chưa nhớ',
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 1,
+        ),
       ),
     );
   }

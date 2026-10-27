@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -8,14 +7,14 @@ import '../flashcard_decks.dart';
 import '../models.dart';
 import '../theme.dart';
 
-/// Quiz trắc nghiệm của một bộ thẻ: hỏi bằng một trường (Hán Việt, Nghĩa,
-/// Kanji, Cách đọc) và chọn đáp án ở một trường khác.
+/// Quiz trắc nghiệm của một bộ thẻ: câu hỏi hiện một hoặc nhiều trường
+/// (giống mặt thẻ flashcard) và chọn đáp án ở một trường khác.
 class QuizScreen extends StatefulWidget {
   const QuizScreen({
     super.key,
     required this.state,
     required this.deck,
-    this.ask,
+    this.ask = const {},
     this.answer,
     this.points,
   });
@@ -23,8 +22,10 @@ class QuizScreen extends StatefulWidget {
   final AppState state;
   final FlashcardDeck deck;
 
+  /// Trường hiện ở câu hỏi; rỗng là ngẫu nhiên một trường cho từng câu.
+  final Set<QuizField> ask;
+
   /// null: ngẫu nhiên cho từng câu.
-  final QuizField? ask;
   final QuizField? answer;
 
   /// Chỉ hỏi các thẻ này (ví dụ làm lại câu sai); mặc định là cả bộ.
@@ -44,7 +45,6 @@ class _QuizScreenState extends State<QuizScreen> {
   int _correct = 0;
   final DateTime _startedAt = DateTime.now();
   bool _recorded = false;
-  Timer? _advanceTimer;
 
   AppState get state => widget.state;
 
@@ -59,12 +59,6 @@ class _QuizScreenState extends State<QuizScreen> {
     );
   }
 
-  @override
-  void dispose() {
-    _advanceTimer?.cancel();
-    super.dispose();
-  }
-
   QuizQuestion? get _current =>
       _index < _questions.length ? _questions[_index] : null;
 
@@ -72,6 +66,7 @@ class _QuizScreenState extends State<QuizScreen> {
     final question = _current;
     if (question == null || _picked != null) return;
     final correct = option == question.correctIndex;
+    // No auto-advance: the learner reads the feedback and taps Continue.
     setState(() {
       _picked = option;
       if (correct) {
@@ -80,14 +75,9 @@ class _QuizScreenState extends State<QuizScreen> {
         _wrong.add(question);
       }
     });
-    if (correct && !MediaQuery.disableAnimationsOf(context)) {
-      // A right answer needs no reading time; move on automatically.
-      _advanceTimer = Timer(const Duration(milliseconds: 750), _next);
-    }
   }
 
   void _next() {
-    _advanceTimer?.cancel();
     if (!mounted) return;
     setState(() {
       _index++;
@@ -99,7 +89,12 @@ class _QuizScreenState extends State<QuizScreen> {
   void _record() {
     if (_recorded || _questions.isEmpty) return;
     _recorded = true;
-    final ask = widget.ask?.label ?? 'Ngẫu nhiên';
+    final ask = widget.ask.isEmpty
+        ? 'Ngẫu nhiên'
+        : QuizField.values
+              .where(widget.ask.contains)
+              .map((field) => field.label)
+              .join(' + ');
     final answer = widget.answer?.label ?? 'Ngẫu nhiên';
     state.recordDeckSession(
       widget.deck,
@@ -169,7 +164,7 @@ class _QuizScreenState extends State<QuizScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Các thẻ trong bộ chưa có đủ ${widget.ask?.label ?? 'trường hỏi'} và '
+            'Các thẻ trong bộ chưa có đủ trường hỏi và '
             '${widget.answer?.label ?? 'trường đáp án'}, hoặc không đủ đáp án nhiễu. '
             'Hãy chọn kiểu hỏi khác hoặc bổ sung thông tin cho điểm yếu.',
             textAlign: TextAlign.center,
@@ -208,7 +203,9 @@ class _QuizScreenState extends State<QuizScreen> {
                   children: [
                     Expanded(
                       child: Text(
-                        question.ask.label,
+                        question.promptLines
+                            .map((line) => line.$1.label)
+                            .join(' · '),
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           color: scheme.onSurfaceVariant,
@@ -230,7 +227,23 @@ class _QuizScreenState extends State<QuizScreen> {
                     height: 1.35,
                   ),
                 ),
-                const SizedBox(height: 72),
+                for (final (field, value) in question.promptLines.skip(1))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(
+                            text: '${field.label}: ',
+                            style: TextStyle(color: scheme.onSurfaceVariant),
+                          ),
+                          TextSpan(text: value),
+                        ],
+                      ),
+                      style: const TextStyle(fontSize: 18, height: 1.4),
+                    ),
+                  ),
+                const SizedBox(height: 56),
                 Text(
                   'Chọn đáp án đúng · ${question.answer.label}',
                   style: TextStyle(
@@ -510,20 +523,27 @@ class _Feedback extends StatelessWidget {
   }
 }
 
-/// Bảng chọn kiểu Quiz; trả về (hỏi, đáp) với null là ngẫu nhiên.
-Future<({QuizField? ask, QuizField? answer})?> showQuizSetup(
+/// Bảng chọn kiểu Quiz: trường hỏi chọn nhiều (rỗng = ngẫu nhiên), trường
+/// đáp chọn một (null = ngẫu nhiên). Ghi nhớ lựa chọn trong [state].
+Future<({Set<QuizField> ask, QuizField? answer})?> showQuizSetup(
   BuildContext context, {
+  required AppState state,
   required List<WeakPoint> points,
   required List<WeakPoint> pool,
-}) => showModalBottomSheet<({QuizField? ask, QuizField? answer})>(
+}) => showModalBottomSheet<({Set<QuizField> ask, QuizField? answer})>(
   context: context,
   showDragHandle: true,
   isScrollControlled: true,
-  builder: (_) => _QuizSetupSheet(points: points, pool: pool),
+  builder: (_) => _QuizSetupSheet(state: state, points: points, pool: pool),
 );
 
 class _QuizSetupSheet extends StatefulWidget {
-  const _QuizSetupSheet({required this.points, required this.pool});
+  const _QuizSetupSheet({
+    required this.state,
+    required this.points,
+    required this.pool,
+  });
+  final AppState state;
   final List<WeakPoint> points;
   final List<WeakPoint> pool;
 
@@ -532,35 +552,12 @@ class _QuizSetupSheet extends StatefulWidget {
 }
 
 class _QuizSetupSheetState extends State<_QuizSetupSheet> {
-  QuizField? _ask;
-  QuizField? _answer;
-
-  Widget _choices(
-    QuizField? value,
-    ValueChanged<QuizField?> onChanged, {
-    QuizField? exclude,
-  }) => Wrap(
-    spacing: 8,
-    runSpacing: 8,
-    children: [
-      ChoiceChip(
-        avatar: const Icon(Icons.shuffle_rounded, size: 18),
-        label: const Text('Ngẫu nhiên'),
-        selected: value == null,
-        onSelected: (_) => onChanged(null),
-      ),
-      for (final field in QuizField.values)
-        if (field != exclude)
-          ChoiceChip(
-            label: Text(field.label),
-            selected: value == field,
-            onSelected: (_) => onChanged(field),
-          ),
-    ],
-  );
+  late final Set<QuizField> _ask = Set.of(widget.state.quizAskFields);
+  late QuizField? _answer = widget.state.quizAnswerField;
 
   @override
   Widget build(BuildContext context) {
+    if (_answer != null && _ask.contains(_answer)) _answer = null;
     final count = buildQuiz(
       widget.points,
       ask: _ask,
@@ -568,6 +565,7 @@ class _QuizSetupSheetState extends State<_QuizSetupSheet> {
       distractorPool: widget.pool,
       random: math.Random(1),
     ).length;
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
@@ -581,13 +579,34 @@ class _QuizSetupSheetState extends State<_QuizSetupSheet> {
               'Câu hỏi hiển thị',
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
+            Text(
+              'Chọn một hoặc nhiều trường, như mặt trước flashcard.',
+              style: TextStyle(fontSize: 12, color: muted),
+            ),
             const SizedBox(height: 8),
-            _choices(
-              _ask,
-              (value) => setState(() {
-                _ask = value;
-                if (_answer == value) _answer = null;
-              }),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ChoiceChip(
+                  avatar: const Icon(Icons.shuffle_rounded, size: 18),
+                  label: const Text('Ngẫu nhiên'),
+                  selected: _ask.isEmpty,
+                  onSelected: (_) => setState(_ask.clear),
+                ),
+                for (final field in QuizField.values)
+                  FilterChip(
+                    label: Text(field.label),
+                    selected: _ask.contains(field),
+                    onSelected: (selected) => setState(() {
+                      if (selected) {
+                        _ask.add(field);
+                      } else {
+                        _ask.remove(field);
+                      }
+                    }),
+                  ),
+              ],
             ),
             const SizedBox(height: 16),
             const Text(
@@ -595,10 +614,24 @@ class _QuizSetupSheetState extends State<_QuizSetupSheet> {
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
-            _choices(
-              _answer,
-              (value) => setState(() => _answer = value),
-              exclude: _ask,
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ChoiceChip(
+                  avatar: const Icon(Icons.shuffle_rounded, size: 18),
+                  label: const Text('Ngẫu nhiên'),
+                  selected: _answer == null,
+                  onSelected: (_) => setState(() => _answer = null),
+                ),
+                for (final field in QuizField.values)
+                  if (!_ask.contains(field))
+                    ChoiceChip(
+                      label: Text(field.label),
+                      selected: _answer == field,
+                      onSelected: (_) => setState(() => _answer = field),
+                    ),
+              ],
             ),
             const SizedBox(height: 16),
             Text(
@@ -606,9 +639,7 @@ class _QuizSetupSheetState extends State<_QuizSetupSheet> {
                   ? 'Không thẻ nào đủ dữ liệu cho kiểu hỏi này.'
                   : '$count/${widget.points.length} thẻ đủ dữ liệu để hỏi.',
               style: TextStyle(
-                color: count == 0
-                    ? Theme.of(context).colorScheme.error
-                    : Theme.of(context).colorScheme.onSurfaceVariant,
+                color: count == 0 ? Theme.of(context).colorScheme.error : muted,
               ),
             ),
             const SizedBox(height: 16),
@@ -617,8 +648,10 @@ class _QuizSetupSheetState extends State<_QuizSetupSheet> {
               child: FilledButton.icon(
                 onPressed: count == 0
                     ? null
-                    : () =>
-                          Navigator.pop(context, (ask: _ask, answer: _answer)),
+                    : () {
+                        widget.state.setQuizFields(_ask, _answer);
+                        Navigator.pop(context, (ask: _ask, answer: _answer));
+                      },
                 icon: const Icon(Icons.play_arrow_rounded),
                 label: Text('Bắt đầu $count câu'),
               ),

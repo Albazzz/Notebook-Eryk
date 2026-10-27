@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:noteeryk/app_state.dart';
 import 'package:noteeryk/flashcard_decks.dart';
 import 'package:noteeryk/models.dart';
+import 'package:noteeryk/screens/deck_library_screen.dart';
 import 'package:noteeryk/screens/quiz_screen.dart';
 import 'package:noteeryk/widgets/paged_point_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -59,7 +60,7 @@ void main() {
   test('quiz uses the chosen fields and only valid cards', () {
     final quiz = buildQuiz(
       _words,
-      ask: QuizField.meaning,
+      ask: {QuizField.meaning},
       answer: QuizField.kanji,
       random: math.Random(1),
     );
@@ -72,11 +73,23 @@ void main() {
       expect(question.options.toSet().length, 4);
     }
 
-    // Kana-only words never ask "reading → kanji" style giveaways.
+    // A kana-only word has no Kanji layout, and asking its word while the
+    // answer is its identical reading would give the answer away.
+    final layouts = quizLayoutsFor(_words[4]);
     expect(
-      quizPairsFor(
+      layouts.where(
+        (layout) =>
+            layout.$2 == QuizField.kanji ||
+            layout.$1.any((line) => line.$1 == QuizField.kanji),
+      ),
+      isEmpty,
+    );
+    expect(
+      quizLayoutsFor(
         _words[4],
-      ).where((pair) => {pair.$1, pair.$2}.containsAll({QuizField.kanji})),
+        ask: {QuizField.word},
+        answer: QuizField.reading,
+      ),
       isEmpty,
     );
 
@@ -84,6 +97,24 @@ void main() {
     expect(random, isNotEmpty);
     for (final question in random) {
       expect(question.ask, isNot(question.answer));
+    }
+
+    // Several question fields, like the front of a flashcard.
+    // (発電 is left out: its Han-Viet equals its meaning, so that line is
+    // hidden to avoid giving the answer away.)
+    final multi = buildQuiz(
+      _words.take(2).toList(),
+      ask: {QuizField.word, QuizField.hanViet},
+      answer: QuizField.meaning,
+      random: math.Random(3),
+    );
+    expect(multi, hasLength(2));
+    for (final question in multi) {
+      expect(question.promptLines.map((line) => line.$1), [
+        QuizField.word,
+        QuizField.hanViet,
+      ]);
+      expect(question.correctText, question.point.content);
     }
   });
 
@@ -147,7 +178,7 @@ void main() {
         home: QuizScreen(
           state: state,
           deck: deck,
-          ask: QuizField.meaning,
+          ask: {QuizField.meaning},
           answer: QuizField.reading,
         ),
       ),
@@ -155,17 +186,70 @@ void main() {
     expect(find.text('Chọn đáp án đúng · Cách đọc'), findsOneWidget);
     expect(find.text('1/4'), findsOneWidget);
 
-    for (var question = 0; question < 4; question++) {
+    // A correct answer no longer jumps to the next question by itself.
+    final first = buildQuiz(
+      _words.take(4).toList(),
+      ask: {QuizField.meaning},
+      answer: QuizField.reading,
+      shuffle: false,
+    );
+    expect(first, isNotEmpty);
+    final prompt = tester
+        .widgetList<Text>(find.byType(Text))
+        .map((text) => text.data)
+        .whereType<String>()
+        .firstWhere(
+          (text) => _words.take(4).any((word) => word.content == text),
+        );
+    final point = _words.firstWhere((word) => word.content == prompt);
+    await tester.tap(find.text(point.reading).first);
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.text('1/4'), findsOneWidget);
+    expect(find.textContaining('Chính xác'), findsOneWidget);
+    await tester.tap(find.text('Tiếp tục'));
+    await tester.pump();
+    expect(find.text('2/4'), findsOneWidget);
+
+    for (var question = 1; question < 4; question++) {
       // Always "don't know", then continue.
       await tester.tap(find.text('Bạn không biết?'));
       await tester.pump();
       await tester.tap(find.text(question == 3 ? 'Xem kết quả' : 'Tiếp tục'));
       await tester.pump();
     }
-    expect(find.text('0%'), findsOneWidget);
+    expect(find.text('25%'), findsOneWidget);
     expect(deck.sessions.single.total, 4);
-    expect(deck.wrongCounts.length, 4);
-    expect(find.text('Làm lại 4 câu sai'), findsOneWidget);
+    expect(deck.wrongCounts.length, 3);
+    expect(find.text('Làm lại 3 câu sai'), findsOneWidget);
+  });
+
+  testWidgets('deck page owns shuffle and starts flashcards directly', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues({'autoSave': false});
+    final state = AppState()..autoSave = false;
+    addTearDown(state.dispose);
+    state.weakPoints = List.of(_words);
+    final deck = state.createDeck('Bộ N2', _words.take(3));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeckDetailScreen(state: state, deck: deck),
+      ),
+    );
+    await tester.tap(find.text('Trộn ngẫu nhiên'));
+    await tester.pump();
+    expect(state.flashcardShuffle, isTrue);
+
+    await tester.tap(find.text('Flashcard').first);
+    await tester.pumpAndSettle();
+    // No card-selection page: the session starts with the whole deck.
+    expect(find.text('Tạo phiên flashcard'), findsNothing);
+    expect(find.text('Ôn tập · 1/3'), findsOneWidget);
   });
 
   testWidgets('picker shows 10 items per page and swipes to the next', (

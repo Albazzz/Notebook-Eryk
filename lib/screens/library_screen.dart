@@ -494,7 +494,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
       );
 
   Future<void> _showCreateSheet(BuildContext context) async {
-    final titleController = TextEditingController();
     NotebookData? createdNotebook;
     var importPdf = false;
     var paperStyle = PaperStyle.grid;
@@ -503,214 +502,219 @@ class _LibraryScreenState extends State<LibraryScreen> {
     var cover = AppColors.primary;
     final openImporter = await showDialog<_ImportSource>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => Dialog(
-          insetPadding: const EdgeInsets.all(24),
-          child: SizedBox(
-            width: 720,
-            child: Padding(
-              padding: const EdgeInsets.all(26),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Tạo vở mới',
-                          style: Theme.of(context).textTheme.headlineMedium,
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      OutlinedButton.icon(
-                        onPressed: () =>
-                            Navigator.pop(context, _ImportSource.photos),
-                        icon: const Icon(Icons.photo_library_outlined),
-                        label: const Text('Nhập ảnh từ Photos'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: () =>
-                            Navigator.pop(context, _ImportSource.files),
-                        icon: const Icon(Icons.file_upload_outlined),
-                        label: const Text('Nhập từ Tệp (PDF · Word · ảnh)'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  SegmentedButton<bool>(
-                    segments: const [
-                      ButtonSegment(
-                        value: false,
-                        icon: Icon(Icons.note_add_outlined),
-                        label: Text('Tạo vở'),
-                      ),
-                      ButtonSegment(
-                        value: true,
-                        icon: Icon(Icons.picture_as_pdf_outlined),
-                        label: Text('Nhập PDF'),
-                      ),
-                    ],
-                    selected: {importPdf},
-                    onSelectionChanged: (value) =>
-                        setDialogState(() => importPdf = value.first),
-                  ),
-                  const SizedBox(height: 24),
-                  if (importPdf)
-                    SizedBox(
-                      height: 180,
-                      width: double.infinity,
-                      child: OutlinedButton(
-                        onPressed: () =>
-                            Navigator.pop(context, _ImportSource.files),
-                        style: OutlinedButton.styleFrom(
-                          backgroundColor: Theme.of(
-                            context,
-                          ).colorScheme.surfaceContainerLow,
-                          side: BorderSide(
-                            color: Theme.of(context).colorScheme.outlineVariant,
-                            width: 1.5,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(18),
+      // The dialog owns the title field's controller, so it is disposed only
+      // when the dialog route is actually removed.
+      builder: (dialogContext) => _TextControllerScope(
+        builder: (titleController) => StatefulBuilder(
+          builder: (context, setDialogState) => Dialog(
+            insetPadding: const EdgeInsets.all(24),
+            child: SizedBox(
+              width: 720,
+              // Paper style, preview and line color picker are taller than an
+              // iPad in landscape; without scrolling the Create button ends up
+              // outside the dialog and cannot be tapped.
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(26),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Tạo vở mới',
+                            style: Theme.of(context).textTheme.headlineMedium,
                           ),
                         ),
-                        child: const Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.upload_file_rounded,
-                              size: 42,
-                              color: AppColors.primary,
-                            ),
-                            SizedBox(height: 10),
-                            Text(
-                              'Chọn PDF từ Files',
-                              style: TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                            SizedBox(height: 4),
-                            Text(
-                              'PDF gốc luôn được giữ nguyên',
-                              style: TextStyle(color: Colors.grey),
-                            ),
-                          ],
+                        IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.close),
                         ),
-                      ),
-                    )
-                  else ...[
-                    TextField(
-                      controller: titleController,
-                      autofocus: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Tên vở',
-                        hintText: 'Ví dụ: Ngữ pháp N3',
-                      ),
+                      ],
                     ),
-                    const SizedBox(height: 18),
-                    const Text(
-                      'Kiểu giấy',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 12),
                     Wrap(
                       spacing: 8,
-                      children: PaperStyle.values
-                          .map(
-                            (style) => ChoiceChip(
-                              label: Text(_paperName(style)),
-                              selected: paperStyle == style,
-                              onSelected: (_) =>
-                                  setDialogState(() => paperStyle = style),
-                            ),
-                          )
-                          .toList(),
-                    ),
-                    const SizedBox(height: 14),
-                    _NotebookPreview(
-                      paperStyle: paperStyle,
-                      cover: cover,
-                      lineOpacity: paperLineOpacity,
-                      lineColor: paperLineColor,
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'Màu đường kẻ',
-                      style: TextStyle(fontWeight: FontWeight.w700),
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: () =>
+                              Navigator.pop(context, _ImportSource.photos),
+                          icon: const Icon(Icons.photo_library_outlined),
+                          label: const Text('Nhập ảnh từ Photos'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () =>
+                              Navigator.pop(context, _ImportSource.files),
+                          icon: const Icon(Icons.file_upload_outlined),
+                          label: const Text('Nhập từ Tệp (PDF · Word · ảnh)'),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 8),
-                    ColorPanel(
-                      color: paperLineColor,
-                      opacity: paperLineOpacity,
-                      minOpacity: .03,
-                      maxOpacity: .6,
-                      wheelSize: 170,
-                      onChanged: (color, value) => setDialogState(() {
-                        paperLineColor = color;
-                        paperLineOpacity = value;
-                      }),
+                    SegmentedButton<bool>(
+                      segments: const [
+                        ButtonSegment(
+                          value: false,
+                          icon: Icon(Icons.note_add_outlined),
+                          label: Text('Tạo vở'),
+                        ),
+                        ButtonSegment(
+                          value: true,
+                          icon: Icon(Icons.picture_as_pdf_outlined),
+                          label: Text('Nhập PDF'),
+                        ),
+                      ],
+                      selected: {importPdf},
+                      onSelectionChanged: (value) =>
+                          setDialogState(() => importPdf = value.first),
                     ),
-                  ],
-                  const SizedBox(height: 26),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Hủy'),
+                    const SizedBox(height: 24),
+                    if (importPdf)
+                      SizedBox(
+                        height: 180,
+                        width: double.infinity,
+                        child: OutlinedButton(
+                          onPressed: () =>
+                              Navigator.pop(context, _ImportSource.files),
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: Theme.of(
+                              context,
+                            ).colorScheme.surfaceContainerLow,
+                            side: BorderSide(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.outlineVariant,
+                              width: 1.5,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                          ),
+                          child: const Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.upload_file_rounded,
+                                size: 42,
+                                color: AppColors.primary,
+                              ),
+                              SizedBox(height: 10),
+                              Text(
+                                'Chọn PDF từ Files',
+                                style: TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'PDF gốc luôn được giữ nguyên',
+                                style: TextStyle(color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else ...[
+                      TextField(
+                        controller: titleController,
+                        autofocus: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Tên vở',
+                          hintText: 'Ví dụ: Ngữ pháp N3',
+                        ),
                       ),
-                      const SizedBox(width: 8),
-                      FilledButton(
-                        onPressed: () {
-                          if (importPdf) {
-                            // Create the PDF notebook only after a real file is chosen.
-                            Navigator.pop(context, _ImportSource.files);
-                            return;
-                          }
-                          final title = titleController.text.trim().isEmpty
-                              ? 'Vở học mới'
-                              : titleController.text.trim();
-                          createdNotebook = NotebookData(
-                            id: DateTime.now().millisecondsSinceEpoch
-                                .toString(),
-                            title: title,
-                            type: 'Vở ghi',
-                            pages: 1,
-                            color: cover,
-                            paperStyle: paperStyle,
-                            paperLineOpacity: paperLineOpacity,
-                            paperLineColor: paperLineColor,
-                          );
-                          widget.state.addNotebook(createdNotebook!);
-                          // Let the parent finish the dialog transition before
-                          // opening the editor; this avoids replacing the route
-                          // while the create dialog is still being dismissed.
-                          Navigator.pop(context);
-                        },
-                        child: Text(importPdf ? 'Nhập PDF' : 'Tạo vở'),
+                      const SizedBox(height: 18),
+                      const Text(
+                        'Kiểu giấy',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        children: PaperStyle.values
+                            .map(
+                              (style) => ChoiceChip(
+                                label: Text(_paperName(style)),
+                                selected: paperStyle == style,
+                                onSelected: (_) =>
+                                    setDialogState(() => paperStyle = style),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                      const SizedBox(height: 14),
+                      _NotebookPreview(
+                        paperStyle: paperStyle,
+                        cover: cover,
+                        lineOpacity: paperLineOpacity,
+                        lineColor: paperLineColor,
+                      ),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'Màu đường kẻ',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 8),
+                      ColorPanel(
+                        color: paperLineColor,
+                        opacity: paperLineOpacity,
+                        minOpacity: .03,
+                        maxOpacity: .6,
+                        wheelSize: 170,
+                        onChanged: (color, value) => setDialogState(() {
+                          paperLineColor = color;
+                          paperLineOpacity = value;
+                        }),
                       ),
                     ],
-                  ),
-                ],
+                    const SizedBox(height: 26),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Hủy'),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: () {
+                            if (importPdf) {
+                              // Create the PDF notebook only after a real file is chosen.
+                              Navigator.pop(context, _ImportSource.files);
+                              return;
+                            }
+                            final title = titleController.text.trim().isEmpty
+                                ? 'Vở học mới'
+                                : titleController.text.trim();
+                            createdNotebook = NotebookData(
+                              id: DateTime.now().millisecondsSinceEpoch
+                                  .toString(),
+                              title: title,
+                              type: 'Vở ghi',
+                              pages: 1,
+                              color: cover,
+                              paperStyle: paperStyle,
+                              paperLineOpacity: paperLineOpacity,
+                              paperLineColor: paperLineColor,
+                            );
+                            widget.state.addNotebook(createdNotebook!);
+                            // Let the parent finish the dialog transition before
+                            // opening the editor; this avoids replacing the route
+                            // while the create dialog is still being dismissed.
+                            Navigator.pop(context);
+                          },
+                          child: Text(importPdf ? 'Nhập PDF' : 'Tạo vở'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
         ),
       ),
     );
-    // showDialog completes when pop starts, before the reverse animation has
-    // finished. Keep the controller alive until that route is fully gone.
-    await Future<void>.delayed(const Duration(milliseconds: 300));
-    titleController.dispose();
     if (!mounted) return;
     if (openImporter == null) {
       final notebook = createdNotebook;
@@ -1368,6 +1372,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
+          scrollable: true,
           title: Text('Cài đặt giấy · ${notebook.title}'),
           content: SizedBox(
             width: 560,
@@ -1675,3 +1680,26 @@ class _CreateCard extends StatelessWidget {
 }
 
 enum _ImportSource { photos, files }
+
+/// Tạo và giải phóng một TextEditingController theo vòng đời của widget,
+/// dùng cho hộp thoại dựng bằng builder.
+class _TextControllerScope extends StatefulWidget {
+  const _TextControllerScope({required this.builder});
+  final Widget Function(TextEditingController controller) builder;
+
+  @override
+  State<_TextControllerScope> createState() => _TextControllerScopeState();
+}
+
+class _TextControllerScopeState extends State<_TextControllerScope> {
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(_controller);
+}

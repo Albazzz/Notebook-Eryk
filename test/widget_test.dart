@@ -76,6 +76,33 @@ void main() {
     expect(picked?.terms, ['勉強']);
   });
 
+  testWidgets('tạo vở trắng mở ngay vở mới trên iPad ngang', (tester) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Tạo mới').first);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextField, 'Tên vở'), 'Vở thử');
+    final create = find.widgetWithText(FilledButton, 'Tạo vở');
+    await tester.ensureVisible(create);
+    await tester.pumpAndSettle();
+    await tester.tap(create);
+    await tester.pumpAndSettle(const Duration(seconds: 1));
+
+    expect(
+      state.notebooks.map((notebook) => notebook.title),
+      contains('Vở thử'),
+    );
+    expect(state.openNotebook?.title, 'Vở thử');
+  });
+
   testWidgets('hiển thị thư viện notebook trên tablet', (tester) async {
     tester.view.physicalSize = const Size(1180, 820);
     tester.view.devicePixelRatio = 1;
@@ -818,7 +845,8 @@ void _quickCheckTests() {
     expect(find.text('Ôn tập · 1/2'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('flashcard-tap')));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 280));
+    // The flip takes 260 ms, so 130 ms is its halfway point.
+    await tester.pump(const Duration(milliseconds: 130));
     final halfway = tester.widget<Transform>(
       find.byKey(const ValueKey('flashcard-rotation')),
     );
@@ -845,9 +873,11 @@ void _quickCheckTests() {
     await tester.tap(find.text('Đã nhớ'));
     await tester.pumpAndSettle();
     expect(find.text('Ôn tập · 2/2'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('flashcard-tap')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Đã nhớ'));
+    // Swiping right rates "Đã nhớ" without flipping the card first.
+    await tester.drag(
+      find.byKey(const ValueKey('flashcard-swipe')),
+      const Offset(400, 0),
+    );
     await tester.pumpAndSettle();
     expect(find.text('Xong phiên ôn tập'), findsOneWidget);
     expect(state.dueWeakPoints, isEmpty);

@@ -31,7 +31,7 @@ Future<void> openDeckFlashcards(
 ) => Navigator.push(
   context,
   MaterialPageRoute<void>(
-    builder: (_) => ReviewScreen(state: state, deck: deck),
+    builder: (_) => ReviewScreen(state: state, deck: deck, autoStart: true),
   ),
 );
 
@@ -47,6 +47,7 @@ Future<void> openDeckQuiz(
   }
   final setup = await showQuizSetup(
     context,
+    state: state,
     points: points,
     pool: state.weakPoints,
   );
@@ -61,6 +62,20 @@ Future<void> openDeckQuiz(
         answer: setup.answer,
       ),
     ),
+  );
+}
+
+/// Công tắc trộn ngẫu nhiên nằm ở trang chọn chế độ, cạnh nút Flashcard.
+class _ShuffleChip extends StatelessWidget {
+  const _ShuffleChip({required this.state});
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) => FilterChip(
+    avatar: const Icon(Icons.shuffle_rounded, size: 18),
+    label: const Text('Trộn ngẫu nhiên'),
+    selected: state.flashcardShuffle,
+    onSelected: state.setFlashcardShuffle,
   );
 }
 
@@ -431,6 +446,7 @@ class _TodayCard extends StatelessWidget {
                 icon: const Icon(Icons.quiz_outlined),
                 label: const Text('Quiz'),
               ),
+              _ShuffleChip(state: state),
             ],
           ),
         ],
@@ -647,6 +663,7 @@ class DeckDetailScreen extends StatelessWidget {
                           icon: const Icon(Icons.quiz_outlined),
                           label: const Text('Quiz'),
                         ),
+                        _ShuffleChip(state: state),
                       ],
                     ),
                     const SizedBox(height: 20),

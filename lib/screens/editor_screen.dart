@@ -2021,18 +2021,10 @@ class _EditorScreenState extends State<EditorScreen>
           recognized = await _recognizeWithAiVision(crop.path);
           entry = await widget.state.dictionary.lookupNormalized(recognized);
         }
-        if (entry == null) {
-          throw const FormatException(
-            'Không tìm thấy từ trong từ điển ngoại tuyến',
-          );
-        }
-        final resolvedEntry = entry;
-        if (!mounted) return;
-        final kanji = await widget.state.dictionary.kanjiIn(resolvedEntry.word);
         if (!mounted || requestSerial != _aiRequestSerial) return;
-        setState(
-          () => result = _SmartResult.dictionary(resolvedEntry, kanji: kanji),
-        );
+        // Show the OCR text in the editable lookup panel with its results, so
+        // a misread character can be fixed by typing instead of re-circling.
+        await _openQuickDictionaryWith(recognized, best: entry);
         completed = true;
       } else if (selectionTool == EditorTool.aiDictionary) {
         final response = await widget.state.aiService.complete(
@@ -2691,6 +2683,7 @@ class _EditorScreenState extends State<EditorScreen>
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
+          scrollable: true,
           title: const Text('Cài đặt giấy của vở'),
           content: SizedBox(
             width: 560,
@@ -2840,6 +2833,25 @@ class _EditorScreenState extends State<EditorScreen>
     }
   }
 
+  /// Mở bảng Tra từ nhanh với [text] (thường là OCR vùng vừa tô) đã điền
+  /// sẵn và đã tra; [best] là kết quả khớp nhất, đưa lên đầu danh sách.
+  Future<void> _openQuickDictionaryWith(
+    String text, {
+    DictionaryEntry? best,
+  }) async {
+    final query = text.replaceAll(RegExp(r'\s+'), '').trim();
+    _quickDictionaryDebounce?.cancel();
+    _quickDictionaryController.text = query;
+    setState(() {
+      _quickDictionaryOpen = true;
+      _quickDictionaryLoading = query.isNotEmpty;
+      _quickDictionaryResults = best == null ? const [] : [best];
+      error = null;
+    });
+    if (query.isEmpty) return;
+    await _searchQuickDictionary(query, best: best);
+  }
+
   void _onQuickDictionaryChanged(String value) {
     _quickDictionaryDebounce?.cancel();
     final query = value.trim();
@@ -2858,10 +2870,25 @@ class _EditorScreenState extends State<EditorScreen>
     );
   }
 
-  Future<void> _searchQuickDictionary(String query) async {
+  Future<void> _searchQuickDictionary(
+    String query, {
+    DictionaryEntry? best,
+  }) async {
     final serial = ++_quickDictionaryRequestSerial;
     try {
-      final entries = await widget.state.dictionary.search(query, limit: 20);
+      final dictionary = widget.state.dictionary;
+      final found = await dictionary.search(query, limit: 20);
+      // Exact matches first: LIKE search returns rows in table order.
+      final exact = best ?? await dictionary.lookupBasic(query);
+      final entries = [
+        ?exact,
+        ...found.where(
+          (entry) =>
+              exact == null ||
+              entry.word != exact.word ||
+              entry.reading != exact.reading,
+        ),
+      ];
       if (!mounted || serial != _quickDictionaryRequestSerial) return;
       setState(() {
         _quickDictionaryResults = entries;
@@ -2883,12 +2910,16 @@ class _EditorScreenState extends State<EditorScreen>
     _quickDictionaryFocus.requestFocus();
   }
 
-  void _selectQuickDictionaryEntry(DictionaryEntry entry) {
+  Future<void> _selectQuickDictionaryEntry(DictionaryEntry entry) async {
     _quickDictionaryFocus.unfocus();
+    final kanji = await widget.state.dictionary.kanjiIn(entry.word);
+    if (!mounted) return;
     setState(() {
-      result = _SmartResult.dictionary(entry);
+      result = _SmartResult.dictionary(entry, kanji: kanji);
       _quickDictionaryOpen = false;
-      tool = EditorTool.pen;
+      // Stay on the lookup tool after a circled lookup so the next word can
+      // be circled right away; the toolbar quick lookup returns to the pen.
+      if (tool != EditorTool.dictionary) tool = EditorTool.pen;
       error = null;
     });
   }
