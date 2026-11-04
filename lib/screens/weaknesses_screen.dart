@@ -7,6 +7,7 @@ import '../models.dart';
 import '../review.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/weak_point_input_sheet.dart';
 import 'deck_library_screen.dart';
 import 'review_screen.dart';
 
@@ -144,6 +145,11 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
                       label: Text(
                         dueCount == 0 ? 'Ôn tập' : 'Ôn tập ($dueCount)',
                       ),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: _openInputSheet,
+                      icon: const Icon(Icons.edit_note_rounded),
+                      label: const Text('Nhập điểm yếu'),
                     ),
                     FilledButton.tonalIcon(
                       onPressed: () => Navigator.of(context).push(
@@ -402,6 +408,13 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
     );
   }
 
+  Future<void> _openInputSheet() async {
+    final saved = await showWeakPointInputSheet(context, state);
+    if (saved != null && saved > 0 && mounted) {
+      showAppSnack(context, 'Đã lưu $saved điểm yếu');
+    }
+  }
+
   Future<void> _createDeckFrom(List<WeakPoint> points) async {
     final controller = TextEditingController(
       text: 'Bộ ${state.decks.length + 1}',
@@ -550,6 +563,10 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
   }
 
   void _openSource(WeakPoint item) {
+    if (item.isTyped) {
+      showAppSnack(context, 'Mục này được nhập tay, không có vở nguồn');
+      return;
+    }
     final notebook = state.notebooks
         .where((notebook) => notebook.id == item.notebookId)
         .firstOrNull;
@@ -1148,7 +1165,7 @@ class _WeaknessItem extends StatelessWidget {
                       children: [
                         _DueLabel(item: item),
                         Text(
-                          '${item.notebookTitle} · Trang ${item.page}',
+                          item.sourceLabel,
                           style: TextStyle(
                             fontSize: 11,
                             color: scheme.onSurfaceVariant,
@@ -1371,7 +1388,7 @@ class _SourcePanel extends StatelessWidget {
             ),
           const SizedBox(height: 12),
           Text(
-            '${item.notebookTitle} · Trang ${item.page}\nĐã lưu ${_relativeDate(item.createdAt)}\n$nextReview',
+            '${item.sourceLabel}\nĐã lưu ${_relativeDate(item.createdAt)}\n$nextReview',
             style: const TextStyle(color: Colors.grey, height: 1.5),
           ),
           const SizedBox(height: 16),

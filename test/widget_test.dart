@@ -14,6 +14,7 @@ import 'package:noteeryk/widgets/notebook_cover.dart';
 import 'package:noteeryk/widgets/page_rendering.dart';
 import 'package:noteeryk/widgets/ocr_highlight_sheet.dart';
 import 'package:noteeryk/widgets/quick_check_sheet.dart';
+import 'package:noteeryk/widgets/weak_point_input_sheet.dart';
 
 void main() {
   _quickCheckTests();
@@ -529,6 +530,119 @@ void main() {
     await tester.tap(find.byTooltip('Trả trang về thẳng'));
     await tester.pump();
     expect(find.text('0°'), findsOneWidget);
+  });
+
+  testWidgets('công cụ Văn bản: gõ, chọn, kéo và xóa có hoàn tác', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    state.open(state.notebooks.first, page: 1);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Văn bản'));
+    await tester.pump();
+    await tester.tapAt(const Offset(600, 300));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('text-box-field')),
+      '日本語のメモ',
+    );
+    await tester.tap(find.text('Xong'));
+    await tester.pumpAndSettle();
+
+    final created = state.textBoxesFor('n3', 1).single;
+    expect(created.text, '日本語のメモ');
+    expect(find.text('日本語のメモ'), findsWidgets);
+    // No pen stroke was drawn by the tap.
+    expect(state.strokesFor('n3', 1), isEmpty);
+    // The frame spans the whole box, so all of it can be grabbed.
+    expect(
+      tester.getSize(find.byKey(ValueKey('text-box-${created.id}'))).width,
+      created.width,
+    );
+
+    // Step by step like a real finger: the recognizer swallows the first
+    // stretch of movement while deciding this is a drag.
+    final finger = await tester.startGesture(
+      tester.getCenter(find.byKey(ValueKey('text-box-${created.id}'))),
+    );
+    for (var step = 0; step < 6; step++) {
+      await finger.moveBy(const Offset(20, 15));
+      await tester.pump();
+    }
+    await finger.up();
+    await tester.pump();
+    final moved =
+        state.textBoxesFor('n3', 1).single.position - created.position;
+    expect(moved.dx, greaterThan(0));
+    expect(moved.dy, greaterThan(0));
+
+    await tester.tap(find.text('Xóa'));
+    await tester.pump();
+    expect(state.textBoxesFor('n3', 1), isEmpty);
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Hoàn tác'));
+    await tester.pump();
+    expect(state.textBoxesFor('n3', 1).single.text, '日本語のメモ');
+  });
+
+  testWidgets('nhập điểm yếu không dùng AI: tách dòng, kèm nghĩa, không trùng', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showWeakPointInputSheet(context, state),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Tạo bằng AI'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('weak-point-input')),
+      '. Trọng tâm ngữ pháp\n〜わけではない [N3]\nCách dùng: không hẳn là\n〜にもかかわらず: mặc dù\n〜ものの',
+    );
+    await tester.pump();
+    await tester.tap(find.text('Lưu 3 dòng, không dùng AI'));
+    await tester.pumpAndSettle();
+
+    final points = state.weakPoints;
+    expect(points.map((point) => point.title).toSet(), {
+      '〜わけではない',
+      '〜にもかかわらず',
+      '〜ものの',
+    });
+    expect(points.every((point) => point.kind == WeaknessKind.grammar), isTrue);
+    expect(
+      points.every((point) => point.isTyped && !point.isNormalized),
+      isTrue,
+    );
+    expect(
+      points.firstWhere((point) => point.title == '〜にもかかわらず').content,
+      'mặc dù',
+    );
+    expect(points.first.sourceLabel, 'Nhập tay');
   });
 
   testWidgets('bìa vở vẽ giấy và nét viết tay của trang 1', (tester) async {

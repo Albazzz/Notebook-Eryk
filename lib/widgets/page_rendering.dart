@@ -6,6 +6,25 @@ import '../models.dart';
 
 /// Vẽ giấy và nét mực của một trang; dùng chung cho editor và bìa vở.
 
+/// Nội dung một hộp văn bản; dùng chung cho trang trong editor và bìa vở nên
+/// chữ hiển thị giống nhau ở mọi nơi.
+class PageTextBoxContent extends StatelessWidget {
+  const PageTextBoxContent({super.key, required this.box});
+  final PageTextBox box;
+
+  /// Khoảng đệm cố định để viền chọn không làm chữ nhảy vị trí.
+  static const padding = 4.0;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.all(padding),
+    child: Text(
+      box.text,
+      style: TextStyle(fontSize: box.fontSize, color: box.color, height: 1.4),
+    ),
+  );
+}
+
 class InkStrokesPainter extends CustomPainter {
   const InkStrokesPainter(this.strokes);
   final List<InkStroke> strokes;

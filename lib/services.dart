@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
@@ -38,6 +39,166 @@ String composeHanViet(String word, List<KanjiEntry> kanji) {
     parts.add(reading.toUpperCase());
   }
   return parts.join(' ');
+}
+
+/// Số mục tối đa trong một lần gọi AI khi tạo hoặc chuẩn hóa điểm yếu. Lô nhỏ
+/// giữ JSON không bị cắt, và một lô lỗi không làm mất các lô còn lại.
+const weakPointBatchSize = 5;
+
+List<List<T>> chunked<T>(List<T> items, int size) => [
+  for (var start = 0; start < items.length; start += size)
+    items.sublist(start, math.min(start + size, items.length)),
+];
+
+/// Tách từng dòng khi lưu không dùng AI: chỉ dòng mở đầu bằng tiếng Nhật mới là
+/// một mục; tiêu đề và ghi chú tiếng Việt bị bỏ qua, furigana và nhãn [N2] được
+/// gỡ khỏi tiêu đề. Có AI thì cả đoạn được đọc bằng [OpenRouterService].
+List<String> parseTypedWeakPoints(String text) {
+  final seen = <String>{};
+  final items = <String>[];
+  for (final raw in text.split('\n')) {
+    final line = raw
+        .replaceFirst(RegExp(r'^\s*(?:[-•・*]|\d+\s*[.)．、])\s*'), '')
+        .replaceAll(RegExp(r'[（(][ぁ-ゖァ-ヶー]+[)）]'), '')
+        .replaceAll(RegExp(r'[\[［][^\]］]*[\]］]'), '')
+        .replaceAll(RegExp(r'\s+$'), '')
+        .replaceAll(RegExp(r'\s+(?=[:：])'), '')
+        .trim();
+    if (!RegExp(r'^[〜~～぀-ヿ㐀-鿿々]').hasMatch(line)) continue;
+    if (seen.add(line)) items.add(line);
+  }
+  return items;
+}
+
+/// Một điểm cần học do AI rút ra từ văn bản người học dán vào.
+class TypedWeakPointSeed {
+  const TypedWeakPointSeed({
+    required this.title,
+    this.notes = '',
+    this.level = '',
+  });
+  final String title;
+
+  /// Ghi chú của người học về điểm này, trích từ văn bản gốc.
+  final String notes;
+  final String level;
+
+  /// Dòng gửi cho bước điền nội dung.
+  String get promptText =>
+      notes.isEmpty ? title : '$title\n   Ghi chú của người học: $notes';
+}
+
+/// Chia văn bản dài theo dòng thành các đoạn không quá [maxChars] ký tự để
+/// bước đọc văn bản không bị cắt JSON; một dòng quá dài vẫn nguyên một đoạn.
+List<String> splitTextForExtraction(String text, {int maxChars = 3000}) {
+  final parts = <String>[];
+  final buffer = StringBuffer();
+  for (final line in text.trim().split('\n')) {
+    if (buffer.isNotEmpty && buffer.length + line.length + 1 > maxChars) {
+      parts.add(buffer.toString().trim());
+      buffer.clear();
+    }
+    buffer.writeln(line);
+  }
+  if (buffer.toString().trim().isNotEmpty) parts.add(buffer.toString().trim());
+  return parts;
+}
+
+/// Một lần gọi AI trong lượt tạo điểm yếu nhiều lô.
+class WeakPointDraftRequest {
+  const WeakPointDraftRequest({
+    required this.text,
+    this.learnerContext = '',
+    this.terms = const [],
+  });
+  final String text;
+  final String learnerContext;
+  final List<String> terms;
+}
+
+class WeakPointDraftRun {
+  const WeakPointDraftRun({
+    required this.items,
+    required this.warnings,
+    required this.failed,
+    this.error,
+  });
+  final List<WeakPointDraft> items;
+  final List<String> warnings;
+
+  /// Các lô vẫn lỗi sau khi đã thử lại.
+  final List<WeakPointDraftRequest> failed;
+  final Object? error;
+}
+
+/// Chạy các lô với số luồng giới hạn, giữ đúng thứ tự và gộp mục trùng. Lô
+/// lỗi được thử lại một lần nếu có lô khác thành công (lỗi nhất thời); nếu mọi
+/// lô đều lỗi thì không thử lại vì nhiều khả năng do key hoặc mạng.
+Future<WeakPointDraftRun> runWeakPointDraftRequests(
+  List<WeakPointDraftRequest> requests,
+  Future<({List<WeakPointDraft> items, String warning})> Function(
+    WeakPointDraftRequest request,
+  )
+  task, {
+  int concurrency = 2,
+  void Function(int completed, int total)? onProgress,
+  bool Function()? isCancelled,
+}) async {
+  final results = List<({List<WeakPointDraft> items, String warning})?>.filled(
+    requests.length,
+    null,
+  );
+  Object? error;
+  var completed = 0;
+
+  Future<void> runPass(List<int> indexes) async {
+    var next = 0;
+    Future<void> worker() async {
+      while (next < indexes.length && isCancelled?.call() != true) {
+        final index = indexes[next++];
+        try {
+          results[index] = await task(requests[index]);
+          onProgress?.call(++completed, requests.length);
+        } catch (exception) {
+          error = exception;
+        }
+      }
+    }
+
+    await Future.wait([
+      for (var worker_ = 0; worker_ < concurrency; worker_++) worker(),
+    ]);
+  }
+
+  List<int> pending() => [
+    for (var index = 0; index < requests.length; index++)
+      if (results[index] == null) index,
+  ];
+
+  await runPass(pending());
+  final retry = pending();
+  if (retry.isNotEmpty &&
+      retry.length < requests.length &&
+      isCancelled?.call() != true) {
+    await runPass(retry);
+  }
+
+  final seen = <String>{};
+  final finished = results.nonNulls;
+  final failed = pending();
+  return WeakPointDraftRun(
+    items: [
+      for (final result in finished)
+        for (final item in result.items)
+          if (seen.add(weakPointDedupeKey(item.kind, item.title))) item,
+    ],
+    warnings: {
+      for (final result in finished)
+        if (result.warning.isNotEmpty) result.warning,
+    }.toList(growable: false),
+    failed: [for (final index in failed) requests[index]],
+    error: failed.isEmpty ? null : error,
+  );
 }
 
 const _iRowToURow = {
@@ -1230,9 +1391,13 @@ class OpenRouterService {
     Set<WeaknessKind>? kinds,
     String learnerContext = '',
     List<String> focusTerms = const [],
+    bool typedInput = false,
+    WeaknessKind? forcedKind,
   }) async {
     final focused = focusTerms.isNotEmpty;
-    final kindRule = kinds == null || kinds.isEmpty
+    final kindRule = forcedKind != null
+        ? 'Mọi mục đều có kind = ${forcedKind.name}.'
+        : kinds == null || kinds.isEmpty
         ? 'Tự xác định loại (kind) phù hợp cho từng điểm.'
         : 'Chỉ tạo điểm yếu thuộc các loại: ${kinds.map((kind) => kind.name).join(', ')}.';
     final scopeRule = focused
@@ -1244,8 +1409,24 @@ class OpenRouterService {
   quá cơ bản so với trình độ $jlpt.
 - Một câu có nhiều mẫu ngữ pháp hoặc nhiều từ đáng học thì tạo nhiều mục riêng;
   không tạo hai mục trùng nhau.''';
-    final instruction =
-        '''
+    final instruction = typedInput
+        ? '''
+Bạn là giáo viên luyện thi JLPT. Người học tự gõ danh sách các mục muốn ôn bằng
+flashcard; không có đề hay đoạn văn đi kèm.
+${answerLanguageRule(language)}
+$weakPointTitleGuide
+Quy tắc tạo điểm yếu:
+- $kindRule
+- Tạo đúng một mục cho mỗi số thứ tự trong danh sách, theo đúng thứ tự; không thêm
+  mục khác. Phần "Ghi chú của người học" là nội dung họ đã học: bám theo nghĩa và
+  ngữ cảnh trong đó, chỉ bổ sung phần còn thiếu.
+- Dùng kiến thức JLPT của bạn để điền: meaning ngắn gọn; grammar: conjugation ghi
+  cách nối và mistake so sánh với mẫu dễ nhầm; vocabulary/kanji: bắt buộc có reading,
+  hanViet chỉ ghi khi chắc chắn; examples là 1–2 câu tự nhiên ở trình độ $jlpt.
+- Để rỗng sourceSentence, correctAnswer và questionLabel; questionType là その他.
+- Không bịa: phần chưa chắc hoặc mục gõ sai chính tả ghi vào uncertain.
+Trình độ: $jlpt. ${answerLanguageRule(language)}'''
+        : '''
 Bạn là giáo viên luyện thi JLPT. Người học khoanh một vùng trong vở/đề để lưu
 "điểm yếu" ôn lại bằng flashcard. Phân tích đúng nội dung đã khoanh: có thể là
 câu hỏi, các lựa chọn, đáp án hoặc một đoạn văn bất kỳ.
@@ -1272,11 +1453,11 @@ Trình độ: $jlpt. ${answerLanguageRule(language)}''';
     final normalizedModelId = modelId.trim();
     if (normalizedModelId.isEmpty) throw ArgumentError('Chưa chọn model AI');
     final userContent = [
-      text,
+      if (text.trim().isNotEmpty) text,
       if (learnerContext.trim().isNotEmpty)
         'Thông tin làm bài của người học:\n${learnerContext.trim()}',
       if (focused)
-        'Các cụm người học đã tô:\n${focusTerms.indexed.map((entry) => '${entry.$1 + 1}. ${entry.$2}').join('\n')}',
+        '${typedInput ? 'Danh sách người học đã gõ' : 'Các cụm người học đã tô'}:\n${focusTerms.indexed.map((entry) => '${entry.$1 + 1}. ${entry.$2}').join('\n')}',
     ].join('\n\n');
     final object = await _requestValidatedObject(
       apiKey: apiKey,
@@ -1289,6 +1470,9 @@ Trình độ: $jlpt. ${answerLanguageRule(language)}''';
       maxTokens: focused ? (450 * focusTerms.length).clamp(600, 3000) : 3000,
       spec: _weakPointDraftsSpec,
       operation: 'Yêu cầu AI tạo điểm yếu',
+      // Batches run close together; wait out a brief rate limit instead of
+      // failing the batch.
+      retryRateLimit: true,
       effort: focused
           ? _cappedEffort(AiReasoningEffort.low)
           : _effortFor(AiTask.createWeakPoint),
@@ -1304,6 +1488,9 @@ Trình độ: $jlpt. ${answerLanguageRule(language)}''';
         .whereType<Map>()
         .map((item) => WeakPointDraft.fromJson(Map<String, dynamic>.from(item)))
         .where((item) => item.title.isNotEmpty)
+        .map(
+          (item) => forcedKind == null ? item : item.copyWith(kind: forcedKind),
+        )
         .where(
           (item) => kinds == null || kinds.isEmpty || kinds.contains(item.kind),
         )
@@ -1311,10 +1498,6 @@ Trình độ: $jlpt. ${answerLanguageRule(language)}''';
         .toList(growable: false);
     return (items: items, warning: (object['warning'] as String? ?? '').trim());
   }
-
-  /// Số mục gửi trong một lần chuẩn hóa: đủ lớn để chia sẻ prompt hệ thống,
-  /// đủ nhỏ để một lỗi JSON không làm hỏng cả loạt.
-  static const reformatBatchSize = 6;
 
   /// Chuẩn hóa một loạt mục cũ trong MỘT lần gọi AI. Trả về bản nháp theo id;
   /// mục AI bỏ sót hoặc trả sai không có trong kết quả.
@@ -1393,6 +1576,110 @@ questionLabel để rỗng. Trình độ: $jlpt.''',
     }
     return drafts;
   }
+
+  _StructuredOutputSpec get _typedPointsSpec => _StructuredOutputSpec(
+    'typed_weak_points',
+    _objectSchema({
+      'items': _objectArrayProperty(
+        'Mỗi điểm tiếng Nhật cần học là một mục, đúng thứ tự trong văn bản.',
+        {
+          'point': _stringProperty(
+            'Từ hoặc mẫu ngữ pháp, bỏ furigana và nhãn cấp độ, ví dụ 〜とはいえ.',
+          ),
+          'notes': _stringProperty(
+            'Ghi chú của người học về điểm này (cách dùng, ngữ cảnh), trích từ văn bản, tối đa 200 ký tự; chuỗi rỗng nếu không có.',
+          ),
+          'level': _stringProperty(
+            'Cấp ghi kèm điểm này: N5, N4, N3, N2 hoặc N1; chuỗi rỗng nếu văn bản không ghi.',
+          ),
+        },
+      ),
+    }),
+  );
+
+  /// Đọc văn bản tự do (ghi chú, đoạn văn) và rút ra các điểm cần học. Bước này
+  /// chỉ liệt kê; nội dung đầy đủ được điền theo từng lô nhỏ ở bước sau, nên văn
+  /// bản dài không làm JSON bị cắt.
+  Future<({List<TypedWeakPointSeed> seeds, String warning})>
+  extractTypedWeakPoints({
+    required String apiKey,
+    required String modelId,
+    required String text,
+    required String jlpt,
+    required String language,
+    WeaknessKind? kind,
+  }) async {
+    final scope = kind == null
+        ? 'Lấy mọi điểm: mẫu ngữ pháp, từ vựng, cụm cố định.'
+        : kind == WeaknessKind.grammar
+        ? 'Chỉ lấy mẫu ngữ pháp và cụm cố định.'
+        : 'Chỉ lấy điểm thuộc loại ${kind.label}.';
+    final instruction =
+        '''
+Người học dán một đoạn văn bản để tạo "điểm yếu" ôn bằng flashcard. Văn bản có thể
+là ghi chú lẫn tiếng Việt và tiếng Nhật (có tiêu đề, cách dùng, ngữ cảnh), danh sách
+mẫu, hoặc một đoạn tiếng Nhật thuần.
+${answerLanguageRule(language)}
+Liệt kê các điểm tiếng Nhật cần học. $scope
+- Văn bản có ghi chú hoặc danh sách: lấy đúng các điểm được trình bày, không bỏ sót,
+  không thêm điểm khác. Tiêu đề mục, câu ví dụ và lời giải thích không phải là điểm.
+- Đoạn tiếng Nhật thuần: rút ra tối đa 15 mẫu và từ đáng học ở trình độ $jlpt.
+- Không tạo hai mục trùng nhau. Không có điểm nào thì để items rỗng.''';
+    final seeds = <TypedWeakPointSeed>[];
+    final seen = <String>{};
+    Object? failure;
+    var failedParts = 0;
+    final parts = splitTextForExtraction(text);
+    for (final part in parts) {
+      try {
+        final object = await _requestValidatedObject(
+          apiKey: apiKey,
+          modelId: modelId.trim(),
+          instruction: instruction,
+          userContent: part,
+          temperature: 0.1,
+          maxTokens: 2500,
+          spec: _typedPointsSpec,
+          operation: 'Đọc văn bản',
+          retryRateLimit: true,
+          effort: _cappedEffort(AiReasoningEffort.low),
+        );
+        if (object == null) {
+          throw const FormatException('AI đọc văn bản trả về sai cấu trúc');
+        }
+        for (final seed in parseExtractedPoints(object)) {
+          if (seen.add(seed.title)) seeds.add(seed);
+        }
+      } catch (error) {
+        failure = error;
+        failedParts++;
+      }
+    }
+    if (seeds.isEmpty && failure != null) throw failure;
+    return (
+      seeds: seeds,
+      warning: failedParts == 0
+          ? ''
+          : 'AI chưa đọc được $failedParts/${parts.length} đoạn của văn bản, có thể thiếu mục.',
+    );
+  }
+
+  @visibleForTesting
+  static List<TypedWeakPointSeed> parseExtractedPoints(
+    Map<String, dynamic> object,
+  ) => [
+    for (final raw in (object['items'] as List? ?? const []).whereType<Map>())
+      if ((raw['point'] as String? ?? '').trim().isNotEmpty)
+        TypedWeakPointSeed(
+          title: (raw['point'] as String).trim(),
+          notes: (raw['notes'] as String? ?? '').trim(),
+          level:
+              RegExp(
+                r'N[1-5]',
+              ).firstMatch(raw['level'] as String? ?? '')?.group(0) ??
+              '',
+        ),
+  ];
 
   /// Kiểm tra nhanh: AI giải mọi câu trong vùng chọn, người học tự bấm đáp án
   /// và app chấm tại chỗ (không cần gọi AI lần hai).

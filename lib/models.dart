@@ -7,6 +7,7 @@ enum EditorTool {
   highlighter,
   eraser,
   lasso,
+  text,
   ruler,
   image,
   dictionary,
@@ -34,6 +35,63 @@ enum PenStyle {
   const PenStyle(this.label, this.helper);
   final String label;
   final String helper;
+}
+
+/// Hộp văn bản gõ từ bàn phím trên một trang. Toạ độ và độ rộng cùng hệ với
+/// nét mực (điểm logic của trang) để chữ gõ không lệch so với nét viết tay.
+class PageTextBox {
+  const PageTextBox({
+    required this.id,
+    required this.text,
+    required this.position,
+    required this.width,
+    this.fontSize = 18,
+    this.color = const Color(0xff1f2633),
+  });
+
+  final String id;
+  final String text;
+  final Offset position;
+  final double width;
+  final double fontSize;
+  final Color color;
+
+  PageTextBox copyWith({
+    String? text,
+    Offset? position,
+    double? width,
+    double? fontSize,
+    Color? color,
+  }) => PageTextBox(
+    id: id,
+    text: text ?? this.text,
+    position: position ?? this.position,
+    width: width ?? this.width,
+    fontSize: fontSize ?? this.fontSize,
+    color: color ?? this.color,
+  );
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'text': text,
+    'x': position.dx,
+    'y': position.dy,
+    'width': width,
+    'fontSize': fontSize,
+    'color': color.toARGB32(),
+  };
+
+  factory PageTextBox.fromJson(Map<String, dynamic> json) => PageTextBox(
+    id: json['id'] as String,
+    text: json['text'] as String? ?? '',
+    position: Offset(
+      (json['x'] as num?)?.toDouble() ?? 0,
+      (json['y'] as num?)?.toDouble() ?? 0,
+    ),
+    width: (json['width'] as num?)?.toDouble() ?? 280,
+    fontSize: (json['fontSize'] as num?)?.toDouble() ?? 18,
+    color: Color((json['color'] as num?)?.toInt() ?? 0xff1f2633),
+  );
 }
 
 class PageImagePlacement {
@@ -580,6 +638,12 @@ class WeakPoint {
 
   bool get isNormalized => formatVersion >= weakPointFormatVersion;
 
+  /// Mục gõ tay không gắn với vở nào.
+  bool get isTyped => notebookId.isEmpty;
+
+  String get sourceLabel =>
+      isTyped ? 'Nhập tay' : '$notebookTitle · Trang $page';
+
   /// Nghĩa / nội dung chính cần học.
   String content;
 
@@ -771,12 +835,13 @@ class WeakPointDraft {
   final JlptQuestionType questionType;
 
   WeakPointDraft copyWith({
+    WeaknessKind? kind,
     String? reading,
     String? hanViet,
     String? warning,
   }) => WeakPointDraft(
     title: title,
-    kind: kind,
+    kind: kind ?? this.kind,
     content: content,
     reminder: reminder,
     note: note,

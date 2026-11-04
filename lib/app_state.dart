@@ -46,6 +46,7 @@ class AppState extends ChangeNotifier {
     EditorTool.highlighter,
     EditorTool.eraser,
     EditorTool.lasso,
+    EditorTool.text,
     EditorTool.ruler,
     EditorTool.image,
     EditorTool.dictionary,
@@ -63,6 +64,7 @@ class AppState extends ChangeNotifier {
   static const _introducedToolbarTools = <EditorTool>[
     EditorTool.quickCheck,
     EditorTool.lasso,
+    EditorTool.text,
   ];
   static const _keyStorageName = 'openrouter_api_key';
   static const _geminiKeyStorageName = 'gemini_api_key';
@@ -160,6 +162,9 @@ class AppState extends ChangeNotifier {
   /// Local images attached to a notebook page (page number -> file paths).
   final Map<String, Map<int, List<String>>> pageImages = {};
   final Map<String, PageImagePlacement> imagePlacements = {};
+
+  /// Hộp văn bản theo trang, cùng khóa "vở:trang" với nét mực.
+  final Map<String, List<PageTextBox>> textBoxes = {};
   int _imagePlacementSequence = 0;
   final Set<String> blankPages = {};
   final Map<String, String> sourceDocuments = {};
@@ -186,6 +191,10 @@ class AppState extends ChangeNotifier {
   /// Kích thước trang trong editor (toạ độ nét vẽ tính theo khung này).
   /// Bìa vở dùng nó để thu nhỏ nét đúng tỉ lệ.
   Size pageCanvasSize = const Size(554.4, 770);
+
+  // Kiểu chữ lần gõ gần nhất, dùng cho hộp văn bản tiếp theo.
+  double textFontSize = 18;
+  Color textColor = AppColors.ink;
 
   /// Màu tự chọn gần đây, mới nhất trước.
   List<Color> recentColors = [];
@@ -478,6 +487,13 @@ class AppState extends ChangeNotifier {
       }
     }
     score += ((data['imagePlacements'] as Map?)?.length ?? 0) * 20;
+    final textBoxes = data['textBoxes'] as Map?;
+    if (textBoxes != null) {
+      score += textBoxes.values.fold<int>(
+        0,
+        (sum, value) => sum + (value as List).length * 10,
+      );
+    }
     score += ((data['sourceDocuments'] as Map?)?.length ?? 0) * 20;
     score += ((data['pinnedNotes'] as Map?)?.length ?? 0) * 10;
     return score;
@@ -528,6 +544,7 @@ class AppState extends ChangeNotifier {
     );
     final rawWeakPoints = data['weakPoints'] as List?;
     final rawDecks = data['flashcardDecks'] as List?;
+    final parsedTextBoxes = _parseTextBoxes(data['textBoxes'] as Map?);
     final parsedWeakPoints = rawWeakPoints == null
         ? null
         : _parseWeakPoints(rawWeakPoints);
@@ -578,6 +595,11 @@ class AppState extends ChangeNotifier {
       weakPoints = parsedWeakPoints;
     }
     if (rawDecks != null) decks = _parseDeckList(rawDecks);
+    if (parsedTextBoxes != null) {
+      textBoxes
+        ..clear()
+        ..addAll(parsedTextBoxes);
+    }
     if (parsedLastPages != null) {
       lastPages
         ..clear()
@@ -727,6 +749,9 @@ class AppState extends ChangeNotifier {
     'lastPages': Map<String, int>.of(lastPages),
     'weakPoints': weakPoints.map((item) => item.toJson()).toList(),
     'flashcardDecks': decks.map((deck) => deck.toJson()).toList(),
+    'textBoxes': textBoxes.map(
+      (key, boxes) => MapEntry(key, boxes.map((box) => box.toJson()).toList()),
+    ),
   };
 
   void schedulePersistence() {
@@ -1428,6 +1453,7 @@ class AppState extends ChangeNotifier {
     library.putIfAbsent('lastPages', () => <String, dynamic>{});
     library.putIfAbsent('weakPoints', () => <dynamic>[]);
     library.putIfAbsent('flashcardDecks', () => <dynamic>[]);
+    library.putIfAbsent('textBoxes', () => <String, dynamic>{});
   }
 
   Set<String> _requiredImportedPagePaths(Map<String, dynamic> library) {
@@ -2031,6 +2057,7 @@ class AppState extends ChangeNotifier {
     strokes.removeWhere(
       (key, _) => key == notebookId || key.startsWith('$notebookId:'),
     );
+    textBoxes.removeWhere((key, _) => key.startsWith('$notebookId:'));
     pinnedNotes.remove(notebookId);
     pageImages.remove(notebookId);
     imagePlacements.removeWhere(
@@ -2226,6 +2253,54 @@ class AppState extends ChangeNotifier {
 
   String _strokeKey(String notebookId, int page) => '$notebookId:$page';
 
+  /// Đọc khoan dung: một hộp hỏng không làm mất các hộp còn lại.
+  Map<String, List<PageTextBox>>? _parseTextBoxes(Map? raw) {
+    if (raw == null) return null;
+    final parsed = <String, List<PageTextBox>>{};
+    for (final entry in raw.entries) {
+      final boxes = <PageTextBox>[];
+      for (final item in entry.value as List? ?? const []) {
+        try {
+          boxes.add(
+            PageTextBox.fromJson(Map<String, dynamic>.from(item as Map)),
+          );
+        } catch (error) {
+          debugPrint('[NoteEryk][Storage] skipped malformed text box: $error');
+        }
+      }
+      if (boxes.isNotEmpty) parsed[entry.key.toString()] = boxes;
+    }
+    return parsed;
+  }
+
+  List<PageTextBox> textBoxesFor(String notebookId, int page) =>
+      List.unmodifiable(textBoxes[_strokeKey(notebookId, page)] ?? const []);
+
+  bool hasTextBoxes(String notebookId) => textBoxes.entries.any(
+    (entry) => entry.key.startsWith('$notebookId:') && entry.value.isNotEmpty,
+  );
+
+  /// Thêm hộp mới hoặc cập nhật hộp cùng id.
+  void saveTextBox(String notebookId, int page, PageTextBox box) {
+    final boxes = textBoxes.putIfAbsent(_strokeKey(notebookId, page), () => []);
+    final index = boxes.indexWhere((item) => item.id == box.id);
+    if (index >= 0) {
+      boxes[index] = box;
+    } else {
+      boxes.add(box);
+    }
+    notifyListeners();
+    schedulePersistence();
+  }
+
+  void removeTextBox(String notebookId, int page, String id) {
+    final key = _strokeKey(notebookId, page);
+    textBoxes[key]?.removeWhere((item) => item.id == id);
+    if (textBoxes[key]?.isEmpty == true) textBoxes.remove(key);
+    notifyListeners();
+    schedulePersistence();
+  }
+
   List<InkStroke> strokesFor(String notebookId, [int? page]) {
     final resolvedPage =
         page ?? (openNotebook?.id == notebookId ? openPage : 1);
@@ -2335,14 +2410,10 @@ class AppState extends ChangeNotifier {
         .toList(growable: false);
     final skipped = weakPoints.length - points.length;
     final batches = [
-      for (
-        var start = 0;
-        start < points.length;
-        start += OpenRouterService.reformatBatchSize
-      )
+      for (var start = 0; start < points.length; start += weakPointBatchSize)
         points.sublist(
           start,
-          (start + OpenRouterService.reformatBatchSize).clamp(0, points.length),
+          (start + weakPointBatchSize).clamp(0, points.length),
         ),
     ];
     var updated = 0;
@@ -2633,6 +2704,11 @@ class AppState extends ChangeNotifier {
         .clamp(.2, .9);
     highlightWidth = (prefs.getDouble('highlightWidth') ?? highlightWidth)
         .clamp(10, 40);
+    textFontSize = (prefs.getDouble('textFontSize') ?? textFontSize).clamp(
+      12,
+      48,
+    );
+    textColor = color('textColor') ?? textColor;
     recentColors = (prefs.getStringList('recentColors') ?? const [])
         .map(int.tryParse)
         .whereType<int>()
@@ -2662,6 +2738,8 @@ class AppState extends ChangeNotifier {
     await prefs.setInt('highlightColor', highlightColor.toARGB32());
     await prefs.setDouble('highlightOpacity', highlightOpacity);
     await prefs.setDouble('highlightWidth', highlightWidth);
+    await prefs.setDouble('textFontSize', textFontSize);
+    await prefs.setInt('textColor', textColor.toARGB32());
     await prefs.setStringList(
       'recentColors',
       recentColors.map((color) => '${color.toARGB32()}').toList(),
@@ -2698,6 +2776,97 @@ class AppState extends ChangeNotifier {
     } else {
       await prefs.setString('quizAnswerField', answer.name);
     }
+  }
+
+  /// Tạo bản nháp điểm yếu theo lô bằng model của chức năng Điểm yếu.
+  Future<WeakPointDraftRun> draftWeakPoints(
+    List<WeakPointDraftRequest> requests, {
+    bool typedInput = false,
+    WeaknessKind? forcedKind,
+    void Function(int completed, int total)? onProgress,
+    bool Function()? isCancelled,
+  }) => runWeakPointDraftRequests(
+    requests,
+    (request) => aiService.completeWeakPointDrafts(
+      apiKey: apiKey,
+      modelId: modelIdFor(AiTask.createWeakPoint),
+      text: request.text,
+      jlpt: jlpt,
+      language: explanationLanguage,
+      learnerContext: request.learnerContext,
+      focusTerms: request.terms,
+      typedInput: typedInput,
+      forcedKind: forcedKind,
+    ),
+    onProgress: onProgress,
+    isCancelled: isCancelled,
+  );
+
+  /// Cách đọc/Hán Việt do AI viết được đối chiếu với từ điển ngoại tuyến:
+  /// Hán Việt lấy theo từ điển, cách đọc khác thì ghi chú để người học xem.
+  Future<List<WeakPointDraft>> verifyDraftsWithDictionary(
+    List<WeakPointDraft> drafts,
+  ) async {
+    final verified = <WeakPointDraft>[];
+    for (final draft in drafts) {
+      if (draft.kind != WeaknessKind.vocabulary &&
+          draft.kind != WeaknessKind.kanji) {
+        verified.add(draft);
+        continue;
+      }
+      DictionaryEntry? entry;
+      var kanji = const <KanjiEntry>[];
+      try {
+        entry = await dictionary.lookupBasic(draft.title);
+        kanji = await dictionary.kanjiIn(draft.title);
+      } catch (_) {}
+      // Hán Việt ghép từ bảng kanji: dùng khi từ điển không có từ này hoặc
+      // chưa ghi Hán Việt cho nó.
+      final composed = composeHanViet(draft.title, kanji);
+      if (entry == null) {
+        if (composed.isEmpty) {
+          verified.add(draft);
+        } else if (draft.hanViet.isEmpty) {
+          verified.add(draft.copyWith(hanViet: composed));
+        } else if (draft.hanViet.toUpperCase() != composed) {
+          verified.add(
+            draft.copyWith(
+              warning: [
+                if (draft.warning.isNotEmpty) draft.warning,
+                'Hán Việt theo từng chữ kanji: $composed',
+              ].join('\n'),
+            ),
+          );
+        } else {
+          verified.add(draft);
+        }
+        continue;
+      }
+      final notes = <String>[if (draft.warning.isNotEmpty) draft.warning];
+      var reading = draft.reading;
+      if (reading.isEmpty) {
+        reading = entry.reading;
+      } else if (!readingsMatch(reading, entry.reading)) {
+        notes.add('Từ điển ghi cách đọc: ${entry.reading}');
+      }
+      var hanViet = draft.hanViet;
+      if (entry.hanViet.isEmpty && hanViet.isEmpty) hanViet = composed;
+      if (entry.hanViet.isNotEmpty) {
+        if (hanViet.isNotEmpty &&
+            hanViet.toUpperCase() != entry.hanViet.toUpperCase()) {
+          notes.add('Hán Việt đã sửa theo từ điển (AI ghi: $hanViet)');
+        }
+        hanViet = entry.hanViet;
+      }
+      verified.add(
+        draft.copyWith(
+          reading: reading,
+          hanViet: hanViet,
+          warning: notes.join('\n'),
+        ),
+      );
+    }
+    return verified;
   }
 
   Future<void> setFlashcardShuffle(bool value) async {

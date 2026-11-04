@@ -119,6 +119,13 @@ class _NotebookCoverState extends State<NotebookCover> {
                 ),
               ),
             ),
+          for (final box in state.textBoxesFor(notebook.id, _page))
+            Positioned(
+              left: box.position.dx,
+              top: box.position.dy,
+              width: box.width,
+              child: PageTextBoxContent(box: box),
+            ),
           CustomPaint(
             painter: InkStrokesPainter(state.strokesFor(notebook.id, _page)),
           ),

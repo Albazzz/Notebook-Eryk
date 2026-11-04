@@ -22,6 +22,7 @@ import '../widgets/common.dart';
 import '../widgets/ocr_highlight_sheet.dart';
 import '../widgets/page_rendering.dart';
 import '../widgets/quick_check_sheet.dart';
+import '../widgets/text_box_editor.dart';
 
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key, required this.state, required this.notebook});
@@ -80,6 +81,10 @@ class _EditorScreenState extends State<EditorScreen>
   List<StrokePoint>? activePoints;
 
   // Khoanh vùng (lasso): chọn nét mực rồi kéo để di chuyển.
+  String? _selectedTextId;
+
+  /// Nhãn tiến độ khi tạo điểm yếu nhiều lô.
+  String? _processingLabel;
   List<Offset>? _lassoPath;
   final Set<InkStroke> _lassoSelected = {};
   Offset? _lassoDragOrigin;
@@ -328,6 +333,7 @@ class _EditorScreenState extends State<EditorScreen>
     selectionStart = null;
     selectionEnd = null;
     _clearLasso();
+    _selectedTextId = null;
     _strokesPage = page;
     _strokesNotebookId = notebookId;
   }
@@ -408,15 +414,17 @@ class _EditorScreenState extends State<EditorScreen>
                                   right: 28,
                                   top: 28,
                                   child: _ProcessingChip(
-                                    label: tool == EditorTool.dictionary
-                                        ? 'Đang nhận dạng...'
-                                        : tool == EditorTool.aiDictionary
-                                        ? 'Đang tra từ bằng AI...'
-                                        : tool == EditorTool.weakness
-                                        ? 'Đang tạo bản nháp...'
-                                        : tool == EditorTool.quickCheck
-                                        ? 'AI đang xử lý...'
-                                        : 'Đang đọc vùng chọn...',
+                                    label:
+                                        _processingLabel ??
+                                        (tool == EditorTool.dictionary
+                                            ? 'Đang nhận dạng...'
+                                            : tool == EditorTool.aiDictionary
+                                            ? 'Đang tra từ bằng AI...'
+                                            : tool == EditorTool.weakness
+                                            ? 'Đang tạo bản nháp...'
+                                            : tool == EditorTool.quickCheck
+                                            ? 'AI đang xử lý...'
+                                            : 'Đang đọc vùng chọn...'),
                                     onCancel: () {
                                       _cancelPendingAi();
                                       setState(() {
@@ -480,6 +488,13 @@ class _EditorScreenState extends State<EditorScreen>
                                     onDrag: _moveQuickDictionary,
                                     onResize: _resizeQuickDictionary,
                                   ),
+                                ),
+                              if (tool == EditorTool.text)
+                                Positioned(
+                                  top: 16,
+                                  left: 0,
+                                  right: 0,
+                                  child: Center(child: _buildTextToolBar()),
                                 ),
                               if (tool == EditorTool.lasso &&
                                   _lassoSelected.isNotEmpty)
@@ -901,6 +916,7 @@ class _EditorScreenState extends State<EditorScreen>
     EditorTool.highlighter => 'Highlight',
     EditorTool.eraser => 'Tẩy',
     EditorTool.lasso => 'Khoanh vùng',
+    EditorTool.text => 'Văn bản',
     EditorTool.ruler => 'Thước',
     EditorTool.image => 'Ảnh',
     EditorTool.dictionary => 'Tra từ ngoại tuyến',
@@ -1219,7 +1235,8 @@ class _EditorScreenState extends State<EditorScreen>
       if (sourcePath != null &&
           sourcePath.toLowerCase().endsWith('.pdf') &&
           await File(sourcePath).exists() &&
-          !hasFloatingImages) {
+          !hasFloatingImages &&
+          !widget.state.hasTextBoxes(widget.notebook.id)) {
         final boundary =
             _pageBoundaryKey.currentContext?.findRenderObject()
                 as RenderRepaintBoundary?;
@@ -1430,6 +1447,17 @@ class _EditorScreenState extends State<EditorScreen>
                                             onDelete: _deletePageImage,
                                           ),
                                         ),
+                                      for (final box
+                                          in widget.state.textBoxesFor(
+                                            widget.notebook.id,
+                                            widget.state.openPage,
+                                          ))
+                                        Positioned(
+                                          left: box.position.dx,
+                                          top: box.position.dy,
+                                          width: box.width,
+                                          child: PageTextBoxContent(box: box),
+                                        ),
                                       IgnorePointer(
                                         child: CustomPaint(
                                           painter: _InkPainter(
@@ -1525,6 +1553,22 @@ class _EditorScreenState extends State<EditorScreen>
                                   ),
                                 ),
                               ),
+                              if (tool == EditorTool.text)
+                                Positioned.fill(
+                                  child: _TextBoxEditLayer(
+                                    boxes: widget.state.textBoxesFor(
+                                      widget.notebook.id,
+                                      widget.state.openPage,
+                                    ),
+                                    selectedId: _selectedTextId,
+                                    onTapEmpty: (position) =>
+                                        unawaited(_onTapEmptyPage(position)),
+                                    onTapBox: (box) =>
+                                        unawaited(_onTapTextBox(box)),
+                                    onMove: _moveTextBox,
+                                    onResize: _resizeTextBox,
+                                  ),
+                                ),
                               Positioned.fill(
                                 child: IgnorePointer(
                                   child: CustomPaint(
@@ -1570,7 +1614,13 @@ class _EditorScreenState extends State<EditorScreen>
     setState(() => zoom = next);
   }
 
-  int get _minimumCanvasTouches => widget.state.drawWithFinger ? 2 : 1;
+  /// Các công cụ tự xử lý chạm trên trang, không vẽ nét.
+  bool get _toolHandlesOwnGestures =>
+      tool == EditorTool.image || tool == EditorTool.text;
+
+  // With the text tool one finger moves a box, so it must not pan the page.
+  int get _minimumCanvasTouches =>
+      widget.state.drawWithFinger || tool == EditorTool.text ? 2 : 1;
 
   static double _normalizeAngle(double degrees) {
     final value = degrees % 360;
@@ -1736,7 +1786,7 @@ class _EditorScreenState extends State<EditorScreen>
     if (_isStylus(event)) {
       _canvasGestureReady = false;
     }
-    if (tool == EditorTool.image) return;
+    if (_toolHandlesOwnGestures) return;
     if (event.kind == PointerDeviceKind.touch) {
       _trackTouchDown(event);
       if (!widget.state.drawWithFinger || _touchStarts.length != 1) return;
@@ -1780,7 +1830,7 @@ class _EditorScreenState extends State<EditorScreen>
   }
 
   void _onPointerMove(PointerMoveEvent event) {
-    if (tool == EditorTool.image) return;
+    if (_toolHandlesOwnGestures) return;
     if (event.kind == PointerDeviceKind.touch) {
       final start = _touchStarts[event.pointer];
       if (start != null && (event.localPosition - start).distance > 14) {
@@ -1808,7 +1858,7 @@ class _EditorScreenState extends State<EditorScreen>
   }
 
   void _onPointerUp(PointerUpEvent event) {
-    if (tool == EditorTool.image) return;
+    if (_toolHandlesOwnGestures) return;
     if (event.kind == PointerDeviceKind.touch) {
       if (widget.state.drawWithFinger && _touchStarts.length == 1) {
         _finishPointerInteraction();
@@ -1870,6 +1920,166 @@ class _EditorScreenState extends State<EditorScreen>
     } else if (selectionStart != null && selectionEnd != null) {
       _processSelection();
     }
+  }
+
+  void _saveTextBox(PageTextBox box) =>
+      widget.state.saveTextBox(widget.notebook.id, widget.state.openPage, box);
+
+  PageTextBox? _latestTextBox(String id) => widget.state
+      .textBoxesFor(widget.notebook.id, widget.state.openPage)
+      .where((box) => box.id == id)
+      .firstOrNull;
+
+  // Several pointer events can arrive between two frames, so apply each delta
+  // to the stored box rather than to the one captured by the last build.
+  void _moveTextBox(String id, Offset delta, Size page) {
+    final box = _latestTextBox(id);
+    if (box == null) return;
+    final next = box.position + delta;
+    _saveTextBox(
+      box.copyWith(
+        position: Offset(
+          next.dx.clamp(0, math.max(0, page.width - 40)),
+          next.dy.clamp(0, math.max(0, page.height - 24)),
+        ),
+      ),
+    );
+  }
+
+  void _resizeTextBox(String id, double delta, Size page) {
+    final box = _latestTextBox(id);
+    if (box == null) return;
+    _saveTextBox(
+      box.copyWith(
+        width: (box.width + delta).clamp(
+          60,
+          math.max(60, page.width - box.position.dx),
+        ),
+      ),
+    );
+  }
+
+  PageTextBox? get _selectedTextBox => widget.state
+      .textBoxesFor(widget.notebook.id, widget.state.openPage)
+      .where((box) => box.id == _selectedTextId)
+      .firstOrNull;
+
+  Future<void> _onTapEmptyPage(Offset position) async {
+    if (_selectedTextId != null) {
+      setState(() => _selectedTextId = null);
+      return;
+    }
+    final state = widget.state;
+    final edit = await showTextBoxEditor(
+      context,
+      fontSize: state.textFontSize,
+      color: state.textColor,
+    );
+    if (!mounted || edit == null || edit.text.trim().isEmpty) return;
+    final pageWidth = state.pageCanvasSize.width;
+    final box = PageTextBox(
+      id: 'text_${DateTime.now().microsecondsSinceEpoch}',
+      text: edit.text.trimRight(),
+      position: position,
+      width: math.max(120.0, math.min(320.0, pageWidth - position.dx - 12)),
+      fontSize: edit.fontSize,
+      color: edit.color,
+    );
+    _rememberTextStyle(edit);
+    _saveTextBox(box);
+    setState(() => _selectedTextId = box.id);
+  }
+
+  Future<void> _onTapTextBox(PageTextBox box) async {
+    if (_selectedTextId != box.id) {
+      setState(() => _selectedTextId = box.id);
+      return;
+    }
+    await _editTextBox(box);
+  }
+
+  Future<void> _editTextBox(PageTextBox box) async {
+    final edit = await showTextBoxEditor(
+      context,
+      text: box.text,
+      fontSize: box.fontSize,
+      color: box.color,
+    );
+    if (!mounted || edit == null) return;
+    if (edit.text.trim().isEmpty) {
+      _deleteTextBox(box);
+      return;
+    }
+    _rememberTextStyle(edit);
+    _saveTextBox(
+      box.copyWith(
+        text: edit.text.trimRight(),
+        fontSize: edit.fontSize,
+        color: edit.color,
+      ),
+    );
+  }
+
+  void _rememberTextStyle(TextBoxEdit edit) {
+    widget.state
+      ..textFontSize = edit.fontSize
+      ..textColor = edit.color;
+    unawaited(widget.state.savePenSettings());
+  }
+
+  void _deleteTextBox(PageTextBox box) {
+    final page = widget.state.openPage;
+    widget.state.removeTextBox(widget.notebook.id, page, box.id);
+    setState(() => _selectedTextId = null);
+    showAppSnack(
+      context,
+      'Đã xóa văn bản',
+      actionLabel: 'Hoàn tác',
+      onAction: () => widget.state.saveTextBox(widget.notebook.id, page, box),
+    );
+  }
+
+  Widget _buildTextToolBar() {
+    final selected = _selectedTextBox;
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: selected == null ? 10 : 0,
+        ),
+        child: selected == null
+            ? const Text(
+                'Chạm vào trang để gõ văn bản · chạm vào chữ đã có để chọn',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              )
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Kéo để di chuyển',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(width: 6),
+                  TextButton.icon(
+                    onPressed: () => unawaited(_editTextBox(selected)),
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Sửa'),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => _deleteTextBox(selected),
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Xóa'),
+                  ),
+                  TextButton(
+                    onPressed: () => setState(() => _selectedTextId = null),
+                    child: const Text('Bỏ chọn'),
+                  ),
+                ],
+              ),
+      ),
+    );
   }
 
   Rect? get _lassoBounds {
@@ -2113,6 +2323,7 @@ class _EditorScreenState extends State<EditorScreen>
 
   void _cancelPendingAi() {
     _aiRequestSerial++;
+    _processingLabel = null;
     if (processing) processing = false;
   }
 
@@ -2428,6 +2639,7 @@ class _EditorScreenState extends State<EditorScreen>
     }
     setState(() {
       if (value != EditorTool.lasso) _clearLasso();
+      if (value != EditorTool.text) _selectedTextId = null;
       tool = value;
       error = null;
       selectionStart = null;
@@ -3355,6 +3567,10 @@ class _EditorScreenState extends State<EditorScreen>
             learnerContext: wrong
                 .map((answer) => answer.learnerContext)
                 .join('\n'),
+            sections: [
+              for (final answer in wrong)
+                (text: answer.questionText, context: answer.learnerContext),
+            ],
           ),
         ),
         onExplain: (answer) => unawaited(_explainQuickCheckAnswer(answer)),
@@ -3402,73 +3618,6 @@ class _EditorScreenState extends State<EditorScreen>
     }
   }
 
-  /// Cách đọc/Hán Việt do AI viết được đối chiếu với từ điển ngoại tuyến:
-  /// Hán Việt lấy theo từ điển, cách đọc khác thì ghi chú để người học xem.
-  Future<List<WeakPointDraft>> _verifyWithDictionary(
-    List<WeakPointDraft> drafts,
-  ) async {
-    final verified = <WeakPointDraft>[];
-    for (final draft in drafts) {
-      if (draft.kind != WeaknessKind.vocabulary &&
-          draft.kind != WeaknessKind.kanji) {
-        verified.add(draft);
-        continue;
-      }
-      DictionaryEntry? entry;
-      var kanji = const <KanjiEntry>[];
-      try {
-        entry = await widget.state.dictionary.lookupBasic(draft.title);
-        kanji = await widget.state.dictionary.kanjiIn(draft.title);
-      } catch (_) {}
-      // Hán Việt ghép từ bảng kanji: dùng khi từ điển không có từ này hoặc
-      // chưa ghi Hán Việt cho nó.
-      final composed = composeHanViet(draft.title, kanji);
-      if (entry == null) {
-        if (composed.isEmpty) {
-          verified.add(draft);
-        } else if (draft.hanViet.isEmpty) {
-          verified.add(draft.copyWith(hanViet: composed));
-        } else if (draft.hanViet.toUpperCase() != composed) {
-          verified.add(
-            draft.copyWith(
-              warning: [
-                if (draft.warning.isNotEmpty) draft.warning,
-                'Hán Việt theo từng chữ kanji: $composed',
-              ].join('\n'),
-            ),
-          );
-        } else {
-          verified.add(draft);
-        }
-        continue;
-      }
-      final notes = <String>[if (draft.warning.isNotEmpty) draft.warning];
-      var reading = draft.reading;
-      if (reading.isEmpty) {
-        reading = entry.reading;
-      } else if (!readingsMatch(reading, entry.reading)) {
-        notes.add('Từ điển ghi cách đọc: ${entry.reading}');
-      }
-      var hanViet = draft.hanViet;
-      if (entry.hanViet.isEmpty && hanViet.isEmpty) hanViet = composed;
-      if (entry.hanViet.isNotEmpty) {
-        if (hanViet.isNotEmpty &&
-            hanViet.toUpperCase() != entry.hanViet.toUpperCase()) {
-          notes.add('Hán Việt đã sửa theo từ điển (AI ghi: $hanViet)');
-        }
-        hanViet = entry.hanViet;
-      }
-      verified.add(
-        draft.copyWith(
-          reading: reading,
-          hanViet: hanViet,
-          warning: notes.join('\n'),
-        ),
-      );
-    }
-    return verified;
-  }
-
   Future<String?> _askWeaknessFallback(String message) => showDialog<String>(
     context: context,
     builder: (dialogContext) => AlertDialog(
@@ -3498,6 +3647,7 @@ class _EditorScreenState extends State<EditorScreen>
     int? requestSerial,
     String learnerContext = '',
     bool askHighlight = false,
+    List<({String text, String context})> sections = const [],
   }) async {
     final activeSerial = requestSerial ?? ++_aiRequestSerial;
     final state = widget.state;
@@ -3537,44 +3687,103 @@ class _EditorScreenState extends State<EditorScreen>
     var drafts = <WeakPointDraft>[];
     var batchWarning = '';
     var manual = false;
+    // Many highlighted terms or wrong answers go out in small batches: one
+    // huge request gets its JSON truncated and loses everything at once.
+    final allRequests = <WeakPointDraftRequest>[
+      if (focusTerms.isNotEmpty)
+        for (final terms in chunked(focusTerms, weakPointBatchSize))
+          WeakPointDraftRequest(
+            text: resolvedOcr,
+            learnerContext: learnerContext,
+            terms: terms,
+          )
+      else if (sections.length > weakPointBatchSize)
+        for (final part in chunked(sections, weakPointBatchSize))
+          WeakPointDraftRequest(
+            text: part.map((section) => section.text).join('\n\n'),
+            learnerContext: part.map((section) => section.context).join('\n'),
+          )
+      else
+        WeakPointDraftRequest(
+          text: resolvedOcr,
+          learnerContext: learnerContext,
+        ),
+    ];
+    final collected = <WeakPointDraft>[];
+    final warnings = <String>{};
+    final unprocessedTerms = <String>{};
     final model = state.modelIdFor(AiTask.createWeakPoint);
     if (state.hasApiKey && model.isNotEmpty && resolvedOcr.trim().isNotEmpty) {
+      var pending = allRequests;
       while (true) {
         if (mounted && !processing) setState(() => processing = true);
-        Object? failure;
-        try {
-          final batch = await state.aiService.completeWeakPointDrafts(
-            apiKey: state.apiKey,
-            modelId: model,
-            text: resolvedOcr,
-            jlpt: state.jlpt,
-            language: state.explanationLanguage,
-            learnerContext: learnerContext,
-            focusTerms: focusTerms,
-          );
-          drafts = await _verifyWithDictionary(batch.items);
-          batchWarning = batch.warning;
-        } catch (exception) {
-          failure = exception;
-        }
+        final run = await state.draftWeakPoints(
+          pending,
+          isCancelled: () => !mounted || activeSerial != _aiRequestSerial,
+          onProgress: (completed, total) {
+            if (!mounted || total < 2) return;
+            setState(
+              () =>
+                  _processingLabel = 'Đang tạo điểm yếu · lô $completed/$total',
+            );
+          },
+        );
+        if (mounted) _processingLabel = null;
         if (!mounted || activeSerial != _aiRequestSerial) return;
+        collected.addAll(run.items);
+        warnings.addAll(run.warnings);
+        pending = run.failed;
         await _finishProcessingAfterOverlay();
         if (!mounted) return;
-        if (failure == null && drafts.isNotEmpty) break;
+        if (collected.isNotEmpty) {
+          // Keep what succeeded; whatever still failed is reported, and
+          // highlighted terms stay as drafts to retry or fill in by hand.
+          for (final request in pending) {
+            unprocessedTerms.addAll(request.terms);
+          }
+          if (pending.isNotEmpty && unprocessedTerms.isEmpty) {
+            warnings.add(
+              'AI chưa xử lý được ${pending.length} lô câu hỏi. Hãy khoanh lại các câu đó.',
+            );
+          }
+          break;
+        }
         // Không bao giờ âm thầm lưu OCR thô làm điểm yếu: hỏi người học.
         final choice = await _askWeaknessFallback(
-          failure == null
+          run.error == null
               ? 'AI không tìm thấy điểm cần học trong vùng này.'
-              : _friendlyError(failure),
+              : _friendlyError(run.error!),
         );
         if (!mounted) return;
-        if (choice == 'retry') continue;
+        if (choice == 'retry') {
+          if (pending.isEmpty) pending = allRequests;
+          continue;
+        }
         if (choice == 'manual') {
           manual = true;
           break;
         }
         discardCrop();
         return;
+      }
+      if (!manual) {
+        final seen = <String>{};
+        drafts = [
+          ...await state.verifyDraftsWithDictionary([
+            for (final item in collected)
+              if (seen.add(weakPointDedupeKey(item.kind, item.title))) item,
+          ]),
+          for (final term in unprocessedTerms)
+            WeakPointDraft(
+              title: term,
+              kind: WeaknessKind.vocabulary,
+              content: '',
+              sourceSentence: _sentenceContaining(resolvedOcr, term),
+              warning: 'AI chưa xử lý được cụm này, hãy điền tay.',
+            ),
+        ];
+        if (!mounted) return;
+        batchWarning = warnings.join('\n');
       }
     } else {
       manual = true;
@@ -3694,7 +3903,9 @@ class _EditorScreenState extends State<EditorScreen>
                   createdAt: DateTime.now(),
                   // AI drafts already follow the current title rules, so
                   // "Chuẩn hóa toàn bộ" can skip them.
-                  formatVersion: manual ? 0 : weakPointFormatVersion,
+                  formatVersion: manual || unprocessedTerms.contains(form.title)
+                      ? 0
+                      : weakPointFormatVersion,
                 ),
               );
               added++;
@@ -4157,6 +4368,7 @@ class _ToolButton extends StatelessWidget {
       EditorTool.highlighter => (Icons.border_color_outlined, 'Highlight'),
       EditorTool.eraser => (Icons.auto_fix_normal_outlined, 'Tẩy'),
       EditorTool.lasso => (Icons.gesture_rounded, 'Khoanh vùng'),
+      EditorTool.text => (Icons.text_fields_rounded, 'Văn bản'),
       EditorTool.ruler => (Icons.straighten_rounded, 'Thước'),
       EditorTool.image => (Icons.add_photo_alternate_outlined, 'Ảnh'),
       EditorTool.dictionary => (Icons.menu_book_outlined, 'Tra từ'),
@@ -4693,6 +4905,105 @@ class _PageImageLayer extends StatelessWidget {
         );
       }).toList(),
     ),
+  );
+}
+
+/// Lớp thao tác trên hộp văn bản: chạm để chọn/sửa, kéo để di chuyển, kéo mép
+/// phải để đổi độ rộng. Nằm ngoài vùng chụp trang nên viền chọn không bị xuất
+/// ra PDF hay đưa vào OCR; chữ thật được vẽ trong vùng chụp.
+class _TextBoxEditLayer extends StatelessWidget {
+  const _TextBoxEditLayer({
+    required this.boxes,
+    required this.selectedId,
+    required this.onTapEmpty,
+    required this.onTapBox,
+    required this.onMove,
+    required this.onResize,
+  });
+  final List<PageTextBox> boxes;
+  final String? selectedId;
+  final ValueChanged<Offset> onTapEmpty;
+  final ValueChanged<PageTextBox> onTapBox;
+  final void Function(String id, Offset delta, Size page) onMove;
+  final void Function(String id, double delta, Size page) onResize;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final page = constraints.biggest;
+      return Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              key: const ValueKey('text-layer-empty'),
+              behavior: HitTestBehavior.opaque,
+              onTapUp: (details) => onTapEmpty(details.localPosition),
+            ),
+          ),
+          for (final box in boxes)
+            Positioned(
+              left: box.position.dx,
+              top: box.position.dy,
+              width: box.width,
+              child: Stack(
+                fit: StackFit.passthrough,
+                children: [
+                  GestureDetector(
+                    key: ValueKey('text-box-${box.id}'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => onTapBox(box),
+                    onPanUpdate: (details) =>
+                        onMove(box.id, details.delta, page),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        border: Border.fromBorderSide(
+                          box.id == selectedId
+                              ? const BorderSide(
+                                  color: AppColors.primary,
+                                  width: 1.5,
+                                )
+                              : BorderSide(
+                                  color: AppColors.primary.withValues(
+                                    alpha: .25,
+                                  ),
+                                ),
+                        ),
+                      ),
+                      // Invisible copy: gives the frame the size of the real
+                      // text painted underneath in the capture boundary.
+                      child: Opacity(
+                        opacity: 0,
+                        child: PageTextBoxContent(box: box),
+                      ),
+                    ),
+                  ),
+                  if (box.id == selectedId)
+                    Positioned(
+                      right: 0,
+                      top: 0,
+                      bottom: 0,
+                      width: 24,
+                      child: GestureDetector(
+                        key: ValueKey('text-box-resize-${box.id}'),
+                        behavior: HitTestBehavior.opaque,
+                        onPanUpdate: (details) =>
+                            onResize(box.id, details.delta.dx, page),
+                        child: const Align(
+                          alignment: Alignment.centerRight,
+                          child: Icon(
+                            Icons.drag_indicator_rounded,
+                            size: 18,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      );
+    },
   );
 }
 

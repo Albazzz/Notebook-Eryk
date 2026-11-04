@@ -1275,6 +1275,201 @@ void main() {
       contains('gemini-3.8-flash'),
     );
   });
+
+  const pastedNotes = '''. Trọng tâm ngữ pháp & Từ vựng N2-N3 (文法・語彙のポイント)
+〜とはいえ [N2]
+
+Cách dùng: Mẫu câu biểu thị ý "dẫu nói là... nhưng thực tế...".
+
+Ngữ cảnh: N3を高得点で合格したとはいえ (Dù đã thi đỗ N3 điểm rất cao, nhưng...).
+
+改善(かいぜん)の余地(よち)がある [N2]
+
+Cách dùng: "Còn nhiều khoảng trống/dư địa để cải thiện".
+
+間髪(かんはつ)を容(い)れず (かんはつをいれず) [N1/N2 - Thành ngữ tự nhiên]
+
+Cách dùng: Ngay tức thì, không một tích tắc chần chừ.
+
+至(いた)って (いたって) [N2]
+
+Cách dùng: Cực kỳ, hết sức (đồng nghĩa với 非常に, 極めて).
+''';
+
+  test('saving without AI keeps only lines that start in Japanese', () {
+    expect(parseTypedWeakPoints(pastedNotes), [
+      '〜とはいえ',
+      '改善の余地がある',
+      '間髪を容れず',
+      '至って',
+    ]);
+    expect(
+      parseTypedWeakPoints('1. 〜わけではない\n- 〜ものの\n\n〜ものの\n〜にもかかわらず : mặc dù'),
+      ['〜わけではない', '〜ものの', '〜にもかかわらず: mặc dù'],
+    );
+    final groups = chunked(
+      List.generate(12, (index) => index),
+      weakPointBatchSize,
+    );
+    expect(groups.map((group) => group.length), [5, 5, 2]);
+    expect(weakPointBatchSize, 5);
+  });
+
+  test('free text is read in parts and AI points become seeds', () {
+    final long = List.generate(
+      30,
+      (index) => ('dòng $index ' * 20).trim(),
+    ).join('\n');
+    final parts = splitTextForExtraction(long, maxChars: 1000);
+    expect(parts.length, greaterThan(1));
+    expect(parts.every((part) => part.length <= 1000), isTrue);
+    expect(parts.join('\n'), long.trim());
+    expect(splitTextForExtraction(pastedNotes), hasLength(1));
+
+    final seeds = OpenRouterService.parseExtractedPoints({
+      'items': [
+        {'point': '〜とはいえ', 'notes': 'dẫu nói là', 'level': 'N2'},
+        {'point': ' ', 'notes': '', 'level': ''},
+        {'point': '間髪を容れず', 'notes': '', 'level': 'N1/N2'},
+      ],
+    });
+    expect(seeds.map((seed) => seed.title), ['〜とはいえ', '間髪を容れず']);
+    expect(seeds.first.level, 'N2');
+    expect(seeds.last.level, 'N1');
+    expect(seeds.first.promptText, contains('dẫu nói là'));
+    expect(seeds.last.promptText, '間髪を容れず');
+  });
+
+  group('runWeakPointDraftRequests', () {
+    WeakPointDraft draft(String title) =>
+        WeakPointDraft(title: title, kind: WeaknessKind.grammar, content: 'x');
+    List<WeakPointDraftRequest> requests(int count) => [
+      for (var index = 0; index < count; index++)
+        WeakPointDraftRequest(text: '', terms: ['t$index']),
+    ];
+
+    test('keeps order and removes duplicates across batches', () async {
+      final progress = <int>[];
+      final run = await runWeakPointDraftRequests(requests(4), (request) async {
+        // Later batches finish first; order must still follow the input.
+        await Future<void>.delayed(
+          Duration(milliseconds: 20 - int.parse(request.terms.first[1]) * 5),
+        );
+        return (
+          items: [draft(request.terms.first), draft('chung')],
+          warning: 'w',
+        );
+      }, onProgress: (completed, _) => progress.add(completed));
+      expect(run.items.map((item) => item.title), [
+        't0',
+        'chung',
+        't1',
+        't2',
+        't3',
+      ]);
+      expect(run.warnings, ['w']);
+      expect(run.failed, isEmpty);
+      expect(progress, [1, 2, 3, 4]);
+    });
+
+    test('retries only the failed batch and keeps finished ones', () async {
+      final calls = <String, int>{};
+      final run = await runWeakPointDraftRequests(requests(3), (request) async {
+        final term = request.terms.first;
+        calls[term] = (calls[term] ?? 0) + 1;
+        if (term == 't1' && calls[term] == 1) throw const FormatException('x');
+        return (items: [draft(term)], warning: '');
+      });
+      expect(run.failed, isEmpty);
+      expect(run.items, hasLength(3));
+      expect(calls, {'t0': 1, 't1': 2, 't2': 1});
+    });
+
+    test('a batch that keeps failing does not lose the others', () async {
+      final run = await runWeakPointDraftRequests(requests(3), (request) async {
+        if (request.terms.first == 't2') throw const FormatException('hỏng');
+        return (items: [draft(request.terms.first)], warning: '');
+      });
+      expect(run.items.map((item) => item.title), ['t0', 't1']);
+      expect(run.failed.single.terms, ['t2']);
+      expect(run.error, isA<FormatException>());
+    });
+
+    test('does not retry when every batch fails', () async {
+      var calls = 0;
+      final run = await runWeakPointDraftRequests(requests(2), (_) async {
+        calls++;
+        throw const HttpException('401');
+      });
+      expect(calls, 2);
+      expect(run.items, isEmpty);
+      expect(run.failed, hasLength(2));
+    });
+
+    test('stops starting batches once cancelled', () async {
+      var calls = 0;
+      await runWeakPointDraftRequests(
+        requests(10),
+        (request) async {
+          calls++;
+          return (items: [draft(request.terms.first)], warning: '');
+        },
+        concurrency: 1,
+        isCancelled: () => calls >= 2,
+      );
+      expect(calls, 2);
+    });
+  });
+
+  test(
+    'text boxes survive JSON, library snapshots and notebook removal',
+    () async {
+      final root = await Directory.systemTemp.createTemp('noteeryk_text_');
+      addTearDown(() => root.delete(recursive: true));
+      final originalProvider = PathProviderPlatform.instance;
+      PathProviderPlatform.instance = _TestPathProvider(root.path);
+      addTearDown(() => PathProviderPlatform.instance = originalProvider);
+      SharedPreferences.setMockInitialValues({'autoSave': false});
+
+      final state = AppState();
+      addTearDown(state.dispose);
+      await state.initialize();
+      const notebook = NotebookData(
+        id: 'book',
+        title: 'Book',
+        type: 'Notebook',
+        pages: 2,
+        color: Color(0xff000000),
+      );
+      state.addNotebook(notebook);
+      const box = PageTextBox(
+        id: 't1',
+        text: '日本語のメモ',
+        position: Offset(10, 20),
+        width: 200,
+        fontSize: 22,
+        color: Color(0xffc8453b),
+      );
+      state.saveTextBox('book', 2, box);
+      state.saveTextBox('book', 2, box.copyWith(text: 'đã sửa'));
+      expect(state.textBoxesFor('book', 2).single.text, 'đã sửa');
+      expect(state.textBoxesFor('book', 1), isEmpty);
+      expect(state.hasTextBoxes('book'), isTrue);
+
+      await state.flushPersistence();
+      final reloaded = AppState();
+      addTearDown(reloaded.dispose);
+      await reloaded.initialize();
+      final restored = reloaded.textBoxesFor('book', 2).single;
+      expect(restored.text, 'đã sửa');
+      expect(restored.position, const Offset(10, 20));
+      expect(restored.fontSize, 22);
+      expect(restored.color.toARGB32(), 0xffc8453b);
+
+      state.removeNotebook('book');
+      expect(state.hasTextBoxes('book'), isFalse);
+    },
+  );
 }
 
 class _TestPathProvider extends PathProviderPlatform {

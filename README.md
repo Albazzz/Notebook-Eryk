@@ -24,6 +24,7 @@ APK debug được tạo tại `build/app/outputs/flutter-apk/app-debug.apk`.
 - Thư viện vở hiển thị bìa là ảnh thu nhỏ trang 1 (trang PDF, ảnh, giấy kẻ và nét viết tay); tạo vở và luồng nhập PDF; nhập ảnh trực tiếp từ Photos hoặc từ app Tệp.
 - Editor tablet với page rail, Pen (thư pháp, bút máy, bút bi, bút dạ, bút chì) làm mượt, pressure, Highlight, Tẩy, Thước, undo/redo, zoom và lưu stroke vector.
 - Bảng màu gọn cho Bút/Highlight: màu mẫu, màu đã dùng gần đây, độ đậm, độ dày, làm mượt bên trái và vòng sắc độ bên phải; màu, độ đậm, độ dày và kiểu bút được nhớ làm mặc định. Đường kẻ giấy cũng chọn màu + độ đậm bằng bảng này.
+- Công cụ Văn bản: gõ chữ bằng bàn phím lên trang, kéo để di chuyển, đổi độ rộng, cỡ chữ và màu; chữ đi cùng backup, xuất PDF và bìa vở.
 - Công cụ Khoanh vùng: khoanh các nét mực rồi kéo để di chuyển hoặc xóa (có hoàn tác).
 - Tùy chọn "Tự về bút sau khi tẩy" trong Cài đặt.
 - Xoay trang tự do bằng hai ngón (hít về 0/90/180/270°) hoặc nút xoay ±15° cạnh nút zoom.
@@ -36,6 +37,8 @@ APK debug được tạo tại `build/app/outputs/flutter-apk/app-debug.apk`.
   - AI tách từng điểm theo câu hỏi, nhận dạng dạng đề JLPT (漢字読み, 文脈規定, 文の組み立て★, 読解...) và ghi "Chỗ dễ nhầm", "Đáp án đúng"; cách đọc/Hán Việt được đối chiếu với từ điển ngoại tuyến.
   - Chế độ tô trên OCR (mặc định bật): sau khi khoanh, chạm/kéo để tô cụm cần học, AI chỉ tạo điểm yếu cho phần đã tô; "AI tự tìm" để AI dò cả vùng.
   - Tiêu đề chuẩn theo từ loại: động từ ở thể ます, từ loại khác ở dạng đứng đơn. "Chuẩn hóa Điểm yếu" chạy theo lô song song và bỏ qua mục đã chuẩn.
+  - Nhập điểm yếu bằng cách gõ hoặc dán ghi chú bất kỳ: AI tự rút ra các mẫu ngữ pháp và từ cần học, điền nội dung rồi duyệt trước khi lưu; không có API key thì lưu được các dòng mở đầu bằng tiếng Nhật.
+  - Số lượng lớn được chia lô 5 mục mỗi lần gọi AI; lô lỗi được thử lại mà không mất các lô đã xong.
   - Gặp lại điểm đã lưu thì không tạo bản trùng mà đưa về ôn ngay.
   - Chọn nhiều, vuốt để xóa kèm Hoàn tác, sắp xếp/lọc theo loại, JLPT, dạng đề, đến hạn.
 - Kiểm tra nhanh đáp án: khoanh một hoặc nhiều câu, bấm đáp án của mình ngay trong lúc AI giải, app chấm tại chỗ và lưu câu sai thành điểm yếu.
