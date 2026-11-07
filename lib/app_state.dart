@@ -85,7 +85,6 @@ class AppState extends ChangeNotifier {
   NotebookData? openNotebook;
   int openPage = 1;
   bool focusSource = false;
-  ThemeMode themeMode = ThemeMode.light;
   bool autoSave = true;
   bool showSnackbars = true;
   bool pressureEnabled = true;
@@ -188,9 +187,9 @@ class AppState extends ChangeNotifier {
   double highlightOpacity = .64;
   double highlightWidth = 22;
 
-  /// Kích thước trang trong editor (toạ độ nét vẽ tính theo khung này).
+  /// Khung toạ độ cố định của trang (nét vẽ, ô chữ tính theo khung này).
   /// Bìa vở dùng nó để thu nhỏ nét đúng tỉ lệ.
-  Size pageCanvasSize = const Size(554.4, 770);
+  Size get pageCanvasSize => kPageCanvasSize;
 
   // Kiểu chữ lần gõ gần nhất, dùng cho hộp văn bản tiếp theo.
   double textFontSize = 18;
@@ -225,7 +224,6 @@ class AppState extends ChangeNotifier {
 
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();
-    themeMode = ThemeMode.values[prefs.getInt('themeMode') ?? 1];
     autoSave = prefs.getBool('autoSave') ?? true;
     showSnackbars = prefs.getBool('showSnackbars') ?? true;
     configureAppSnackbars(showSnackbars);
@@ -329,11 +327,6 @@ class AppState extends ChangeNotifier {
         .where((field) => field.name == prefs.getString('quizAnswerField'))
         .firstOrNull;
     _loadPenSettings(prefs);
-    final pageWidth = prefs.getDouble('pageCanvasWidth');
-    final pageHeight = prefs.getDouble('pageCanvasHeight');
-    if (pageWidth != null && pageHeight != null && pageWidth > 0) {
-      pageCanvasSize = Size(pageWidth, pageHeight);
-    }
     final storedStrokes = prefs.getString('strokes');
     if (storedStrokes != null) {
       try {
@@ -2746,23 +2739,6 @@ class AppState extends ChangeNotifier {
     );
   }
 
-  /// Editor báo kích thước trang khi bố cục thay đổi; chỉ lưu khi khác
-  /// đáng kể để không ghi liên tục.
-  void rememberPageCanvasSize(Size size) {
-    if (size.width <= 0 ||
-        ((size.width - pageCanvasSize.width).abs() < 1 &&
-            (size.height - pageCanvasSize.height).abs() < 1)) {
-      return;
-    }
-    pageCanvasSize = size;
-    unawaited(
-      SharedPreferences.getInstance().then((prefs) async {
-        await prefs.setDouble('pageCanvasWidth', size.width);
-        await prefs.setDouble('pageCanvasHeight', size.height);
-      }),
-    );
-  }
-
   Future<void> setQuizFields(Set<QuizField> ask, QuizField? answer) async {
     quizAskFields = Set.of(ask);
     quizAnswerField = answer;
@@ -2886,7 +2862,6 @@ class AppState extends ChangeNotifier {
 
   Future<void> saveGeneralSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('themeMode', themeMode.index);
     await prefs.setBool('autoSave', autoSave);
     await prefs.setBool('showSnackbars', showSnackbars);
     await prefs.setBool('pressureEnabled', pressureEnabled);
@@ -3218,11 +3193,6 @@ class AppState extends ChangeNotifier {
     }
     availableModels = [];
     await saveAiSettings(key: '');
-  }
-
-  void setThemeMode(ThemeMode mode) {
-    themeMode = mode;
-    saveGeneralSettings();
   }
 
   void setPaperLineOpacity(double value) {

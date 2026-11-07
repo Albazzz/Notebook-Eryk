@@ -23,7 +23,6 @@ class NihongoNotebookApp extends StatefulWidget {
 
 class _NihongoNotebookAppState extends State<NihongoNotebookApp>
     with WidgetsBindingObserver {
-  late ThemeMode _themeMode;
   final SharedImportService _sharedImport = SharedImportService();
   List<String> _pendingSharedFiles = const [];
   bool _checkingSharedFiles = false;
@@ -31,15 +30,12 @@ class _NihongoNotebookAppState extends State<NihongoNotebookApp>
   @override
   void initState() {
     super.initState();
-    _themeMode = widget.state.themeMode;
-    widget.state.addListener(_onStateChanged);
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkSharedFiles());
   }
 
   @override
   void dispose() {
-    widget.state.removeListener(_onStateChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -100,19 +96,12 @@ class _NihongoNotebookAppState extends State<NihongoNotebookApp>
     setState(() => _pendingSharedFiles = const []);
   }
 
-  void _onStateChanged() {
-    if (!mounted || _themeMode == widget.state.themeMode) return;
-    setState(() => _themeMode = widget.state.themeMode);
-  }
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Note Eryk',
       debugShowCheckedModeBanner: false,
       theme: buildLightTheme(),
-      darkTheme: buildDarkTheme(),
-      themeMode: _themeMode,
       // Keep MaterialApp/Theme/MediaQuery mounted while screens change.
       home: ListenableBuilder(
         listenable: widget.state,

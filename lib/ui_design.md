@@ -385,8 +385,7 @@ Tạo flow gồm state chọn vùng và sheet chỉnh sửa bản nháp.
 - Sidebar chính với **Cài đặt** active.
 - Settings có sidebar con hoặc danh sách section: **Chung, Apple Pencil, AI, Dữ liệu & quyền riêng tư, Giới thiệu**.
 - Màn hình Chung:
-  - Ngôn ngữ giao diện: Tiếng Việt.
-  - Giao diện: Sáng, Tối, Theo hệ thống.
+  - Giao diện luôn sáng, luôn tiếng Việt (không có cài đặt chọn).
   - Giấy mặc định.
   - Tự động lưu.
 - Màn hình Apple Pencil:

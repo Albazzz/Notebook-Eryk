@@ -82,23 +82,3 @@ ThemeData buildLightTheme() {
     ),
   );
 }
-
-ThemeData buildDarkTheme() {
-  final scheme = ColorScheme.fromSeed(
-    seedColor: const Color(0xffb7c4ff),
-    brightness: Brightness.dark,
-  );
-  return buildLightTheme().copyWith(
-    brightness: Brightness.dark,
-    colorScheme: scheme,
-    scaffoldBackgroundColor: const Color(0xff171815),
-    cardTheme: CardThemeData(
-      color: const Color(0xff22231f),
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: const BorderSide(color: Color(0x33747684)),
-      ),
-    ),
-  );
-}

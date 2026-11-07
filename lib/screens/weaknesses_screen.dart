@@ -146,41 +146,51 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
                         dueCount == 0 ? 'Ôn tập' : 'Ôn tập ($dueCount)',
                       ),
                     ),
-                    FilledButton.tonalIcon(
-                      onPressed: _openInputSheet,
-                      icon: const Icon(Icons.edit_note_rounded),
-                      label: const Text('Nhập điểm yếu'),
+                    IconButton.filledTonal(
+                      tooltip: 'Thêm thủ công',
+                      onPressed: _addManually,
+                      icon: const Icon(Icons.add_rounded),
                     ),
-                    FilledButton.tonalIcon(
+                    IconButton.filledTonal(
+                      tooltip: 'Nhập từ văn bản (AI)',
+                      onPressed: _openInputSheet,
+                      icon: const Icon(Icons.auto_awesome_outlined),
+                    ),
+                    IconButton.filledTonal(
+                      tooltip: state.decks.isEmpty
+                          ? 'Bộ flashcard'
+                          : 'Bộ flashcard (${state.decks.length})',
                       onPressed: () => Navigator.of(context).push(
                         MaterialPageRoute<void>(
                           builder: (_) => DeckLibraryScreen(state: state),
                         ),
                       ),
-                      icon: const Icon(Icons.collections_bookmark_outlined),
-                      label: Text(
-                        state.decks.isEmpty
-                            ? 'Bộ flashcard'
-                            : 'Bộ flashcard (${state.decks.length})',
+                      icon: Badge.count(
+                        count: state.decks.length,
+                        isLabelVisible: state.decks.isNotEmpty,
+                        child: const Icon(
+                          Icons.collections_bookmark_outlined,
+                        ),
                       ),
                     ),
                     SearchBox(
-                      hint: 'Tìm từ, cách đọc, Hán Việt, thẻ...',
-                      width: 260,
+                      hint: 'Tìm từ, Hán Việt, thẻ...',
+                      width: 220,
                       onChanged: (value) => setState(() => search = value),
                     ),
-                    DropdownButton<_WeaknessSort>(
-                      value: sort,
-                      items: _WeaknessSort.values
-                          .map(
-                            (value) => DropdownMenuItem(
-                              value: value,
-                              child: Text(value.label),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (value) =>
-                          setState(() => sort = value ?? sort),
+                    PopupMenuButton<_WeaknessSort>(
+                      tooltip: 'Sắp xếp: ${sort.label}',
+                      icon: const Icon(Icons.sort_rounded),
+                      initialValue: sort,
+                      onSelected: (value) => setState(() => sort = value),
+                      itemBuilder: (_) => [
+                        for (final value in _WeaknessSort.values)
+                          CheckedPopupMenuItem(
+                            value: value,
+                            checked: value == sort,
+                            child: Text(value.label),
+                          ),
+                      ],
                     ),
                     PopupMenuButton<String>(
                       tooltip: 'Thêm',
@@ -407,6 +417,27 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
       ),
     );
   }
+
+  /// Tự điền một điểm yếu, mặc định là ngữ pháp, không gọi AI.
+  Future<void> _addManually() => _edit(
+    WeakPoint(
+      id: 'manual_${DateTime.now().microsecondsSinceEpoch}',
+      title: '',
+      kind: WeaknessKind.grammar,
+      content: '',
+      reminder: '',
+      note: '',
+      tags: [state.jlpt],
+      notebookId: '',
+      notebookTitle: '',
+      page: 1,
+      ocrText: '',
+      createdAt: DateTime.now(),
+      // Written by the learner: normalization must not rewrite it.
+      formatVersion: weakPointFormatVersion,
+    ),
+    isNew: true,
+  );
 
   Future<void> _openInputSheet() async {
     final saved = await showWeakPointInputSheet(context, state);
@@ -675,7 +706,7 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
     }
   }
 
-  Future<void> _edit(WeakPoint item) async {
+  Future<void> _edit(WeakPoint item, {bool isNew = false}) async {
     final title = TextEditingController(text: item.title);
     final content = TextEditingController(text: item.content);
     final reminder = TextEditingController(text: item.reminder);
@@ -709,178 +740,216 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setSheetState) {
-          Widget field(
-            TextEditingController controller,
-            String label, {
-            int minLines = 1,
-            int maxLines = 4,
-          }) => Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: TextField(
-              controller: controller,
-              minLines: minLines,
-              maxLines: maxLines,
-              decoration: InputDecoration(labelText: label),
-            ),
-          );
-          void addTag() {
-            final tag = tagInput.text.trim();
-            if (tag.isEmpty || tags.contains(tag)) return;
-            setSheetState(() {
-              tags.add(tag);
-              tagInput.clear();
-            });
-          }
-
-          final lexical = {
-            WeaknessKind.vocabulary,
-            WeaknessKind.kanji,
-          }.contains(kind);
-          return Padding(
-            padding: EdgeInsets.fromLTRB(
-              24,
-              0,
-              24,
-              MediaQuery.viewInsetsOf(context).bottom + 24,
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Sửa điểm yếu',
-                    style: Theme.of(context).textTheme.headlineMedium,
-                  ),
-                  const SizedBox(height: 18),
-                  field(title, 'Tên'),
-                  DropdownButtonFormField<WeaknessKind>(
-                    initialValue: kind,
-                    decoration: const InputDecoration(labelText: 'Loại'),
-                    items: WeaknessKind.values
-                        .map(
-                          (value) => DropdownMenuItem(
-                            value: value,
-                            child: Text(value.label),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) =>
-                        setSheetState(() => kind = value ?? kind),
-                  ),
-                  const SizedBox(height: 12),
-                  if (lexical) ...[
-                    field(reading, 'Cách đọc (よみ / furigana)'),
-                    field(hanViet, 'Hán Việt'),
-                  ],
-                  field(content, 'Nghĩa', minLines: 2),
-                  if (kind == WeaknessKind.grammar)
-                    field(conjugation, 'Cách nối (接続)', minLines: 2),
-                  field(examples, 'Ví dụ (mỗi dòng một ví dụ)', minLines: 2),
-                  field(sourceSentence, 'Câu gốc', minLines: 2),
-                  field(correctAnswer, 'Đáp án đúng'),
-                  field(mistake, 'Chỗ dễ nhầm', minLines: 2),
-                  field(reminder, 'Mẹo nhớ', minLines: 1, maxLines: 3),
-                  field(note, 'Ghi chú của tôi', minLines: 2, maxLines: 3),
-                  if (warning.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: InputChip(
-                        avatar: const Icon(Icons.help_outline, size: 18),
-                        label: Text('Cần kiểm tra: $warning'),
-                        onDeleted: () => setSheetState(() => warning = ''),
-                        deleteButtonTooltipMessage: 'Đã kiểm tra',
-                      ),
-                    ),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      ...tags.map(
-                        (tag) => InputChip(
-                          label: Text(tag),
-                          onDeleted: () =>
-                              setSheetState(() => tags.remove(tag)),
-                        ),
-                      ),
-                      SizedBox(
-                        width: 180,
-                        child: TextField(
-                          controller: tagInput,
-                          onSubmitted: (_) => addTag(),
-                          decoration: const InputDecoration(
-                            hintText: 'Thêm thẻ',
-                            isDense: true,
-                          ),
-                        ),
-                      ),
-                      ActionChip(
-                        label: const Text('+ Thêm'),
-                        onPressed: addTag,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  Row(
-                    children: [
-                      TextButton.icon(
-                        onPressed: () {
-                          state.resetWeakPointSchedule([item.id]);
-                          Navigator.pop(context, false);
-                          showAppSnack(this.context, 'Đã đặt lại lịch ôn');
-                        },
-                        icon: const Icon(Icons.restart_alt),
-                        label: const Text('Học lại từ đầu'),
-                      ),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('Hủy'),
-                      ),
-                      const SizedBox(width: 8),
-                      FilledButton(
-                        onPressed: () {
-                          if (title.text.trim().isEmpty) return;
-                          item.title = title.text.trim();
-                          item.kind = kind;
-                          item.content = content.text.trim();
-                          item.reminder = reminder.text.trim();
-                          item.note = note.text.trim();
-                          item.reading = reading.text.trim();
-                          item.hanViet = hanViet.text.trim();
-                          item.conjugation = conjugation.text.trim();
-                          item.examples = examples.text
-                              .split('\n')
-                              .map((line) => line.trim())
-                              .where((line) => line.isNotEmpty)
-                              .toList();
-                          item.sourceSentence = sourceSentence.text.trim();
-                          item.correctAnswer = correctAnswer.text.trim();
-                          item.mistake = mistake.text.trim();
-                          item.warning = warning;
-                          item.tags = tags;
-                          state.updateWeakPoint(item);
-                          Navigator.pop(context, true);
-                        },
-                        child: const Text('Lưu thay đổi'),
-                      ),
-                    ],
-                  ),
-                ],
+      // The sheet owns the controllers: they are disposed when its route is
+      // really gone, not on a timer that can fire during the exit animation.
+      builder: (context) => _DisposeControllers(
+        controllers: controllers,
+        child: StatefulBuilder(
+          builder: (context, setSheetState) {
+            Widget field(
+              TextEditingController controller,
+              String label, {
+              int minLines = 1,
+              int maxLines = 4,
+            }) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: TextField(
+                controller: controller,
+                minLines: minLines,
+                maxLines: maxLines,
+                decoration: InputDecoration(labelText: label),
               ),
-            ),
-          );
-        },
+            );
+            void addTag() {
+              final tag = tagInput.text.trim();
+              if (tag.isEmpty || tags.contains(tag)) return;
+              setSheetState(() {
+                tags.add(tag);
+                tagInput.clear();
+              });
+            }
+
+            final lexical = {
+              WeaknessKind.vocabulary,
+              WeaknessKind.kanji,
+            }.contains(kind);
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                24,
+                0,
+                24,
+                MediaQuery.viewInsetsOf(context).bottom + 24,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isNew ? 'Thêm điểm yếu' : 'Sửa điểm yếu',
+                      style: Theme.of(context).textTheme.headlineMedium,
+                    ),
+                    const SizedBox(height: 18),
+                    field(title, switch (kind) {
+                      WeaknessKind.grammar => 'Mẫu ngữ pháp (vd 〜わけではない)',
+                      WeaknessKind.vocabulary => 'Từ vựng',
+                      WeaknessKind.kanji => 'Chữ Kanji',
+                      _ => 'Tên điểm cần nhớ',
+                    }),
+                    DropdownButtonFormField<WeaknessKind>(
+                      initialValue: kind,
+                      decoration: const InputDecoration(labelText: 'Loại'),
+                      items: WeaknessKind.values
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(value.label),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) =>
+                          setSheetState(() => kind = value ?? kind),
+                    ),
+                    const SizedBox(height: 12),
+                    if (lexical) ...[
+                      field(reading, 'Cách đọc (よみ / furigana)'),
+                      field(hanViet, 'Hán Việt'),
+                    ],
+                    field(
+                      content,
+                      kind == WeaknessKind.grammar
+                          ? 'Nghĩa / cách dùng'
+                          : 'Nghĩa',
+                      minLines: 2,
+                    ),
+                    if (kind == WeaknessKind.grammar)
+                      field(
+                        conjugation,
+                        'Cách nối (接続), vd V辞書形 / Nの + わけではない',
+                        minLines: 2,
+                      ),
+                    field(examples, 'Ví dụ (mỗi dòng một ví dụ)', minLines: 2),
+                    if (!isNew || item.sourceSentence.isNotEmpty)
+                      field(sourceSentence, 'Câu gốc', minLines: 2),
+                    if (!isNew) field(correctAnswer, 'Đáp án đúng'),
+                    field(
+                      mistake,
+                      kind == WeaknessKind.grammar
+                          ? 'Dễ nhầm với mẫu nào, khác ở đâu'
+                          : 'Chỗ dễ nhầm',
+                      minLines: 2,
+                    ),
+                    field(reminder, 'Mẹo nhớ', minLines: 1, maxLines: 3),
+                    field(note, 'Ghi chú của tôi', minLines: 2, maxLines: 3),
+                    if (warning.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: InputChip(
+                          avatar: const Icon(Icons.help_outline, size: 18),
+                          label: Text('Cần kiểm tra: $warning'),
+                          onDeleted: () => setSheetState(() => warning = ''),
+                          deleteButtonTooltipMessage: 'Đã kiểm tra',
+                        ),
+                      ),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        ...tags.map(
+                          (tag) => InputChip(
+                            label: Text(tag),
+                            onDeleted: () =>
+                                setSheetState(() => tags.remove(tag)),
+                          ),
+                        ),
+                        SizedBox(
+                          width: 180,
+                          child: TextField(
+                            controller: tagInput,
+                            onSubmitted: (_) => addTag(),
+                            decoration: const InputDecoration(
+                              hintText: 'Thêm thẻ',
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                        ActionChip(
+                          label: const Text('+ Thêm'),
+                          onPressed: addTag,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      children: [
+                        if (!isNew)
+                          TextButton.icon(
+                            onPressed: () {
+                              state.resetWeakPointSchedule([item.id]);
+                              Navigator.pop(context, false);
+                              showAppSnack(this.context, 'Đã đặt lại lịch ôn');
+                            },
+                            icon: const Icon(Icons.restart_alt),
+                            label: const Text('Học lại từ đầu'),
+                          ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('Hủy'),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: () {
+                            if (title.text.trim().isEmpty) return;
+                            item.title = title.text.trim();
+                            item.kind = kind;
+                            item.content = content.text.trim();
+                            item.reminder = reminder.text.trim();
+                            item.note = note.text.trim();
+                            item.reading = reading.text.trim();
+                            item.hanViet = hanViet.text.trim();
+                            item.conjugation = conjugation.text.trim();
+                            item.examples = examples.text
+                                .split('\n')
+                                .map((line) => line.trim())
+                                .where((line) => line.isNotEmpty)
+                                .toList();
+                            item.sourceSentence = sourceSentence.text.trim();
+                            item.correctAnswer = correctAnswer.text.trim();
+                            item.mistake = mistake.text.trim();
+                            item.warning = warning;
+                            item.tags = tags;
+                            if (isNew) {
+                              final duplicate = state.findDuplicateWeakPoint(
+                                item.kind,
+                                item.title,
+                              );
+                              if (duplicate != null) {
+                                state.reencounterWeakPoint(duplicate);
+                              } else {
+                                state.addWeakPoint(item);
+                              }
+                            } else {
+                              state.updateWeakPoint(item);
+                            }
+                            Navigator.pop(context, true);
+                          },
+                          child: Text(isNew ? 'Thêm' : 'Lưu thay đổi'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
-    await Future<void>.delayed(const Duration(milliseconds: 300));
-    for (final controller in controllers) {
-      controller.dispose();
+    if (saved == true && mounted) {
+      showAppSnack(context, isNew ? 'Đã thêm điểm yếu' : 'Đã lưu thay đổi');
     }
-    if (saved == true && mounted) showAppSnack(context, 'Đã lưu thay đổi');
   }
 
   Future<void> _confirmDelete(List<WeakPoint> items) async {
@@ -1493,4 +1562,27 @@ class _SourceThumbnail extends StatelessWidget {
             ),
     );
   }
+}
+
+/// Giải phóng các TextEditingController khi widget thật sự bị gỡ khỏi cây.
+class _DisposeControllers extends StatefulWidget {
+  const _DisposeControllers({required this.controllers, required this.child});
+  final List<TextEditingController> controllers;
+  final Widget child;
+
+  @override
+  State<_DisposeControllers> createState() => _DisposeControllersState();
+}
+
+class _DisposeControllersState extends State<_DisposeControllers> {
+  @override
+  void dispose() {
+    for (final controller in widget.controllers) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

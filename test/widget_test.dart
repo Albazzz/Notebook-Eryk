@@ -227,6 +227,41 @@ void main() {
     expect(find.text('Đã hoàn tác · chạm hai ngón'), findsOneWidget);
   });
 
+  testWidgets('xoay iPad ngang sang dọc, nét viết giữ đúng chỗ trên trang', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    state.open(state.notebooks.first);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+
+    // Writes a short stroke at the same spot of the page (as a fraction of
+    // the page on screen) and returns where it was stored.
+    Future<Offset> writeAtCentre(Size screen, int pointer) async {
+      tester.view.physicalSize = screen;
+      await tester.pumpAndSettle();
+      final page = tester.getRect(find.byKey(const ValueKey('page-canvas')));
+      final at = page.topLeft + Offset(page.width * .5, page.height * .4);
+      final stylus = TestPointer(pointer, PointerDeviceKind.stylus);
+      await tester.sendEventToBinding(stylus.down(at));
+      await tester.sendEventToBinding(stylus.move(at + const Offset(10, 0)));
+      await tester.sendEventToBinding(stylus.up());
+      await tester.pump();
+      return state.strokesFor('n3').last.points.first.offset;
+    }
+
+    final landscape = await writeAtCentre(const Size(1180, 820), 41);
+    final portrait = await writeAtCentre(const Size(820, 1180), 42);
+    // Same place on the page → same stored point, whatever the orientation.
+    expect((landscape - portrait).distance, lessThan(1.5));
+    expect(landscape.dx, closeTo(kPageCanvasSize.width * .5, 1.5));
+    expect(landscape.dy, closeTo(kPageCanvasSize.height * .4, 1.5));
+  });
+
   testWidgets('nét vẽ không bị đè khi chuyển trang', (tester) async {
     tester.view.physicalSize = const Size(1180, 820);
     tester.view.devicePixelRatio = 1;
@@ -364,7 +399,11 @@ void main() {
       return (bSize.width * bSize.height).compareTo(aSize.width * aSize.height);
     });
     final pageInk = find.byWidget(inkWidgets.first);
-    final eraserPoint = tester.getTopLeft(pageInk) + const Offset(200, 200);
+    // The page is scaled to fit the screen; (200, 200) is in page space.
+    final pageRect = tester.getRect(pageInk);
+    final eraserPoint =
+        pageRect.topLeft +
+        const Offset(200, 200) * (pageRect.width / kPageCanvasSize.width);
     final stylus = TestPointer(71, PointerDeviceKind.stylus);
     await tester.sendEventToBinding(stylus.down(eraserPoint));
     await tester.sendEventToBinding(stylus.up());
@@ -532,7 +571,7 @@ void main() {
     expect(find.text('0°'), findsOneWidget);
   });
 
-  testWidgets('công cụ Văn bản: gõ, chọn, kéo và xóa có hoàn tác', (
+  testWidgets('công cụ Văn bản: vẽ ô, gõ trong ô, kéo, xóa và hoàn tác', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1180, 820);
@@ -548,19 +587,30 @@ void main() {
 
     await tester.tap(find.byTooltip('Văn bản'));
     await tester.pump();
-    await tester.tapAt(const Offset(600, 300));
+    // Draw a box step by step like a pencil.
+    final pen = await tester.startGesture(
+      const Offset(560, 260),
+      kind: PointerDeviceKind.stylus,
+    );
+    for (var step = 0; step < 8; step++) {
+      await pen.moveBy(const Offset(30, 12));
+      await tester.pump();
+    }
+    await pen.up();
     await tester.pumpAndSettle();
+
+    final drawn = state.textBoxesFor('n3', 1).single;
+    expect(drawn.width, greaterThan(150));
+    expect(drawn.height, greaterThan(40));
+    expect(find.byKey(const ValueKey('text-box-inline')), findsOneWidget);
     await tester.enterText(
-      find.byKey(const ValueKey('text-box-field')),
+      find.byKey(const ValueKey('text-box-inline')),
       '日本語のメモ',
     );
     await tester.tap(find.text('Xong'));
     await tester.pumpAndSettle();
-
     final created = state.textBoxesFor('n3', 1).single;
     expect(created.text, '日本語のメモ');
-    expect(find.text('日本語のメモ'), findsWidgets);
-    // No pen stroke was drawn by the tap.
     expect(state.strokesFor('n3', 1), isEmpty);
     // The frame spans the whole box, so all of it can be grabbed.
     expect(
@@ -568,8 +618,11 @@ void main() {
       created.width,
     );
 
-    // Step by step like a real finger: the recognizer swallows the first
-    // stretch of movement while deciding this is a drag.
+    // Bigger text from the toolbar applies to the selected box.
+    await tester.tap(find.byTooltip('Chữ to hơn'));
+    await tester.pump();
+    expect(state.textBoxesFor('n3', 1).single.fontSize, created.fontSize + 2);
+
     final finger = await tester.startGesture(
       tester.getCenter(find.byKey(ValueKey('text-box-${created.id}'))),
     );
@@ -591,6 +644,94 @@ void main() {
     await tester.tap(find.text('Hoàn tác'));
     await tester.pump();
     expect(state.textBoxesFor('n3', 1).single.text, '日本語のメモ');
+  });
+
+  testWidgets('ô văn bản đang gõ được lưu khi chuyển trang, ô trống bị bỏ', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    state.open(state.notebooks.first, page: 1);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Văn bản'));
+    await tester.pump();
+
+    Future<void> drawBox(Offset from) async {
+      final pen = await tester.startGesture(
+        from,
+        kind: PointerDeviceKind.stylus,
+      );
+      for (var step = 0; step < 6; step++) {
+        await pen.moveBy(const Offset(30, 10));
+        await tester.pump();
+      }
+      await pen.up();
+      await tester.pumpAndSettle();
+    }
+
+    // An empty box disappears when the learner taps elsewhere.
+    await drawBox(const Offset(560, 520));
+    expect(state.textBoxesFor('n3', 1), hasLength(1));
+    await tester.tapAt(const Offset(760, 420));
+    await tester.pumpAndSettle();
+    expect(state.textBoxesFor('n3', 1), isEmpty);
+
+    await drawBox(const Offset(560, 260));
+    await tester.enterText(
+      find.byKey(const ValueKey('text-box-inline')),
+      'chưa bấm Xong',
+    );
+    state.goToPage(2);
+    await tester.pumpAndSettle();
+    expect(state.textBoxesFor('n3', 1).single.text, 'chưa bấm Xong');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('thêm điểm yếu ngữ pháp thủ công không cần AI', (tester) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook()..weakPoints = [];
+    addTearDown(state.dispose);
+    state.goTo(AppDestination.weaknesses);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Thêm thủ công'));
+    await tester.pumpAndSettle();
+    expect(find.text('Thêm điểm yếu'), findsOneWidget);
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Mẫu ngữ pháp (vd 〜わけではない)'),
+      '〜とはいえ',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Nghĩa / cách dùng'),
+      'dẫu nói là... nhưng',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Cách nối (接続), vd V辞書形 / Nの + わけではない'),
+      '普通形 + とはいえ',
+    );
+    final add = find.widgetWithText(FilledButton, 'Thêm');
+    await tester.ensureVisible(add);
+    await tester.pumpAndSettle();
+    await tester.tap(add);
+    await tester.pumpAndSettle(const Duration(milliseconds: 400));
+
+    final point = state.weakPoints.single;
+    expect(point.title, '〜とはいえ');
+    expect(point.kind, WeaknessKind.grammar);
+    expect(point.conjugation, '普通形 + とはいえ');
+    expect(point.isTyped, isTrue);
+    expect(point.isNormalized, isTrue);
   });
 
   testWidgets('nhập điểm yếu không dùng AI: tách dòng, kèm nghĩa, không trùng', (
@@ -644,6 +785,50 @@ void main() {
     );
     expect(points.first.sourceLabel, 'Nhập tay');
   });
+
+  for (final size in const [Size(1180, 820), Size(1024, 700), Size(820, 560)]) {
+    testWidgets(
+      'bảng nhập điểm yếu không tràn khi bàn phím bật (${size.width.toInt()}x${size.height.toInt()})',
+      (tester) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final state = _stateWithNotebook();
+        addTearDown(state.dispose);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Builder(
+              builder: (context) => Scaffold(
+                body: TextButton(
+                  onPressed: () => showWeakPointInputSheet(context, state),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('open'));
+        await tester.pumpAndSettle();
+        // The iPad keyboard with its suggestion bar takes about half the screen.
+        tester.view.viewInsets = FakeViewPadding(bottom: size.height * .5);
+        addTearDown(tester.view.resetViewInsets);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+
+        final field = tester.getRect(
+          find.byKey(const ValueKey('weak-point-input')),
+        );
+        final chips = tester.getRect(find.text('Chỉ Kanji'));
+        expect(field.top, greaterThan(chips.bottom));
+        expect(field.height, greaterThanOrEqualTo(159));
+        // The hint fits inside the field instead of spilling over the chips.
+        final hint = tester.getRect(find.textContaining('〜とはいえ [N2]'));
+        expect(hint.top, greaterThanOrEqualTo(field.top));
+      },
+    );
+  }
 
   testWidgets('bìa vở vẽ giấy và nét viết tay của trang 1', (tester) async {
     final state = _stateWithNotebook();
@@ -849,10 +1034,13 @@ void main() {
       Offset(700, 345),
       Offset(750, 365),
     ], 53);
-    expect(
-      state.strokesFor('n3', 1).first.points.first.offset - before,
-      const Offset(100, 40),
-    );
+    // A 100×40 drag on screen, converted to the page's own space.
+    final scale =
+        kPageCanvasSize.width /
+        tester.getRect(find.byKey(const ValueKey('page-canvas'))).width;
+    final moved = state.strokesFor('n3', 1).first.points.first.offset - before;
+    expect(moved.dx, closeTo(100 * scale, .5));
+    expect(moved.dy, closeTo(40 * scale, .5));
     expect(state.strokesFor('n3', 1).last.points.first.offset, other);
 
     await tester.tap(find.text('Bỏ chọn'));

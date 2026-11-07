@@ -45,6 +45,7 @@ class PageTextBox {
     required this.text,
     required this.position,
     required this.width,
+    this.height = 0,
     this.fontSize = 18,
     this.color = const Color(0xff1f2633),
   });
@@ -53,6 +54,10 @@ class PageTextBox {
   final String text;
   final Offset position;
   final double width;
+
+  /// Chiều cao tối thiểu theo ô người học vẽ; 0 là vừa đủ nội dung. Chữ dài
+  /// hơn ô thì ô tự giãn xuống.
+  final double height;
   final double fontSize;
   final Color color;
 
@@ -60,6 +65,7 @@ class PageTextBox {
     String? text,
     Offset? position,
     double? width,
+    double? height,
     double? fontSize,
     Color? color,
   }) => PageTextBox(
@@ -67,6 +73,7 @@ class PageTextBox {
     text: text ?? this.text,
     position: position ?? this.position,
     width: width ?? this.width,
+    height: height ?? this.height,
     fontSize: fontSize ?? this.fontSize,
     color: color ?? this.color,
   );
@@ -77,6 +84,7 @@ class PageTextBox {
     'x': position.dx,
     'y': position.dy,
     'width': width,
+    'height': height,
     'fontSize': fontSize,
     'color': color.toARGB32(),
   };
@@ -89,10 +97,16 @@ class PageTextBox {
       (json['y'] as num?)?.toDouble() ?? 0,
     ),
     width: (json['width'] as num?)?.toDouble() ?? 280,
+    height: (json['height'] as num?)?.toDouble() ?? 0,
     fontSize: (json['fontSize'] as num?)?.toDouble() ?? 18,
     color: Color((json['color'] as num?)?.toInt() ?? 0xff1f2633),
   );
 }
+
+/// Fixed coordinate space of a notebook page. Strokes and text boxes are
+/// stored in it; the editor scales the whole page to fit the screen, so
+/// turning the iPad between portrait and landscape never moves the ink.
+const Size kPageCanvasSize = Size(554.4, 770);
 
 class PageImagePlacement {
   const PageImagePlacement({

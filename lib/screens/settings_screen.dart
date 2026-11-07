@@ -201,31 +201,6 @@ class _GeneralSettings extends StatelessWidget {
         child: Column(
           children: [
             const _SettingRow(
-              icon: Icons.language_rounded,
-              title: 'Ngôn ngữ giao diện',
-              subtitle: 'Tiếng Việt',
-              trailing: Icon(Icons.chevron_right),
-            ),
-            const Divider(),
-            _SettingRow(
-              icon: Icons.contrast_rounded,
-              title: 'Giao diện',
-              subtitle: 'Chọn giao diện phù hợp',
-              trailing: SegmentedButton<ThemeMode>(
-                segments: const [
-                  ButtonSegment(value: ThemeMode.light, label: Text('Sáng')),
-                  ButtonSegment(value: ThemeMode.dark, label: Text('Tối')),
-                  ButtonSegment(
-                    value: ThemeMode.system,
-                    label: Text('Hệ thống'),
-                  ),
-                ],
-                selected: {state.themeMode},
-                onSelectionChanged: (value) => state.setThemeMode(value.first),
-              ),
-            ),
-            const Divider(),
-            const _SettingRow(
               icon: Icons.article_outlined,
               title: 'Giấy mặc định',
               subtitle: 'Ô vuông 5 mm',

@@ -41,6 +41,72 @@ String composeHanViet(String word, List<KanjiEntry> kanji) {
   return parts.join(' ');
 }
 
+// ① ② are labels on their own, so they may touch the text that follows; a
+// digit or letter must be followed by a dot, bracket or space.
+final _optionMarker = RegExp(
+  r'(?<=^|\s)(?:([1-4１-４]|[a-dA-Dａ-ｄＡ-Ｄ])(?=[.．)）]|\s)|([①②③④]))',
+);
+final _questionStart = RegExp(r'^\s*(?:問\s*\d+|\d{2,3})(?=[\s.．)）])');
+
+/// Thứ tự 1–4 của một nhãn lựa chọn, bất kể viết bằng số, chữ hay ①.
+int _optionValue(String marker) {
+  const orders = ['1234', '１２３４', 'abcd', 'ABCD', 'ａｂｃｄ', 'ＡＢＣＤ', '①②③④'];
+  for (final order in orders) {
+    final index = order.indexOf(marker);
+    if (index >= 0) return index + 1;
+  }
+  return 0;
+}
+
+/// Sắp xếp lại chữ OCR của đề trắc nghiệm cho dễ đọc: các lựa chọn 1 2 3 4 /
+/// a b c d bị OCR dồn trên một dòng được tách mỗi lựa chọn một dòng, và có một
+/// dòng trống trước mỗi câu hỏi (35, 問2...). Văn bản thường giữ nguyên.
+String formatOcrLayout(String text) {
+  final lines = <String>[];
+  for (final raw in text.split('\n')) {
+    final line = raw.trimRight();
+    final matches = _optionMarker.allMatches(line).toList();
+    // Only a run of consecutive markers (1 2 3 / a b c) counts as options;
+    // a lone digit inside a sentence does not.
+    final run = <RegExpMatch>[];
+    for (final match in matches) {
+      final value = _optionValue(match.group(0)!);
+      if (run.isNotEmpty && value == _optionValue(run.last.group(0)!) + 1) {
+        run.add(match);
+      } else if (run.length < 2) {
+        run
+          ..clear()
+          ..add(match);
+      }
+    }
+    final pieces = <String>[];
+    if (run.length >= 2) {
+      final head = line.substring(0, run.first.start).trim();
+      if (head.isNotEmpty) pieces.add(head);
+      for (var index = 0; index < run.length; index++) {
+        final end = index + 1 < run.length ? run[index + 1].start : line.length;
+        pieces.add(line.substring(run[index].start, end).trim());
+      }
+    } else {
+      pieces.add(line);
+    }
+    for (final piece in pieces) {
+      final isQuestion = _questionStart.hasMatch(piece);
+      if (isQuestion && lines.isNotEmpty && lines.last.trim().isNotEmpty) {
+        lines.add('');
+      }
+      if (piece.trim().isEmpty && (lines.isEmpty || lines.last.isEmpty)) {
+        continue;
+      }
+      lines.add(piece);
+    }
+  }
+  while (lines.isNotEmpty && lines.last.isEmpty) {
+    lines.removeLast();
+  }
+  return lines.join('\n');
+}
+
 /// Số mục tối đa trong một lần gọi AI khi tạo hoặc chuẩn hóa điểm yếu. Lô nhỏ
 /// giữ JSON không bị cắt, và một lô lỗi không làm mất các lô còn lại.
 const weakPointBatchSize = 5;

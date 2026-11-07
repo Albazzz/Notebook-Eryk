@@ -22,7 +22,6 @@ import '../widgets/common.dart';
 import '../widgets/ocr_highlight_sheet.dart';
 import '../widgets/page_rendering.dart';
 import '../widgets/quick_check_sheet.dart';
-import '../widgets/text_box_editor.dart';
 
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key, required this.state, required this.notebook});
@@ -82,6 +81,12 @@ class _EditorScreenState extends State<EditorScreen>
 
   // Khoanh vùng (lasso): chọn nét mực rồi kéo để di chuyển.
   String? _selectedTextId;
+
+  /// Ô văn bản đang gõ trực tiếp trên trang và trang của nó.
+  String? _editingTextId;
+  int _editingTextPage = 1;
+  final TextEditingController _textEditController = TextEditingController();
+  final FocusNode _textEditFocus = FocusNode();
 
   /// Nhãn tiến độ khi tạo điểm yếu nhiều lô.
   String? _processingLabel;
@@ -170,6 +175,9 @@ class _EditorScreenState extends State<EditorScreen>
 
   @override
   void dispose() {
+    _commitTextEditing(rebuild: false, deferSave: true);
+    _textEditController.dispose();
+    _textEditFocus.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _deleteTemporaryCropIfUnused(_latestCropPath);
     _quickDictionaryDebounce?.cancel();
@@ -333,6 +341,8 @@ class _EditorScreenState extends State<EditorScreen>
     selectionStart = null;
     selectionEnd = null;
     _clearLasso();
+    // Runs during build: persist after the frame instead of notifying now.
+    _commitTextEditing(rebuild: false, deferSave: true);
     _selectedTextId = null;
     _strokesPage = page;
     _strokesNotebookId = notebookId;
@@ -1337,7 +1347,6 @@ class _EditorScreenState extends State<EditorScreen>
       builder: (context, constraints) {
         final targetHeight = math.min(constraints.maxHeight - 26, 770.0);
         final targetWidth = targetHeight * .72;
-        widget.state.rememberPageCanvasSize(Size(targetWidth, targetHeight));
         // Raw touch tracking avoids Flutter's gesture arena entirely. Pencil
         // events never enter these callbacks, so writing cannot move the page.
         return Listener(
@@ -1359,233 +1368,257 @@ class _EditorScreenState extends State<EditorScreen>
                 child: SizedBox(
                   width: targetWidth,
                   height: targetHeight,
-                  child: Transform.rotate(
-                    angle: pageAngle * math.pi / 180,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: AppColors.paper,
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color(0x24000000),
-                            blurRadius: 20,
-                            offset: Offset(0, 8),
+                  // Ink and text boxes are stored in this fixed page space;
+                  // the page is only scaled to fit the screen, so rotating
+                  // the iPad never moves what was written.
+                  child: FittedBox(
+                    key: const ValueKey('page-canvas'),
+                    child: SizedBox.fromSize(
+                      size: kPageCanvasSize,
+                      child: Transform.rotate(
+                        angle: pageAngle * math.pi / 180,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: AppColors.paper,
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x24000000),
+                                blurRadius: 20,
+                                offset: Offset(0, 8),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                      child: ClipRect(
-                        child: Listener(
-                          behavior: HitTestBehavior.opaque,
-                          onPointerDown: _onPointerDown,
-                          onPointerMove: _onPointerMove,
-                          onPointerUp: _onPointerUp,
-                          onPointerCancel: _onPointerCancel,
-                          child: Stack(
-                            children: [
-                              Positioned.fill(
-                                child: RepaintBoundary(
-                                  key: _pageBoundaryKey,
-                                  child: Stack(
-                                    fit: StackFit.expand,
-                                    children: [
-                                      CustomPaint(
-                                        painter: PaperPainter(
-                                          style: widget.notebook.paperStyle,
-                                          isPdf:
-                                              widget.notebook.isPdf &&
-                                              !widget.state.blankPages.contains(
-                                                '${widget.notebook.id}:${widget.state.openPage}',
-                                              ),
-                                          lineOpacity:
-                                              widget.notebook.paperLineOpacity,
-                                          lineColor:
-                                              widget.notebook.paperLineColor,
-                                        ),
-                                      ),
-                                      if (widget.notebook.isPdf &&
-                                          widget.state.sourceDocuments[widget
+                          child: ClipRect(
+                            child: Listener(
+                              behavior: HitTestBehavior.opaque,
+                              onPointerDown: _onPointerDown,
+                              onPointerMove: _onPointerMove,
+                              onPointerUp: _onPointerUp,
+                              onPointerCancel: _onPointerCancel,
+                              child: Stack(
+                                children: [
+                                  Positioned.fill(
+                                    child: RepaintBoundary(
+                                      key: _pageBoundaryKey,
+                                      child: Stack(
+                                        fit: StackFit.expand,
+                                        children: [
+                                          CustomPaint(
+                                            painter: PaperPainter(
+                                              style: widget.notebook.paperStyle,
+                                              isPdf:
+                                                  widget.notebook.isPdf &&
+                                                  !widget.state.blankPages.contains(
+                                                    '${widget.notebook.id}:${widget.state.openPage}',
+                                                  ),
+                                              lineOpacity: widget
                                                   .notebook
-                                                  .id] !=
-                                              null &&
-                                          !widget.state
+                                                  .paperLineOpacity,
+                                              lineColor: widget
+                                                  .notebook
+                                                  .paperLineColor,
+                                            ),
+                                          ),
+                                          if (widget.notebook.isPdf &&
+                                              widget
+                                                      .state
+                                                      .sourceDocuments[widget
+                                                      .notebook
+                                                      .id] !=
+                                                  null &&
+                                              !widget.state
+                                                  .imagePlacementsForPage(
+                                                    widget.notebook.id,
+                                                    widget.state.openPage,
+                                                  )
+                                                  .any(
+                                                    (placement) =>
+                                                        placement.isBackground,
+                                                  ))
+                                            Positioned.fill(
+                                              child: _PdfPageBackground(
+                                                state: widget.state,
+                                                notebookId: widget.notebook.id,
+                                                page: widget.state.openPage,
+                                              ),
+                                            ),
+                                          if (widget.state
                                               .imagePlacementsForPage(
                                                 widget.notebook.id,
                                                 widget.state.openPage,
                                               )
-                                              .any(
-                                                (placement) =>
-                                                    placement.isBackground,
-                                              ))
-                                        Positioned.fill(
-                                          child: _PdfPageBackground(
-                                            state: widget.state,
-                                            notebookId: widget.notebook.id,
-                                            page: widget.state.openPage,
-                                          ),
-                                        ),
-                                      if (widget.state
-                                          .imagePlacementsForPage(
-                                            widget.notebook.id,
-                                            widget.state.openPage,
-                                          )
-                                          .isNotEmpty)
-                                        Positioned.fill(
-                                          child: _PageImageLayer(
-                                            placements: widget.state
-                                                .imagePlacementsForPage(
-                                                  widget.notebook.id,
-                                                  widget.state.openPage,
-                                                ),
-                                            editing: tool == EditorTool.image,
-                                            selectedId: selectedImageId,
-                                            onSelected: (id) => setState(
-                                              () => selectedImageId = id,
-                                            ),
-                                            onMove: _movePageImage,
-                                            onResize: _resizePageImage,
-                                            onRotate: _rotatePageImage,
-                                            onCrop: _cropPageImage,
-                                            onDelete: _deletePageImage,
-                                          ),
-                                        ),
-                                      for (final box
-                                          in widget.state.textBoxesFor(
-                                            widget.notebook.id,
-                                            widget.state.openPage,
-                                          ))
-                                        Positioned(
-                                          left: box.position.dx,
-                                          top: box.position.dy,
-                                          width: box.width,
-                                          child: PageTextBoxContent(box: box),
-                                        ),
-                                      IgnorePointer(
-                                        child: CustomPaint(
-                                          painter: _InkPainter(
-                                            strokes: strokes,
-                                            activePoints: activePoints,
-                                            activeColor:
-                                                tool == EditorTool.highlighter
-                                                ? highlightColor.withValues(
-                                                    alpha: highlightOpacity,
-                                                  )
-                                                : penColor.withValues(
-                                                    alpha: penOpacity,
-                                                  ),
-                                            activeWidth:
-                                                tool == EditorTool.highlighter
-                                                ? highlightWidth
-                                                : penWidth,
-                                            selectionStart: null,
-                                            selectionEnd: null,
-                                            selectionTool: tool,
-                                            sourcePulse: false,
-                                            activePenStyle: penStyle,
-                                            lassoPath: _lassoPath,
-                                            lassoSelected: _lassoSelected,
-                                            lassoOffset: _lassoDragOffset,
-                                            lassoBounds: _lassoBounds,
-                                          ),
-                                        ),
-                                      ),
-                                      if (rulerVisible)
-                                        Positioned.fill(
-                                          child: LayoutBuilder(
-                                            builder: (context, pageConstraints) {
-                                              final pageSize =
-                                                  pageConstraints.biggest;
-                                              return Stack(
-                                                children: [
-                                                  Positioned(
-                                                    left:
-                                                        _rulerPosition.dx *
-                                                        pageSize.width,
-                                                    top:
-                                                        _rulerPosition.dy *
-                                                        pageSize.height,
-                                                    width:
-                                                        _rulerWidthFraction *
-                                                        pageSize.width,
-                                                    child: _Ruler(
-                                                      angle: _rulerAngle,
-                                                      height: _rulerHeight,
-                                                      onScaleStart: (_) {
-                                                        _rulerGestureStartWidth =
-                                                            _rulerWidthFraction;
-                                                        _rulerGestureStartHeight =
-                                                            _rulerHeight;
-                                                        _rulerGestureStartAngle =
-                                                            _rulerAngle;
-                                                      },
-                                                      onScaleUpdate: (details) =>
-                                                          _updateRulerGesture(
-                                                            details,
-                                                            pageSize,
-                                                          ),
+                                              .isNotEmpty)
+                                            Positioned.fill(
+                                              child: _PageImageLayer(
+                                                placements: widget.state
+                                                    .imagePlacementsForPage(
+                                                      widget.notebook.id,
+                                                      widget.state.openPage,
                                                     ),
-                                                  ),
-                                                ],
-                                              );
-                                            },
+                                                editing:
+                                                    tool == EditorTool.image,
+                                                selectedId: selectedImageId,
+                                                onSelected: (id) => setState(
+                                                  () => selectedImageId = id,
+                                                ),
+                                                onMove: _movePageImage,
+                                                onResize: _resizePageImage,
+                                                onRotate: _rotatePageImage,
+                                                onCrop: _cropPageImage,
+                                                onDelete: _deletePageImage,
+                                              ),
+                                            ),
+                                          for (final box
+                                              in widget.state.textBoxesFor(
+                                                widget.notebook.id,
+                                                widget.state.openPage,
+                                              ))
+                                            if (box.id != _editingTextId)
+                                              Positioned(
+                                                left: box.position.dx,
+                                                top: box.position.dy,
+                                                width: box.width,
+                                                child: PageTextBoxContent(
+                                                  box: box,
+                                                ),
+                                              ),
+                                          IgnorePointer(
+                                            child: CustomPaint(
+                                              painter: _InkPainter(
+                                                strokes: strokes,
+                                                activePoints: activePoints,
+                                                activeColor:
+                                                    tool ==
+                                                        EditorTool.highlighter
+                                                    ? highlightColor.withValues(
+                                                        alpha: highlightOpacity,
+                                                      )
+                                                    : penColor.withValues(
+                                                        alpha: penOpacity,
+                                                      ),
+                                                activeWidth:
+                                                    tool ==
+                                                        EditorTool.highlighter
+                                                    ? highlightWidth
+                                                    : penWidth,
+                                                selectionStart: null,
+                                                selectionEnd: null,
+                                                selectionTool: tool,
+                                                sourcePulse: false,
+                                                activePenStyle: penStyle,
+                                                lassoPath: _lassoPath,
+                                                lassoSelected: _lassoSelected,
+                                                lassoOffset: _lassoDragOffset,
+                                                lassoBounds: _lassoBounds,
+                                              ),
+                                            ),
                                           ),
-                                        ),
-                                      ...(annotationsVisible
-                                          ? widget
-                                                    .state
-                                                    .pinnedNotes[widget
-                                                        .notebook
-                                                        .id]
-                                                    ?.asMap()
-                                                    .entries
-                                                    .map(
-                                                      (entry) => Positioned(
-                                                        right: 22,
-                                                        bottom:
-                                                            30 +
-                                                            entry.key * 110,
-                                                        child: _PinnedNoteCard(
-                                                          note: entry.value,
+                                          if (rulerVisible)
+                                            Positioned.fill(
+                                              child: LayoutBuilder(
+                                                builder: (context, pageConstraints) {
+                                                  final pageSize =
+                                                      pageConstraints.biggest;
+                                                  return Stack(
+                                                    children: [
+                                                      Positioned(
+                                                        left:
+                                                            _rulerPosition.dx *
+                                                            pageSize.width,
+                                                        top:
+                                                            _rulerPosition.dy *
+                                                            pageSize.height,
+                                                        width:
+                                                            _rulerWidthFraction *
+                                                            pageSize.width,
+                                                        child: _Ruler(
+                                                          angle: _rulerAngle,
+                                                          height: _rulerHeight,
+                                                          onScaleStart: (_) {
+                                                            _rulerGestureStartWidth =
+                                                                _rulerWidthFraction;
+                                                            _rulerGestureStartHeight =
+                                                                _rulerHeight;
+                                                            _rulerGestureStartAngle =
+                                                                _rulerAngle;
+                                                          },
+                                                          onScaleUpdate:
+                                                              (details) =>
+                                                                  _updateRulerGesture(
+                                                                    details,
+                                                                    pageSize,
+                                                                  ),
                                                         ),
                                                       ),
-                                                    ) ??
-                                                const []
-                                          : const []),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              if (tool == EditorTool.text)
-                                Positioned.fill(
-                                  child: _TextBoxEditLayer(
-                                    boxes: widget.state.textBoxesFor(
-                                      widget.notebook.id,
-                                      widget.state.openPage,
-                                    ),
-                                    selectedId: _selectedTextId,
-                                    onTapEmpty: (position) =>
-                                        unawaited(_onTapEmptyPage(position)),
-                                    onTapBox: (box) =>
-                                        unawaited(_onTapTextBox(box)),
-                                    onMove: _moveTextBox,
-                                    onResize: _resizeTextBox,
-                                  ),
-                                ),
-                              Positioned.fill(
-                                child: IgnorePointer(
-                                  child: CustomPaint(
-                                    painter: _InkPainter(
-                                      strokes: const [],
-                                      activePoints: null,
-                                      activeColor: Colors.transparent,
-                                      activeWidth: 0,
-                                      selectionStart: selectionStart,
-                                      selectionEnd: selectionEnd,
-                                      selectionTool: tool,
-                                      sourcePulse: widget.state.focusSource,
+                                                    ],
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                          ...(annotationsVisible
+                                              ? widget
+                                                        .state
+                                                        .pinnedNotes[widget
+                                                            .notebook
+                                                            .id]
+                                                        ?.asMap()
+                                                        .entries
+                                                        .map(
+                                                          (entry) => Positioned(
+                                                            right: 22,
+                                                            bottom:
+                                                                30 +
+                                                                entry.key * 110,
+                                                            child:
+                                                                _PinnedNoteCard(
+                                                                  note: entry
+                                                                      .value,
+                                                                ),
+                                                          ),
+                                                        ) ??
+                                                    const []
+                                              : const []),
+                                        ],
+                                      ),
                                     ),
                                   ),
-                                ),
+                                  if (tool == EditorTool.text)
+                                    Positioned.fill(
+                                      child: _TextBoxEditLayer(
+                                        boxes: widget.state.textBoxesFor(
+                                          widget.notebook.id,
+                                          widget.state.openPage,
+                                        ),
+                                        selectedId: _selectedTextId,
+                                        editingId: _editingTextId,
+                                        controller: _textEditController,
+                                        focusNode: _textEditFocus,
+                                        onTapEmpty: _onTapEmptyPage,
+                                        onDrawn: _createTextBox,
+                                        onTapBox: _onTapTextBox,
+                                        onMove: _moveTextBox,
+                                        onResize: _resizeTextBox,
+                                      ),
+                                    ),
+                                  Positioned.fill(
+                                    child: IgnorePointer(
+                                      child: CustomPaint(
+                                        painter: _InkPainter(
+                                          strokes: const [],
+                                          activePoints: null,
+                                          activeColor: Colors.transparent,
+                                          activeWidth: 0,
+                                          selectionStart: selectionStart,
+                                          selectionEnd: selectionEnd,
+                                          selectionTool: tool,
+                                          sourcePulse: widget.state.focusSource,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
+                            ),
                           ),
                         ),
                       ),
@@ -1946,14 +1979,18 @@ class _EditorScreenState extends State<EditorScreen>
     );
   }
 
-  void _resizeTextBox(String id, double delta, Size page) {
+  void _resizeTextBox(String id, Offset delta, Size page) {
     final box = _latestTextBox(id);
     if (box == null) return;
     _saveTextBox(
       box.copyWith(
-        width: (box.width + delta).clamp(
+        width: (box.width + delta.dx).clamp(
           60,
           math.max(60, page.width - box.position.dx),
+        ),
+        height: (box.height + delta.dy).clamp(
+          0,
+          math.max(0, page.height - box.position.dy),
         ),
       ),
     );
@@ -1964,71 +2001,112 @@ class _EditorScreenState extends State<EditorScreen>
       .where((box) => box.id == _selectedTextId)
       .firstOrNull;
 
-  Future<void> _onTapEmptyPage(Offset position) async {
-    if (_selectedTextId != null) {
-      setState(() => _selectedTextId = null);
+  void _onTapEmptyPage() {
+    if (_editingTextId != null) {
+      _commitTextEditing();
       return;
     }
+    if (_selectedTextId != null) setState(() => _selectedTextId = null);
+  }
+
+  /// Người học kéo vẽ một ô: tạo ô văn bản đúng chỗ đó rồi gõ ngay trong ô.
+  void _createTextBox(Rect rect) {
+    _commitTextEditing();
     final state = widget.state;
-    final edit = await showTextBoxEditor(
-      context,
+    final box = PageTextBox(
+      id: 'text_${DateTime.now().microsecondsSinceEpoch}',
+      text: '',
+      position: rect.topLeft,
+      width: rect.width < 60 ? 260 : rect.width,
+      height: rect.height < 24 ? 0 : rect.height,
       fontSize: state.textFontSize,
       color: state.textColor,
     );
-    if (!mounted || edit == null || edit.text.trim().isEmpty) return;
-    final pageWidth = state.pageCanvasSize.width;
-    final box = PageTextBox(
-      id: 'text_${DateTime.now().microsecondsSinceEpoch}',
-      text: edit.text.trimRight(),
-      position: position,
-      width: math.max(120.0, math.min(320.0, pageWidth - position.dx - 12)),
-      fontSize: edit.fontSize,
-      color: edit.color,
-    );
-    _rememberTextStyle(edit);
     _saveTextBox(box);
+    _startEditingText(box);
+  }
+
+  void _startEditingText(PageTextBox box) {
+    if (_editingTextId != null && _editingTextId != box.id) {
+      _commitTextEditing();
+    }
+    _textEditController.text = box.text;
+    setState(() {
+      _selectedTextId = box.id;
+      _editingTextId = box.id;
+      _editingTextPage = widget.state.openPage;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _textEditFocus.requestFocus();
+    });
+  }
+
+  /// Lưu chữ đang gõ. Ô để trống thì bỏ đi (vẽ nhầm hoặc xóa hết chữ).
+  void _commitTextEditing({bool rebuild = true, bool deferSave = false}) {
+    final id = _editingTextId;
+    if (id == null) return;
+    final state = widget.state;
+    final notebookId = widget.notebook.id;
+    final page = _editingTextPage;
+    final box = state
+        .textBoxesFor(notebookId, page)
+        .where((item) => item.id == id)
+        .firstOrNull;
+    final text = _textEditController.text.trimRight();
+    void persist() {
+      if (box == null) return;
+      if (text.trim().isEmpty) {
+        state.removeTextBox(notebookId, page, id);
+      } else if (text != box.text) {
+        state.saveTextBox(notebookId, page, box.copyWith(text: text));
+      }
+    }
+
+    // During build or dispose listeners must not be notified synchronously.
+    if (deferSave) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => persist());
+    } else {
+      persist();
+    }
+    _editingTextId = null;
+    _textEditFocus.unfocus();
+    if (rebuild && mounted) {
+      setState(() {
+        if (text.trim().isEmpty) _selectedTextId = null;
+      });
+    }
+  }
+
+  void _onTapTextBox(PageTextBox box) {
+    if (_editingTextId == box.id) return;
+    if (_selectedTextId == box.id) {
+      _startEditingText(box);
+      return;
+    }
+    _commitTextEditing();
     setState(() => _selectedTextId = box.id);
   }
 
-  Future<void> _onTapTextBox(PageTextBox box) async {
-    if (_selectedTextId != box.id) {
-      setState(() => _selectedTextId = box.id);
-      return;
+  /// Đổi cỡ chữ/màu của ô đang chọn và nhớ làm mặc định cho ô tiếp theo.
+  void _styleSelectedText({double? fontSize, Color? color}) {
+    final box = _selectedTextBox;
+    final state = widget.state;
+    if (fontSize != null) state.textFontSize = fontSize;
+    if (color != null) state.textColor = color;
+    unawaited(state.savePenSettings());
+    if (box != null) {
+      _saveTextBox(box.copyWith(fontSize: fontSize, color: color));
+    } else {
+      setState(() {});
     }
-    await _editTextBox(box);
-  }
-
-  Future<void> _editTextBox(PageTextBox box) async {
-    final edit = await showTextBoxEditor(
-      context,
-      text: box.text,
-      fontSize: box.fontSize,
-      color: box.color,
-    );
-    if (!mounted || edit == null) return;
-    if (edit.text.trim().isEmpty) {
-      _deleteTextBox(box);
-      return;
-    }
-    _rememberTextStyle(edit);
-    _saveTextBox(
-      box.copyWith(
-        text: edit.text.trimRight(),
-        fontSize: edit.fontSize,
-        color: edit.color,
-      ),
-    );
-  }
-
-  void _rememberTextStyle(TextBoxEdit edit) {
-    widget.state
-      ..textFontSize = edit.fontSize
-      ..textColor = edit.color;
-    unawaited(widget.state.savePenSettings());
   }
 
   void _deleteTextBox(PageTextBox box) {
     final page = widget.state.openPage;
+    if (_editingTextId == box.id) {
+      _editingTextId = null;
+      _textEditFocus.unfocus();
+    }
     widget.state.removeTextBox(widget.notebook.id, page, box.id);
     setState(() => _selectedTextId = null);
     showAppSnack(
@@ -2041,43 +2119,89 @@ class _EditorScreenState extends State<EditorScreen>
 
   Widget _buildTextToolBar() {
     final selected = _selectedTextBox;
+    final editing = _editingTextId != null;
+    final fontSize = selected?.fontSize ?? widget.state.textFontSize;
+    final color = selected?.color ?? widget.state.textColor;
     return Material(
       elevation: 4,
       borderRadius: BorderRadius.circular(20),
       child: Padding(
-        padding: EdgeInsets.symmetric(
-          horizontal: 12,
-          vertical: selected == null ? 10 : 0,
-        ),
-        child: selected == null
-            ? const Text(
-                'Chạm vào trang để gõ văn bản · chạm vào chữ đã có để chọn',
-                style: TextStyle(fontWeight: FontWeight.w700),
-              )
-            : Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    'Kéo để di chuyển',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(width: 6),
-                  TextButton.icon(
-                    onPressed: () => unawaited(_editTextBox(selected)),
-                    icon: const Icon(Icons.edit_outlined),
-                    label: const Text('Sửa'),
-                  ),
-                  TextButton.icon(
-                    onPressed: () => _deleteTextBox(selected),
-                    icon: const Icon(Icons.delete_outline),
-                    label: const Text('Xóa'),
-                  ),
-                  TextButton(
-                    onPressed: () => setState(() => _selectedTextId = null),
-                    child: const Text('Bỏ chọn'),
-                  ),
-                ],
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (selected == null)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 6),
+                child: Text(
+                  'Kéo trên trang để vẽ ô rồi gõ chữ',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
               ),
+            IconButton(
+              tooltip: 'Chữ nhỏ hơn',
+              onPressed: fontSize <= 10
+                  ? null
+                  : () => _styleSelectedText(fontSize: fontSize - 2),
+              icon: const Icon(Icons.text_decrease_rounded, size: 20),
+            ),
+            Text(
+              '${fontSize.round()}',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            IconButton(
+              tooltip: 'Chữ to hơn',
+              onPressed: fontSize >= 60
+                  ? null
+                  : () => _styleSelectedText(fontSize: fontSize + 2),
+              icon: const Icon(Icons.text_increase_rounded, size: 20),
+            ),
+            for (final swatch in const [
+              AppColors.ink,
+              Color(0xffc8453b),
+              Color(0xff3979d6),
+              Color(0xff2e8b57),
+              Color(0xffe8710a),
+            ])
+              GestureDetector(
+                onTap: () => _styleSelectedText(color: swatch),
+                child: Container(
+                  width: 22,
+                  height: 22,
+                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                  decoration: BoxDecoration(
+                    color: swatch,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: swatch.toARGB32() == color.toARGB32()
+                          ? AppColors.primary
+                          : Colors.white,
+                      width: 2.5,
+                    ),
+                  ),
+                ),
+              ),
+            if (selected != null) ...[
+              const SizedBox(width: 4),
+              if (editing)
+                TextButton(
+                  onPressed: _commitTextEditing,
+                  child: const Text('Xong'),
+                )
+              else
+                TextButton.icon(
+                  onPressed: () => _startEditingText(selected),
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('Sửa'),
+                ),
+              TextButton.icon(
+                onPressed: () => _deleteTextBox(selected),
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Xóa'),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -2411,7 +2535,12 @@ class _EditorScreenState extends State<EditorScreen>
     );
   }
 
-  Future<String> _recognizeSelectionText(String imagePath) async {
+  /// OCR vùng khoanh rồi sắp xếp lại lựa chọn trắc nghiệm mỗi lựa chọn một
+  /// dòng, để bảng tô, Kiểm tra nhanh và AI đều nhận văn bản dễ đọc.
+  Future<String> _recognizeSelectionText(String imagePath) async =>
+      formatOcrLayout(await _recognizeSelectionRaw(imagePath));
+
+  Future<String> _recognizeSelectionRaw(String imagePath) async {
     // Dictionary tools should be fast and reproducible: use Apple Vision first
     // and reserve paid/network Vision OCR for an actual local-OCR failure. Other
     // AI tools retain the explicit Vision preference configured by the user.
@@ -2639,7 +2768,10 @@ class _EditorScreenState extends State<EditorScreen>
     }
     setState(() {
       if (value != EditorTool.lasso) _clearLasso();
-      if (value != EditorTool.text) _selectedTextId = null;
+      if (value != EditorTool.text) {
+        _commitTextEditing(rebuild: false);
+        _selectedTextId = null;
+      }
       tool = value;
       error = null;
       selectionStart = null;
@@ -4908,39 +5040,95 @@ class _PageImageLayer extends StatelessWidget {
   );
 }
 
-/// Lớp thao tác trên hộp văn bản: chạm để chọn/sửa, kéo để di chuyển, kéo mép
-/// phải để đổi độ rộng. Nằm ngoài vùng chụp trang nên viền chọn không bị xuất
-/// ra PDF hay đưa vào OCR; chữ thật được vẽ trong vùng chụp.
-class _TextBoxEditLayer extends StatelessWidget {
+/// Lớp thao tác trên ô văn bản: kéo trên chỗ trống để vẽ ô mới, chạm để chọn,
+/// chạm lần nữa để gõ, kéo để di chuyển, kéo góc dưới phải để đổi kích thước.
+/// Nằm ngoài vùng chụp trang nên viền chọn không bị xuất ra PDF hay đưa vào
+/// OCR; chữ đã lưu được vẽ trong vùng chụp.
+class _TextBoxEditLayer extends StatefulWidget {
   const _TextBoxEditLayer({
     required this.boxes,
     required this.selectedId,
+    required this.editingId,
+    required this.controller,
+    required this.focusNode,
     required this.onTapEmpty,
+    required this.onDrawn,
     required this.onTapBox,
     required this.onMove,
     required this.onResize,
   });
   final List<PageTextBox> boxes;
   final String? selectedId;
-  final ValueChanged<Offset> onTapEmpty;
+  final String? editingId;
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final VoidCallback onTapEmpty;
+  final ValueChanged<Rect> onDrawn;
   final ValueChanged<PageTextBox> onTapBox;
   final void Function(String id, Offset delta, Size page) onMove;
-  final void Function(String id, double delta, Size page) onResize;
+  final void Function(String id, Offset delta, Size page) onResize;
+
+  @override
+  State<_TextBoxEditLayer> createState() => _TextBoxEditLayerState();
+}
+
+class _TextBoxEditLayerState extends State<_TextBoxEditLayer> {
+  Offset? _drawStart;
+  Offset? _drawEnd;
+
+  Rect? get _drawRect {
+    final start = _drawStart;
+    final end = _drawEnd;
+    return start == null || end == null ? null : Rect.fromPoints(start, end);
+  }
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final page = constraints.biggest;
+      Offset clampToPage(Offset point) =>
+          Offset(point.dx.clamp(0, page.width), point.dy.clamp(0, page.height));
+      final drawRect = _drawRect;
       return Stack(
         children: [
           Positioned.fill(
             child: GestureDetector(
               key: const ValueKey('text-layer-empty'),
               behavior: HitTestBehavior.opaque,
-              onTapUp: (details) => onTapEmpty(details.localPosition),
+              onTap: widget.onTapEmpty,
+              onPanStart: (details) => setState(() {
+                _drawStart = clampToPage(details.localPosition);
+                _drawEnd = _drawStart;
+              }),
+              onPanUpdate: (details) =>
+                  setState(() => _drawEnd = clampToPage(details.localPosition)),
+              onPanEnd: (_) {
+                final rect = _drawRect;
+                setState(() {
+                  _drawStart = null;
+                  _drawEnd = null;
+                });
+                if (rect != null) widget.onDrawn(rect);
+              },
+              onPanCancel: () => setState(() {
+                _drawStart = null;
+                _drawEnd = null;
+              }),
             ),
           ),
-          for (final box in boxes)
+          if (drawRect != null)
+            Positioned.fromRect(
+              rect: drawRect,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: .06),
+                    border: Border.all(color: AppColors.primary, width: 1.5),
+                  ),
+                ),
+              ),
+            ),
+          for (final box in widget.boxes)
             Positioned(
               left: box.position.dx,
               top: box.position.dy,
@@ -4948,51 +5136,54 @@ class _TextBoxEditLayer extends StatelessWidget {
               child: Stack(
                 fit: StackFit.passthrough,
                 children: [
-                  GestureDetector(
-                    key: ValueKey('text-box-${box.id}'),
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => onTapBox(box),
-                    onPanUpdate: (details) =>
-                        onMove(box.id, details.delta, page),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        border: Border.fromBorderSide(
-                          box.id == selectedId
-                              ? const BorderSide(
-                                  color: AppColors.primary,
-                                  width: 1.5,
-                                )
-                              : BorderSide(
-                                  color: AppColors.primary.withValues(
-                                    alpha: .25,
+                  if (box.id == widget.editingId)
+                    _inlineEditor(box)
+                  else
+                    GestureDetector(
+                      key: ValueKey('text-box-${box.id}'),
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => widget.onTapBox(box),
+                      onPanUpdate: (details) =>
+                          widget.onMove(box.id, details.delta, page),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          border: Border.fromBorderSide(
+                            box.id == widget.selectedId
+                                ? const BorderSide(
+                                    color: AppColors.primary,
+                                    width: 1.5,
+                                  )
+                                : BorderSide(
+                                    color: AppColors.primary.withValues(
+                                      alpha: .25,
+                                    ),
                                   ),
-                                ),
+                          ),
+                        ),
+                        // Invisible copy: gives the frame the size of the
+                        // real text painted underneath in the capture area.
+                        child: Opacity(
+                          opacity: 0,
+                          child: PageTextBoxContent(box: box),
                         ),
                       ),
-                      // Invisible copy: gives the frame the size of the real
-                      // text painted underneath in the capture boundary.
-                      child: Opacity(
-                        opacity: 0,
-                        child: PageTextBoxContent(box: box),
-                      ),
                     ),
-                  ),
-                  if (box.id == selectedId)
+                  if (box.id == widget.selectedId)
                     Positioned(
                       right: 0,
-                      top: 0,
                       bottom: 0,
-                      width: 24,
+                      width: 26,
+                      height: 26,
                       child: GestureDetector(
                         key: ValueKey('text-box-resize-${box.id}'),
                         behavior: HitTestBehavior.opaque,
                         onPanUpdate: (details) =>
-                            onResize(box.id, details.delta.dx, page),
+                            widget.onResize(box.id, details.delta, page),
                         child: const Align(
-                          alignment: Alignment.centerRight,
+                          alignment: Alignment.bottomRight,
                           child: Icon(
-                            Icons.drag_indicator_rounded,
-                            size: 18,
+                            Icons.open_in_full_rounded,
+                            size: 16,
                             color: AppColors.primary,
                           ),
                         ),
@@ -5004,6 +5195,34 @@ class _TextBoxEditLayer extends StatelessWidget {
         ],
       );
     },
+  );
+
+  Widget _inlineEditor(PageTextBox box) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: Colors.white.withValues(alpha: .6),
+      border: Border.all(color: AppColors.primary, width: 1.5),
+    ),
+    child: ConstrainedBox(
+      constraints: BoxConstraints(minHeight: box.height),
+      child: Padding(
+        padding: const EdgeInsets.all(PageTextBoxContent.padding),
+        child: TextField(
+          key: const ValueKey('text-box-inline'),
+          controller: widget.controller,
+          focusNode: widget.focusNode,
+          maxLines: null,
+          keyboardType: TextInputType.multiline,
+          style: TextStyle(
+            fontSize: box.fontSize,
+            color: box.color,
+            height: 1.4,
+          ),
+          decoration: const InputDecoration.collapsed(
+            hintText: 'Gõ chữ...',
+          ).copyWith(filled: false),
+        ),
+      ),
+    ),
   );
 }
 

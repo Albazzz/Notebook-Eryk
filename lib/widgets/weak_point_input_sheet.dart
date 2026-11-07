@@ -246,40 +246,72 @@ class _WeakPointInputSheetState extends State<WeakPointInputSheet> {
 
   @override
   Widget build(BuildContext context) {
-    // Shrink with the keyboard so the buttons stay on screen while typing.
-    final height =
-        (MediaQuery.sizeOf(context).height -
-            MediaQuery.viewInsetsOf(context).bottom) *
-        .82;
+    // With the keyboard up, take all the room left above it (minus the status
+    // bar and drag handle) so the field and buttons stay on screen.
+    final media = MediaQuery.of(context);
+    final keyboard = media.viewInsets.bottom;
+    final height = keyboard > 0
+        ? media.size.height - keyboard - media.padding.top - 72
+        : media.size.height * .82;
     final review = _review;
     return SafeArea(
       child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          24,
-          0,
-          24,
-          MediaQuery.viewInsetsOf(context).bottom + 16,
-        ),
+        padding: EdgeInsets.fromLTRB(24, 0, 24, keyboard + 16),
         child: SizedBox(
-          height: height,
+          height: height.clamp(0, double.infinity).toDouble(),
           child: review == null ? _buildInput() : _buildReview(review),
         ),
       ),
     );
   }
 
-  Widget _buildInput() {
+  Widget _buildInput() =>
+      LayoutBuilder(builder: (context, constraints) {
+        // Too short for a comfortable field (big keyboard, small window):
+        // give the field a fixed height and let the whole sheet scroll
+        // instead of squeezing the text over the chips.
+        const minField = 160.0;
+        final keyboardUp = MediaQuery.viewInsetsOf(context).bottom > 0;
+        final fixed = keyboardUp ? 200.0 : 260.0;
+        if (constraints.maxHeight >= fixed + minField) {
+          return _inputContent(keyboardUp: keyboardUp, fieldHeight: null);
+        }
+        return SingleChildScrollView(
+          child: _inputContent(keyboardUp: keyboardUp, fieldHeight: minField),
+        );
+      });
+
+  Widget _inputContent({required bool keyboardUp, double? fieldHeight}) {
     final muted = Theme.of(context).colorScheme.onSurfaceVariant;
     final lines = _lines;
+    final field = TextField(
+      key: const ValueKey('weak-point-input'),
+      controller: _controller,
+      enabled: !_running,
+      autofocus: true,
+      expands: true,
+      maxLines: null,
+      textAlignVertical: TextAlignVertical.top,
+      keyboardType: TextInputType.multiline,
+      onChanged: (_) => setState(() {}),
+      decoration: const InputDecoration(
+        hintText:
+            '〜とはいえ [N2]: dẫu nói là... nhưng\n〜わけではない\n〜にもかかわらず: mặc dù',
+      ),
+    );
     return Column(
+      mainAxisSize: fieldHeight == null ? MainAxisSize.max : MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text('Nhập điểm yếu', style: Theme.of(context).textTheme.headlineSmall),
-        const SizedBox(height: 4),
-        Text(
-          'Gõ hoặc dán ghi chú bất kỳ, tiếng Việt xen tiếng Nhật cũng được. AI tự rút ra các mẫu ngữ pháp và từ cần học, bạn duyệt rồi mới lưu.',
-          style: TextStyle(color: muted),
-        ),
+        // While typing the field needs the room more than the explanation.
+        if (!keyboardUp) ...[
+          const SizedBox(height: 4),
+          Text(
+            'Gõ hoặc dán ghi chú bất kỳ, tiếng Việt xen tiếng Nhật cũng được. AI tự rút ra các mẫu ngữ pháp và từ cần học, bạn duyệt rồi mới lưu.',
+            style: TextStyle(color: muted),
+          ),
+        ],
         const SizedBox(height: 12),
         Wrap(
           spacing: 8,
@@ -305,23 +337,10 @@ class _WeakPointInputSheetState extends State<WeakPointInputSheet> {
           ],
         ),
         const SizedBox(height: 12),
-        Expanded(
-          child: TextField(
-            key: const ValueKey('weak-point-input'),
-            controller: _controller,
-            enabled: !_running,
-            autofocus: true,
-            expands: true,
-            maxLines: null,
-            textAlignVertical: TextAlignVertical.top,
-            keyboardType: TextInputType.multiline,
-            onChanged: (_) => setState(() {}),
-            decoration: const InputDecoration(
-              hintText:
-                  '〜とはいえ [N2]\nCách dùng: dẫu nói là... nhưng thực tế...\n\n〜わけではない\n〜にもかかわらず: mặc dù',
-            ),
-          ),
-        ),
+        if (fieldHeight == null)
+          Expanded(child: field)
+        else
+          SizedBox(height: fieldHeight, child: field),
         const SizedBox(height: 8),
         if (_running) ...[
           LinearProgressIndicator(

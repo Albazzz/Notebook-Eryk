@@ -1470,6 +1470,30 @@ Cách dùng: Cực kỳ, hết sức (đồng nghĩa với 非常に, 極めて)
       expect(state.hasTextBoxes('book'), isFalse);
     },
   );
+
+  test('OCR layout puts each multiple-choice option on its own line', () {
+    expect(
+      formatOcrLayout(
+        '27 試合に負けて、くやしい思いをした。\n'
+        '1 苦手だった 2 残念だった 3 平気だった 4 不満だった\n'
+        '28 どうぞ、おかけになってください。\n'
+        '1 すわって 2 たべて 3 はいって 4 おりて',
+      ),
+      '27 試合に負けて、くやしい思いをした。\n'
+      '1 苦手だった\n2 残念だった\n3 平気だった\n4 不満だった\n'
+      '\n'
+      '28 どうぞ、おかけになってください。\n'
+      '1 すわって\n2 たべて\n3 はいって\n4 おりて',
+    );
+    expect(
+      formatOcrLayout('問1 正しいのはどれか。 a. 行く b. 来る c. 見る'),
+      '問1 正しいのはどれか。\na. 行く\nb. 来る\nc. 見る',
+    );
+    // Ordinary text and a lone number stay as they are.
+    expect(formatOcrLayout('2 人で行きました。'), '2 人で行きました。');
+    expect(formatOcrLayout('ばったり'), 'ばったり');
+    expect(formatOcrLayout('①はい ②いいえ'), '①はい\n②いいえ');
+  });
 }
 
 class _TestPathProvider extends PathProviderPlatform {

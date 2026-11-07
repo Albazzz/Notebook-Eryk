@@ -16,11 +16,14 @@ class PageTextBoxContent extends StatelessWidget {
   static const padding = 4.0;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.all(padding),
-    child: Text(
-      box.text,
-      style: TextStyle(fontSize: box.fontSize, color: box.color, height: 1.4),
+  Widget build(BuildContext context) => ConstrainedBox(
+    constraints: BoxConstraints(minHeight: box.height),
+    child: Padding(
+      padding: const EdgeInsets.all(padding),
+      child: Text(
+        box.text,
+        style: TextStyle(fontSize: box.fontSize, color: box.color, height: 1.4),
+      ),
     ),
   );
 }
