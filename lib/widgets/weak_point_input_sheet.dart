@@ -186,18 +186,33 @@ class _WeakPointInputSheetState extends State<WeakPointInputSheet> {
     );
   }
 
-  void _saveWithoutAi() {
-    _save([
-      for (final line in _lines)
+  /// Không gọi AI: furigana, Hán Việt và nghĩa còn thiếu lấy từ từ điển.
+  Future<void> _saveWithoutAi() async {
+    final items = <_ReviewItem>[];
+    for (final line in _lines) {
+      final typed = _titleOnlyDraft(line);
+      final fill = await state.dictionaryFillFor(typed.title);
+      if (!mounted) return;
+      final kind = _kind ?? fill?.suggestedKind ?? typed.kind;
+      final lexical =
+          kind == WeaknessKind.vocabulary || kind == WeaknessKind.kanji;
+      items.add(
         _ReviewItem(
-          _titleOnlyDraft(line),
-          duplicate: state.findDuplicateWeakPoint(
-            _kind ?? WeaknessKind.grammar,
-            _titleOnlyDraft(line).title,
+          WeakPointDraft(
+            title: typed.title,
+            kind: kind,
+            content: typed.content.isNotEmpty
+                ? typed.content
+                : fill?.meaning ?? '',
+            reading: lexical ? fill?.reading ?? '' : '',
+            hanViet: lexical ? fill?.hanViet ?? '' : '',
           ),
+          duplicate: state.findDuplicateWeakPoint(kind, typed.title),
           unprocessed: true,
         ),
-    ]);
+      );
+    }
+    _save(items);
   }
 
   void _save(List<_ReviewItem> items) {
@@ -265,21 +280,22 @@ class _WeakPointInputSheetState extends State<WeakPointInputSheet> {
     );
   }
 
-  Widget _buildInput() =>
-      LayoutBuilder(builder: (context, constraints) {
-        // Too short for a comfortable field (big keyboard, small window):
-        // give the field a fixed height and let the whole sheet scroll
-        // instead of squeezing the text over the chips.
-        const minField = 160.0;
-        final keyboardUp = MediaQuery.viewInsetsOf(context).bottom > 0;
-        final fixed = keyboardUp ? 200.0 : 260.0;
-        if (constraints.maxHeight >= fixed + minField) {
-          return _inputContent(keyboardUp: keyboardUp, fieldHeight: null);
-        }
-        return SingleChildScrollView(
-          child: _inputContent(keyboardUp: keyboardUp, fieldHeight: minField),
-        );
-      });
+  Widget _buildInput() => LayoutBuilder(
+    builder: (context, constraints) {
+      // Too short for a comfortable field (big keyboard, small window):
+      // give the field a fixed height and let the whole sheet scroll
+      // instead of squeezing the text over the chips.
+      const minField = 160.0;
+      final keyboardUp = MediaQuery.viewInsetsOf(context).bottom > 0;
+      final fixed = keyboardUp ? 200.0 : 260.0;
+      if (constraints.maxHeight >= fixed + minField) {
+        return _inputContent(keyboardUp: keyboardUp, fieldHeight: null);
+      }
+      return SingleChildScrollView(
+        child: _inputContent(keyboardUp: keyboardUp, fieldHeight: minField),
+      );
+    },
+  );
 
   Widget _inputContent({required bool keyboardUp, double? fieldHeight}) {
     final muted = Theme.of(context).colorScheme.onSurfaceVariant;
@@ -295,8 +311,7 @@ class _WeakPointInputSheetState extends State<WeakPointInputSheet> {
       keyboardType: TextInputType.multiline,
       onChanged: (_) => setState(() {}),
       decoration: const InputDecoration(
-        hintText:
-            '〜とはいえ [N2]: dẫu nói là... nhưng\n〜わけではない\n〜にもかかわらず: mặc dù',
+        hintText: '〜とはいえ [N2]: dẫu nói là... nhưng\n〜わけではない\n〜にもかかわらず: mặc dù',
       ),
     );
     return Column(

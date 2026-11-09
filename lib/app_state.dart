@@ -51,6 +51,7 @@ class AppState extends ChangeNotifier {
     EditorTool.image,
     EditorTool.dictionary,
     EditorTool.quickDictionary,
+    EditorTool.furigana,
     EditorTool.aiDictionary,
     EditorTool.translate,
     EditorTool.explain,
@@ -65,6 +66,7 @@ class AppState extends ChangeNotifier {
     EditorTool.quickCheck,
     EditorTool.lasso,
     EditorTool.text,
+    EditorTool.furigana,
   ];
   static const _keyStorageName = 'openrouter_api_key';
   static const _geminiKeyStorageName = 'gemini_api_key';
@@ -78,7 +80,7 @@ class AppState extends ChangeNotifier {
   static const _preferencesMirrorLimit = 512 * 1024;
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   final OpenRouterService aiService = OpenRouterService();
-  final DictionaryRepository dictionary = LocalDictionaryRepository();
+  DictionaryRepository dictionary = LocalDictionaryRepository();
   final OcrService ocr = AppleVisionJapaneseOcrService();
 
   AppDestination destination = AppDestination.library;
@@ -164,6 +166,7 @@ class AppState extends ChangeNotifier {
 
   /// Hộp văn bản theo trang, cùng khóa "vở:trang" với nét mực.
   final Map<String, List<PageTextBox>> textBoxes = {};
+  final Map<String, List<FuriganaMark>> furigana = {};
   int _imagePlacementSequence = 0;
   final Set<String> blankPages = {};
   final Map<String, String> sourceDocuments = {};
@@ -487,6 +490,13 @@ class AppState extends ChangeNotifier {
         (sum, value) => sum + (value as List).length * 10,
       );
     }
+    final furigana = data['furigana'] as Map?;
+    if (furigana != null) {
+      score += furigana.values.fold<int>(
+        0,
+        (sum, value) => sum + (value as List).length,
+      );
+    }
     score += ((data['sourceDocuments'] as Map?)?.length ?? 0) * 20;
     score += ((data['pinnedNotes'] as Map?)?.length ?? 0) * 10;
     return score;
@@ -538,6 +548,7 @@ class AppState extends ChangeNotifier {
     final rawWeakPoints = data['weakPoints'] as List?;
     final rawDecks = data['flashcardDecks'] as List?;
     final parsedTextBoxes = _parseTextBoxes(data['textBoxes'] as Map?);
+    final parsedFurigana = _parseFurigana(data['furigana'] as Map?);
     final parsedWeakPoints = rawWeakPoints == null
         ? null
         : _parseWeakPoints(rawWeakPoints);
@@ -592,6 +603,11 @@ class AppState extends ChangeNotifier {
       textBoxes
         ..clear()
         ..addAll(parsedTextBoxes);
+    }
+    if (parsedFurigana != null) {
+      furigana
+        ..clear()
+        ..addAll(parsedFurigana);
     }
     if (parsedLastPages != null) {
       lastPages
@@ -744,6 +760,10 @@ class AppState extends ChangeNotifier {
     'flashcardDecks': decks.map((deck) => deck.toJson()).toList(),
     'textBoxes': textBoxes.map(
       (key, boxes) => MapEntry(key, boxes.map((box) => box.toJson()).toList()),
+    ),
+    'furigana': furigana.map(
+      (key, marks) =>
+          MapEntry(key, marks.map((mark) => mark.toJson()).toList()),
     ),
   };
 
@@ -1447,6 +1467,7 @@ class AppState extends ChangeNotifier {
     library.putIfAbsent('weakPoints', () => <dynamic>[]);
     library.putIfAbsent('flashcardDecks', () => <dynamic>[]);
     library.putIfAbsent('textBoxes', () => <String, dynamic>{});
+    library.putIfAbsent('furigana', () => <String, dynamic>{});
   }
 
   Set<String> _requiredImportedPagePaths(Map<String, dynamic> library) {
@@ -2051,6 +2072,7 @@ class AppState extends ChangeNotifier {
       (key, _) => key == notebookId || key.startsWith('$notebookId:'),
     );
     textBoxes.removeWhere((key, _) => key.startsWith('$notebookId:'));
+    furigana.removeWhere((key, _) => key.startsWith('$notebookId:'));
     pinnedNotes.remove(notebookId);
     pageImages.remove(notebookId);
     imagePlacements.removeWhere(
@@ -2247,6 +2269,25 @@ class AppState extends ChangeNotifier {
   String _strokeKey(String notebookId, int page) => '$notebookId:$page';
 
   /// Đọc khoan dung: một hộp hỏng không làm mất các hộp còn lại.
+  Map<String, List<FuriganaMark>>? _parseFurigana(Map? raw) {
+    if (raw == null) return null;
+    final parsed = <String, List<FuriganaMark>>{};
+    for (final entry in raw.entries) {
+      final marks = <FuriganaMark>[];
+      for (final item in entry.value as List? ?? const []) {
+        try {
+          marks.add(
+            FuriganaMark.fromJson(Map<String, dynamic>.from(item as Map)),
+          );
+        } catch (error) {
+          debugPrint('[NoteEryk][Storage] skipped malformed furigana: $error');
+        }
+      }
+      if (marks.isNotEmpty) parsed[entry.key.toString()] = marks;
+    }
+    return parsed;
+  }
+
   Map<String, List<PageTextBox>>? _parseTextBoxes(Map? raw) {
     if (raw == null) return null;
     final parsed = <String, List<PageTextBox>>{};
@@ -2264,6 +2305,37 @@ class AppState extends ChangeNotifier {
       if (boxes.isNotEmpty) parsed[entry.key.toString()] = boxes;
     }
     return parsed;
+  }
+
+  /// A new list on every change, so the page knows when to repaint.
+  List<FuriganaMark> furiganaFor(String notebookId, int page) =>
+      furigana[_strokeKey(notebookId, page)] ?? const [];
+
+  void addFurigana(String notebookId, int page, List<FuriganaMark> marks) {
+    final key = _strokeKey(notebookId, page);
+    furigana[key] = [...?furigana[key], ...marks];
+    notifyListeners();
+    schedulePersistence();
+  }
+
+  List<FuriganaMark> furiganaIn(String notebookId, int page, Rect region) => [
+    for (final mark in furiganaFor(notebookId, page))
+      if (region.contains(mark.rect.center)) mark,
+  ];
+
+  void removeFuriganaIn(String notebookId, int page, Rect region) {
+    final key = _strokeKey(notebookId, page);
+    final kept = [
+      for (final mark in furiganaFor(notebookId, page))
+        if (!region.contains(mark.rect.center)) mark,
+    ];
+    if (kept.isEmpty) {
+      furigana.remove(key);
+    } else {
+      furigana[key] = kept;
+    }
+    notifyListeners();
+    schedulePersistence();
   }
 
   List<PageTextBox> textBoxesFor(String notebookId, int page) =>
@@ -2777,6 +2849,48 @@ class AppState extends ChangeNotifier {
     onProgress: onProgress,
     isCancelled: isCancelled,
   );
+
+  /// Furigana, Hán Việt và nghĩa cho điểm yếu nhập tay, chỉ dùng từ điển
+  /// ngoại tuyến. Null khi từ điển không biết gì về [title].
+  Future<DictionaryFill?> dictionaryFillFor(String title) async {
+    final value = title.trim();
+    if (value.isEmpty) return null;
+    DictionaryEntry? entry;
+    var kanji = const <KanjiEntry>[];
+    try {
+      entry = await dictionary.lookupBasic(value);
+      kanji = await dictionary.kanjiIn(value);
+    } catch (_) {
+      return null;
+    }
+    if (entry != null) {
+      return DictionaryFill(
+        reading: entry.reading,
+        hanViet: entry.hanViet.isNotEmpty
+            ? entry.hanViet
+            : composeHanViet(value, kanji),
+        meaning: entry.meaning,
+        // A pattern written with 〜 is grammar even if the bare form is a word.
+        suggestedKind: RegExp(r'^[〜~～]').hasMatch(value)
+            ? null
+            : WeaknessKind.vocabulary,
+      );
+    }
+    if (kanji.length == 1 && value.runes.length == 1) {
+      final single = kanji.first;
+      return DictionaryFill(
+        reading: [
+          single.onReading,
+          single.kunReading,
+        ].where((part) => part.isNotEmpty).join(' / '),
+        hanViet: single.hanViet,
+        meaning: single.meaning,
+        suggestedKind: WeaknessKind.kanji,
+      );
+    }
+    final composed = composeHanViet(value, kanji);
+    return composed.isEmpty ? null : DictionaryFill(hanViet: composed);
+  }
 
   /// Cách đọc/Hán Việt do AI viết được đối chiếu với từ điển ngoại tuyến:
   /// Hán Việt lấy theo từ điển, cách đọc khác thì ghi chú để người học xem.

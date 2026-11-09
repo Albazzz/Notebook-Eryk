@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:noteeryk/app.dart';
 import 'package:noteeryk/app_state.dart';
+import 'package:noteeryk/furigana.dart';
 import 'package:noteeryk/models.dart';
 import 'package:noteeryk/review.dart';
 import 'package:noteeryk/screens/settings_screen.dart';
+import 'package:noteeryk/services.dart';
 import 'package:flutter/rendering.dart';
 import 'package:noteeryk/widgets/color_panel.dart';
 import 'package:noteeryk/widgets/notebook_cover.dart';
@@ -830,6 +832,300 @@ void main() {
     );
   }
 
+  testWidgets(
+    'thêm thủ công tự điền furigana, nghĩa từ từ điển, không đè chữ tự gõ',
+    (tester) async {
+      tester.view.physicalSize = const Size(1180, 820);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final state = _stateWithNotebook()..weakPoints = [];
+      addTearDown(state.dispose);
+      state.goTo(AppDestination.weaknesses);
+      await tester.pumpWidget(NihongoNotebookApp(state: state));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Thêm thủ công'));
+      await tester.pumpAndSettle();
+
+      String textOf(String label) => tester
+          .widget<TextField>(find.widgetWithText(TextField, label))
+          .controller!
+          .text;
+
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Mẫu ngữ pháp (vd 〜わけではない)'),
+        '揚げる',
+      );
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pump();
+
+      // A dictionary word switches away from the default grammar form.
+      expect(textOf('Cách đọc (よみ / furigana)'), 'あげる');
+      expect(textOf('Hán Việt'), 'DƯƠNG');
+      expect(textOf('Nghĩa'), 'chiên, rán');
+      expect(find.textContaining('Đã tự điền từ từ điển'), findsOneWidget);
+
+      // What the learner writes survives the next lookup.
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Nghĩa'),
+        'nghĩa riêng',
+      );
+      await tester.enterText(find.widgetWithText(TextField, 'Từ vựng'), '食べる');
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pump();
+      expect(textOf('Nghĩa'), 'nghĩa riêng');
+      expect(textOf('Cách đọc (よみ / furigana)'), 'たべる');
+
+      final add = find.widgetWithText(FilledButton, 'Thêm');
+      await tester.ensureVisible(add);
+      await tester.pumpAndSettle();
+      await tester.tap(add);
+      await tester.pumpAndSettle(const Duration(milliseconds: 400));
+      final point = state.weakPoints.single;
+      expect(point.kind, WeaknessKind.vocabulary);
+      expect(point.reading, 'たべる');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('lưu không dùng AI vẫn lấy furigana và nghĩa từ từ điển', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook()..weakPoints = [];
+    addTearDown(state.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showWeakPointInputSheet(context, state),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('weak-point-input')),
+      '揚げる\n〜とはいえ: dẫu nói là',
+    );
+    await tester.pump();
+    await tester.tap(find.text('Lưu 2 dòng, không dùng AI'));
+    await tester.pumpAndSettle();
+
+    final word = state.weakPoints.firstWhere((p) => p.title == '揚げる');
+    expect(word.kind, WeaknessKind.vocabulary);
+    expect(word.reading, 'あげる');
+    expect(word.content, 'chiên, rán');
+    final grammar = state.weakPoints.firstWhere((p) => p.title == '〜とはいえ');
+    expect(grammar.kind, WeaknessKind.grammar);
+    expect(grammar.content, 'dẫu nói là');
+  });
+
+  testWidgets('bảng tô ở chế độ Tra từ trả về từ đã tô hoặc nguyên đoạn', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    OcrHighlightResult? picked;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async => picked = await showOcrHighlightSheet(
+                context,
+                ocrText: 'かれは毎日、勉強します。',
+                forLookup: true,
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Tô từ cần tra'), findsOneWidget);
+    expect(find.text('AI tự tìm'), findsNothing);
+    expect(find.textContaining('Tạo điểm yếu'), findsNothing);
+
+    await tester.tap(find.text('Tra nguyên đoạn'));
+    await tester.pumpAndSettle();
+    expect(picked?.terms, isEmpty);
+    expect(picked?.text, 'かれは毎日、勉強します。');
+  });
+
+  test('furigana chỉ nằm trên phần kanji, chừa okurigana', () {
+    List<String> pairs(String surface, String reading) => [
+      for (final span in alignFurigana(surface, reading))
+        '${surface.substring(span.start, span.end)}:${span.reading}',
+    ];
+    expect(pairs('勉強', 'べんきょう'), ['勉強:べんきょう']);
+    expect(pairs('食べる', 'たべる'), ['食:た']);
+    expect(pairs('食べ物', 'たべもの'), ['食:た', '物:もの']);
+    expect(pairs('お金', 'おかね'), ['金:かね']);
+    expect(pairs('ひらがな', 'ひらがな'), isEmpty);
+  });
+
+  test('furigana đặt đúng chữ trên trang', () {
+    const region = Rect.fromLTWH(100, 200, 400, 100);
+    // Vision reports the whole line for each character: estimate along it.
+    const line = OcrLine(
+      text: '私は学生',
+      box: Rect.fromLTWH(0, .2, 1, .6),
+      characterBoxes: [
+        Rect.fromLTWH(0, .2, 1, .6),
+        Rect.fromLTWH(0, .2, 1, .6),
+        Rect.fromLTWH(0, .2, 1, .6),
+        Rect.fromLTWH(0, .2, 1, .6),
+      ],
+      tokens: [
+        OcrToken(start: 0, length: 1, reading: 'わたし'),
+        OcrToken(start: 1, length: 1, reading: 'は'),
+        OcrToken(start: 2, length: 2, reading: 'がくせい'),
+      ],
+    );
+    final estimated = buildFuriganaMarks(
+      const [line],
+      region: region,
+      keepInside: region,
+    );
+    expect(estimated.map((mark) => mark.reading), ['わたし', 'がくせい']);
+    expect(estimated.first.rect.left, closeTo(100, .01));
+    expect(estimated.first.rect.width, closeTo(100, .01));
+    expect(estimated.first.rect.top, closeTo(220, .01));
+    expect(estimated.last.rect.left, closeTo(300, .01));
+    expect(estimated.last.rect.width, closeTo(200, .01));
+
+    // Real per-character boxes win over the estimate.
+    final located = buildFuriganaMarks(
+      const [
+        OcrLine(
+          text: '山川',
+          box: Rect.fromLTWH(0, 0, 1, 1),
+          characterBoxes: [
+            Rect.fromLTWH(0, 0, .2, 1),
+            Rect.fromLTWH(.7, 0, .3, 1),
+          ],
+          tokens: [
+            OcrToken(start: 0, length: 1, reading: 'やま'),
+            OcrToken(start: 1, length: 1, reading: 'かわ'),
+          ],
+        ),
+      ],
+      region: region,
+      keepInside: region,
+    );
+    expect(located.last.rect.left, closeTo(380, .01));
+    expect(located.last.rect.width, closeTo(120, .01));
+
+    // Words in the capture margin, outside the circled area, are left out.
+    final kept = buildFuriganaMarks(
+      const [line],
+      region: region,
+      keepInside: const Rect.fromLTWH(100, 200, 150, 100),
+    );
+    expect(kept.map((mark) => mark.reading), ['わたし']);
+  });
+
+  test('sửa âm dài おお mà bộ tách từ đọc thành おう', () {
+    List<String> readings(String surface, String reading) => buildFuriganaMarks(
+      [
+        OcrLine(
+          text: surface,
+          box: const Rect.fromLTWH(0, 0, 1, .5),
+          tokens: [
+            OcrToken(start: 0, length: surface.length, reading: reading),
+          ],
+        ),
+      ],
+      region: const Rect.fromLTWH(0, 0, 100, 100),
+      keepInside: const Rect.fromLTWH(0, 0, 100, 100),
+    ).map((mark) => mark.reading).toList();
+    expect(readings('大きい', 'おうきい'), ['おお']);
+    expect(readings('通り', 'とうり'), ['とお']);
+    expect(readings('多い', 'おうい'), ['おお']);
+    // On'yomi compounds keep おう / とう.
+    expect(readings('通学', 'つうがく'), ['つうがく']);
+    expect(readings('東京', 'とうきょう'), ['とうきょう']);
+  });
+
+  testWidgets(
+    'furigana còn nguyên khi đổi công cụ, chỉ mất khi tô lại và xóa',
+    (tester) async {
+      tester.view.physicalSize = const Size(1180, 820);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final state = _stateWithNotebook();
+      addTearDown(state.dispose);
+      state.open(state.notebooks.first, page: 1);
+      state.addFurigana('n3', 1, const [
+        FuriganaMark(reading: 'わたし', rect: Rect.fromLTWH(200, 200, 30, 30)),
+        FuriganaMark(reading: 'やま', rect: Rect.fromLTWH(200, 500, 30, 30)),
+      ]);
+      await tester.pumpWidget(NihongoNotebookApp(state: state));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('furigana-layer')), findsOneWidget);
+
+      // Other tools and page changes leave it alone.
+      await tester.tap(find.byTooltip('Tẩy'));
+      await tester.pump();
+      state.goToPage(2);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('furigana-layer')), findsNothing);
+      state.goToPage(1);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('furigana-layer')), findsOneWidget);
+      expect(state.furiganaFor('n3', 1), hasLength(2));
+
+      final page = tester.getRect(find.byKey(const ValueKey('page-canvas')));
+      Offset onPage(double x, double y) =>
+          page.topLeft + Offset(x, y) * (page.width / kPageCanvasSize.width);
+      Future<void> circle() async {
+        final pen = TestPointer(81, PointerDeviceKind.stylus);
+        await tester.sendEventToBinding(pen.down(onPage(150, 170)));
+        await tester.sendEventToBinding(pen.move(onPage(250, 220)));
+        await tester.sendEventToBinding(pen.move(onPage(300, 260)));
+        await tester.sendEventToBinding(pen.up());
+        await tester.pumpAndSettle();
+      }
+
+      await tester.ensureVisible(find.byTooltip('Furigana'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Furigana'));
+      await tester.pumpAndSettle();
+
+      // Circling it asks first; cancelling keeps it.
+      await circle();
+      expect(find.text('Xóa furigana vùng này?'), findsOneWidget);
+      await tester.tap(find.text('Hủy'));
+      await tester.pumpAndSettle();
+      expect(state.furiganaFor('n3', 1), hasLength(2));
+
+      // Deleting only touches the circled area.
+      await circle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Xóa'));
+      await tester.pumpAndSettle();
+      expect(state.furiganaFor('n3', 1).single.reading, 'やま');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('bìa vở vẽ giấy và nét viết tay của trang 1', (tester) async {
     final state = _stateWithNotebook();
     addTearDown(state.dispose);
@@ -1291,8 +1587,41 @@ void _quickCheckTests() {
   });
 }
 
+class _FakeDictionary implements DictionaryRepository {
+  static const _words = {
+    '揚げる': DictionaryEntry(
+      word: '揚げる',
+      reading: 'あげる',
+      meaning: 'chiên, rán',
+      level: 'N3',
+      hanViet: 'DƯƠNG',
+    ),
+    '食べる': DictionaryEntry(
+      word: '食べる',
+      reading: 'たべる',
+      meaning: 'ăn',
+      level: 'N5',
+      hanViet: 'THỰC',
+    ),
+  };
+
+  @override
+  Future<DictionaryEntry?> lookupBasic(String text) async =>
+      _words[text.trim()];
+  @override
+  Future<DictionaryEntry?> lookupExact(String text) => lookupBasic(text);
+  @override
+  Future<DictionaryEntry?> lookupNormalized(String text) => lookupBasic(text);
+  @override
+  Future<List<DictionaryEntry>> search(String text, {int limit = 30}) async => [
+    ?_words[text.trim()],
+  ];
+  @override
+  Future<List<KanjiEntry>> kanjiIn(String text) async => const [];
+}
+
 AppState _stateWithNotebook() {
-  final state = AppState();
+  final state = AppState()..dictionary = _FakeDictionary();
   state.addNotebook(
     const NotebookData(
       id: 'n3',

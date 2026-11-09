@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart' as pdf;
 import 'package:pdf/widgets.dart' as pw;
 
+import '../furigana.dart';
 import '../app_state.dart';
 import '../models.dart';
 import '../services.dart';
@@ -126,6 +127,7 @@ class _EditorScreenState extends State<EditorScreen>
   bool _sessionPdfExportRequested = false;
   int _quickDictionaryRequestSerial = 0;
   bool _quickDictionaryEditing = false;
+  bool _furiganaHidden = false;
   double _quickRight = 24;
   double _quickTop = 24;
   double _quickWidth = 390;
@@ -931,6 +933,7 @@ class _EditorScreenState extends State<EditorScreen>
     EditorTool.image => 'Ảnh',
     EditorTool.dictionary => 'Tra từ ngoại tuyến',
     EditorTool.quickDictionary => 'Tra từ nhanh',
+    EditorTool.furigana => 'Furigana',
     EditorTool.aiDictionary => 'AI Tra từ',
     EditorTool.translate => 'AI Dịch',
     EditorTool.explain => 'AI Giải thích',
@@ -1513,6 +1516,31 @@ class _EditorScreenState extends State<EditorScreen>
                                               ),
                                             ),
                                           ),
+                                          if (!_furiganaHidden &&
+                                              widget.state
+                                                  .furiganaFor(
+                                                    widget.notebook.id,
+                                                    widget.state.openPage,
+                                                  )
+                                                  .isNotEmpty)
+                                            // Its own layer: redrawing the ink at
+                                            // every pen move must not re-lay-out
+                                            // all the furigana on the page.
+                                            IgnorePointer(
+                                              child: RepaintBoundary(
+                                                child: CustomPaint(
+                                                  key: const ValueKey(
+                                                    'furigana-layer',
+                                                  ),
+                                                  painter: FuriganaPainter(
+                                                    widget.state.furiganaFor(
+                                                      widget.notebook.id,
+                                                      widget.state.openPage,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
                                           if (rulerVisible)
                                             Positioned.fill(
                                               child: LayoutBuilder(
@@ -2329,6 +2357,10 @@ class _EditorScreenState extends State<EditorScreen>
 
   Future<void> _processSelection() async {
     if (selectionStart == null || selectionEnd == null) return;
+    if (tool == EditorTool.furigana) {
+      await _processFurigana();
+      return;
+    }
     final requestSerial = ++_aiRequestSerial;
     final selectionTool = tool;
     var completed = false;
@@ -2347,6 +2379,31 @@ class _EditorScreenState extends State<EditorScreen>
       _deleteTemporaryCropIfUnused(previousCrop, except: crop.path);
       _latestOcrText = recognized;
       if (selectionTool == EditorTool.dictionary) {
+        // Circled a sentence rather than one word: let the learner highlight
+        // the words to look up, the same way as for weak points.
+        final compact = recognized.replaceAll(RegExp(r'\s+'), '');
+        if (compact.length >= 5 &&
+            await widget.state.dictionary.lookupBasic(compact) == null) {
+          await _finishProcessingAfterOverlay();
+          if (!mounted || requestSerial != _aiRequestSerial) return;
+          final picked = await showOcrHighlightSheet(
+            context,
+            ocrText: recognized,
+            previewImagePath: crop.path,
+            forLookup: true,
+          );
+          if (!mounted || requestSerial != _aiRequestSerial) return;
+          if (picked == null) {
+            completed = true;
+            return;
+          }
+          if (picked.terms.isNotEmpty) {
+            await _openQuickDictionaryForTerms(picked.terms);
+            completed = true;
+            return;
+          }
+          recognized = picked.text;
+        }
         var entry = await widget.state.dictionary.lookupNormalized(recognized);
         // A tiny crop can be difficult for on-device OCR. Only after the
         // deterministic dictionary lookup misses do we spend time on the
@@ -2430,6 +2487,86 @@ class _EditorScreenState extends State<EditorScreen>
             selectionStart = null;
             selectionEnd = null;
           }
+        });
+      }
+    }
+  }
+
+  /// Circling a bare area adds furigana above its kanji; circling furigana
+  /// that is already there is the only way to delete it.
+  Future<void> _processFurigana() async {
+    final state = widget.state;
+    final notebookId = widget.notebook.id;
+    final page = state.openPage;
+    final selection = Rect.fromPoints(selectionStart!, selectionEnd!);
+    void clearSelection() {
+      if (!mounted) return;
+      setState(() {
+        selectionStart = null;
+        selectionEnd = null;
+      });
+    }
+
+    final existing = state.furiganaIn(notebookId, page, selection);
+    if (existing.isNotEmpty) {
+      final delete = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Xóa furigana vùng này?'),
+          content: Text('Có ${existing.length} furigana trong vùng bạn tô.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Xóa'),
+            ),
+          ],
+        ),
+      );
+      if (delete == true) state.removeFuriganaIn(notebookId, page, selection);
+      clearSelection();
+      return;
+    }
+
+    final requestSerial = ++_aiRequestSerial;
+    String? cropPath;
+    setState(() {
+      processing = true;
+      _processingLabel = 'Đang thêm furigana...';
+      error = null;
+      result = null;
+    });
+    try {
+      final crop = await _captureSelection();
+      cropPath = crop.path;
+      final lines = await state.ocr.recognizeLayout(crop.path);
+      if (!mounted || requestSerial != _aiRequestSerial) return;
+      final marks = buildFuriganaMarks(
+        lines,
+        region: crop.region,
+        keepInside: selection.inflate(4),
+      );
+      if (marks.isEmpty) {
+        showAppSnack(context, 'Không thấy chữ kanji nào trong vùng này');
+      } else {
+        state.addFurigana(notebookId, page, marks);
+        showAppSnack(context, 'Đã thêm furigana cho ${marks.length} từ');
+      }
+    } catch (exception) {
+      if (mounted && requestSerial == _aiRequestSerial) {
+        setState(() => error = _friendlyError(exception));
+      }
+    } finally {
+      _deleteTemporaryCropIfUnused(cropPath);
+      if (mounted && requestSerial == _aiRequestSerial) {
+        setState(() {
+          processing = false;
+          _processingLabel = null;
+          selectionStart = null;
+          selectionEnd = null;
         });
       }
     }
@@ -2668,7 +2805,19 @@ class _EditorScreenState extends State<EditorScreen>
         : shortestSide < 180
         ? 3.0
         : 2.0;
-    final pageImage = await boundary.toImage(pixelRatio: ratio);
+    // Tiny kana above the kanji would be read back as text by OCR.
+    final showsFurigana = widget.state
+        .furiganaFor(widget.notebook.id, widget.state.openPage)
+        .isNotEmpty;
+    if (showsFurigana) {
+      setState(() => _furiganaHidden = true);
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    final pageImage = await boundary.toImage(pixelRatio: ratio).whenComplete(
+      () {
+        if (showsFurigana && mounted) setState(() => _furiganaHidden = false);
+      },
+    );
     final source = Rect.fromLTWH(
       region.left * ratio,
       region.top * ratio,
@@ -2713,7 +2862,7 @@ class _EditorScreenState extends State<EditorScreen>
     final path =
         '${cropDirectory.path}${Platform.pathSeparator}crop_${DateTime.now().microsecondsSinceEpoch}.png';
     await File(path).writeAsBytes(encoded, flush: true);
-    return _CapturedRegion(path);
+    return _CapturedRegion(path, region);
   }
 
   String _friendlyError(Object exception) {
@@ -3194,6 +3343,56 @@ class _EditorScreenState extends State<EditorScreen>
     });
     if (query.isEmpty) return;
     await _searchQuickDictionary(query, best: best);
+  }
+
+  /// Tra các từ người học vừa tô, mỗi từ một kết quả khớp nhất.
+  Future<void> _openQuickDictionaryForTerms(List<String> terms) async {
+    final dictionary = widget.state.dictionary;
+    if (terms.length == 1) {
+      final best = await dictionary.lookupBasic(terms.first);
+      if (mounted) await _openQuickDictionaryWith(terms.first, best: best);
+      return;
+    }
+    _quickDictionaryDebounce?.cancel();
+    final serial = ++_quickDictionaryRequestSerial;
+    _quickDictionaryController.text = terms.join('、');
+    setState(() {
+      _quickDictionaryOpen = true;
+      _quickDictionaryLoading = true;
+      _quickDictionaryResults = const [];
+      error = null;
+    });
+    final entries = <DictionaryEntry>[];
+    final missing = <String>[];
+    try {
+      for (final term in terms) {
+        final entry =
+            await dictionary.lookupBasic(term) ??
+            (await dictionary.search(term, limit: 1)).firstOrNull;
+        if (entry == null) {
+          missing.add(term);
+        } else if (!entries.any(
+          (other) => other.word == entry.word && other.reading == entry.reading,
+        )) {
+          entries.add(entry);
+        }
+      }
+    } catch (exception) {
+      if (!mounted || serial != _quickDictionaryRequestSerial) return;
+      setState(() {
+        _quickDictionaryLoading = false;
+        error = _friendlyError(exception);
+      });
+      return;
+    }
+    if (!mounted || serial != _quickDictionaryRequestSerial) return;
+    setState(() {
+      _quickDictionaryResults = entries;
+      _quickDictionaryLoading = false;
+    });
+    if (missing.isNotEmpty) {
+      showAppSnack(context, 'Không có trong từ điển: ${missing.join('、')}');
+    }
   }
 
   void _onQuickDictionaryChanged(String value) {
@@ -4505,6 +4704,7 @@ class _ToolButton extends StatelessWidget {
       EditorTool.image => (Icons.add_photo_alternate_outlined, 'Ảnh'),
       EditorTool.dictionary => (Icons.menu_book_outlined, 'Tra từ'),
       EditorTool.quickDictionary => (Icons.search_rounded, 'Tra từ nhanh'),
+      EditorTool.furigana => (Icons.subtitles_outlined, 'Furigana'),
       EditorTool.aiDictionary => (Icons.auto_stories_outlined, 'AI Tra từ'),
       EditorTool.translate => (Icons.translate_rounded, 'AI Dịch'),
       EditorTool.explain => (Icons.auto_awesome_outlined, 'AI Giải thích'),
@@ -4577,6 +4777,7 @@ Color _toolColor(EditorTool tool) => switch (tool) {
   EditorTool.image => AppColors.primary,
   EditorTool.dictionary => AppColors.dictionary,
   EditorTool.quickDictionary => AppColors.dictionary,
+  EditorTool.furigana => AppColors.dictionary,
   EditorTool.aiDictionary => AppColors.translate,
   EditorTool.translate => AppColors.translate,
   EditorTool.explain => AppColors.explain,
@@ -6274,8 +6475,11 @@ class _TinyBadge extends StatelessWidget {
 }
 
 class _CapturedRegion {
-  const _CapturedRegion(this.path);
+  const _CapturedRegion(this.path, this.region);
   final String path;
+
+  /// The captured area, in page coordinates.
+  final Rect region;
 }
 
 class _PenPreviewPainter extends CustomPainter {

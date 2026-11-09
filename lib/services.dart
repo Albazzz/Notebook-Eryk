@@ -7,6 +7,7 @@ import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
 import 'package:flutter/services.dart';
 
+import 'furigana.dart';
 import 'models.dart';
 
 abstract class DictionaryRepository {
@@ -677,6 +678,9 @@ extension on LocalDictionaryRepository {
 
 abstract class OcrService {
   Future<String> recognizeImage(String imagePath);
+
+  /// Lines with the position and reading of each word, for furigana.
+  Future<List<OcrLine>> recognizeLayout(String imagePath);
 }
 
 /// Japanese OCR backed by Apple's Vision framework on iPadOS.
@@ -697,6 +701,21 @@ class AppleVisionJapaneseOcrService implements OcrService {
       return normalized;
     } on PlatformException catch (error) {
       throw FormatException(error.message ?? 'Apple Vision OCR failed');
+    }
+  }
+
+  @override
+  Future<List<OcrLine>> recognizeLayout(String imagePath) async {
+    try {
+      final lines = await _channel.invokeListMethod<Map<Object?, Object?>>(
+        'recognizeJapaneseLayout',
+        {'imagePath': imagePath},
+      );
+      return [for (final line in lines ?? const []) OcrLine.fromChannel(line)];
+    } on PlatformException catch (error) {
+      throw FormatException(error.message ?? 'Apple Vision OCR failed');
+    } on MissingPluginException {
+      throw const FormatException('Furigana chỉ dùng được trên iPad.');
     }
   }
 }

@@ -28,7 +28,7 @@ import Vision
 }
 
 /// Native Japanese OCR for the iPad build. Vision runs on-device; Flutter
-/// receives only the recognized text.
+/// receives the recognized text and, for furigana, where each word sits.
 final class AppleVisionOcrPlugin: NSObject, FlutterPlugin {
   private static let channelName = "noteeryk/apple_vision_ocr"
 
@@ -42,7 +42,8 @@ final class AppleVisionOcrPlugin: NSObject, FlutterPlugin {
   }
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-    guard call.method == "recognizeJapaneseText" else {
+    let wantsLayout = call.method == "recognizeJapaneseLayout"
+    guard wantsLayout || call.method == "recognizeJapaneseText" else {
       result(FlutterMethodNotImplemented)
       return
     }
@@ -59,8 +60,13 @@ final class AppleVisionOcrPlugin: NSObject, FlutterPlugin {
 
     DispatchQueue.global(qos: .userInitiated).async {
       do {
-        let text = try Self.recognizeJapaneseText(at: imagePath)
-        DispatchQueue.main.async { result(text) }
+        let value: Any
+        if wantsLayout {
+          value = try Self.recognizeJapaneseLayout(at: imagePath)
+        } else {
+          value = try Self.recognizeJapaneseText(at: imagePath)
+        }
+        DispatchQueue.main.async { result(value) }
       } catch let error as NSError {
         DispatchQueue.main.async {
           result(FlutterError(
@@ -111,5 +117,94 @@ final class AppleVisionOcrPlugin: NSObject, FlutterPlugin {
       )
     }
     return text
+  }
+
+  private static func recognizeJapaneseLayout(at imagePath: String) throws -> [[String: Any]] {
+    let url = URL(fileURLWithPath: imagePath)
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      throw NSError(
+        domain: "NoteEryk.VisionOCR",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "OCR image file was not found."]
+      )
+    }
+
+    var lines: [[String: Any]] = []
+    let request = VNRecognizeTextRequest { request, _ in
+      for observation in request.results as? [VNRecognizedTextObservation] ?? [] {
+        if let candidate = observation.topCandidates(1).first {
+          lines.append(Self.layoutLine(observation, candidate))
+        }
+      }
+    }
+    request.recognitionLevel = .accurate
+    request.recognitionLanguages = ["ja-JP"]
+    request.usesLanguageCorrection = true
+
+    let handler = VNImageRequestHandler(url: url, options: [:])
+    try handler.perform([request])
+    return lines
+  }
+
+  /// Vision's origin is bottom-left; Flutter's is top-left.
+  private static func topLeftBox(_ rect: CGRect) -> [Double] {
+    return [
+      Double(rect.minX),
+      Double(1 - rect.maxY),
+      Double(rect.width),
+      Double(rect.height),
+    ]
+  }
+
+  private static func layoutLine(
+    _ observation: VNRecognizedTextObservation,
+    _ candidate: VNRecognizedText
+  ) -> [String: Any] {
+    let text = candidate.string
+
+    // One entry per UTF-16 unit, matching Dart string offsets.
+    var characterBoxes: [[Double]] = []
+    var index = text.startIndex
+    while index < text.endIndex {
+      let next = text.index(after: index)
+      let box = (try? candidate.boundingBox(for: index..<next)) ?? nil
+      let values = box.map { Self.topLeftBox($0.boundingBox) } ?? []
+      for _ in 0..<text[index..<next].utf16.count {
+        characterBoxes.append(values)
+      }
+      index = next
+    }
+
+    var tokens: [[String: Any]] = []
+    let cfText = text as CFString
+    let tokenizer: CFStringTokenizer = CFStringTokenizerCreate(
+      kCFAllocatorDefault,
+      cfText,
+      CFRangeMake(0, CFStringGetLength(cfText)),
+      kCFStringTokenizerUnitWordBoundary,
+      Locale(identifier: "ja") as CFLocale
+    )
+    while !CFStringTokenizerAdvanceToNextToken(tokenizer).isEmpty {
+      let range = CFStringTokenizerGetCurrentTokenRange(tokenizer)
+      let attribute = CFStringTokenizerCopyCurrentTokenAttribute(
+        tokenizer,
+        kCFStringTokenizerAttributeLatinTranscription
+      )
+      if let latin = attribute as? String,
+         let reading = latin.applyingTransform(.latinToHiragana, reverse: false) {
+        tokens.append([
+          "start": range.location,
+          "length": range.length,
+          "reading": reading,
+        ])
+      }
+    }
+
+    return [
+      "text": text,
+      "box": topLeftBox(observation.boundingBox),
+      "characterBoxes": characterBoxes,
+      "tokens": tokens,
+    ]
   }
 }

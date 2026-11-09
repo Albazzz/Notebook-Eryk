@@ -129,6 +129,9 @@ class _NotebookCoverState extends State<NotebookCover> {
           CustomPaint(
             painter: InkStrokesPainter(state.strokesFor(notebook.id, _page)),
           ),
+          CustomPaint(
+            painter: FuriganaPainter(state.furiganaFor(notebook.id, _page)),
+          ),
         ],
       ),
     );

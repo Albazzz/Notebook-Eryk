@@ -31,14 +31,15 @@ APK debug được tạo tại `build/app/outputs/flutter-apk/app-debug.apk`.
 - Xoay trang tự do bằng hai ngón (hít về 0/90/180/270°) hoặc nút xoay ±15° cạnh nút zoom.
 - Chạm đồng thời hai ngón trên canvas để hoàn tác nét vừa vẽ.
 - Gesture vùng chọn riêng cho Tra từ, AI Dịch, AI Giải thích và Điểm yếu; kết quả AI là popup có thể kéo và đóng.
-- Tra từ ngoại tuyến qua `DictionaryRepository`, tách khỏi AI.
+- Tra từ ngoại tuyến qua `DictionaryRepository`, tách khỏi AI. Khoanh cả câu thì hiện bảng OCR để tô đúng các từ cần tra, giống Điểm yếu.
+- Công cụ Furigana: tô một vùng, furigana nhỏ hiện đè trên từng chữ kanji và được lưu cùng trang, không dùng AI; chỉ mất khi tô lại vùng đó và chọn Xóa.
 - Chọn nhà cung cấp AI: OpenRouter (nhiều model) hoặc Gemini trực tiếp bằng key Google AI Studio (mặc định Gemini 3.8 Flash); mỗi bên có key và model riêng. Tải model động, tùy chọn JLPT/ngôn ngữ.
 - API key lưu bằng secure storage và không hiển thị lại sau khi lưu.
 - Tạo, sửa, lọc, xóa Điểm yếu; mở lại đúng vở/trang nguồn.
   - AI tách từng điểm theo câu hỏi, nhận dạng dạng đề JLPT (漢字読み, 文脈規定, 文の組み立て★, 読解...) và ghi "Chỗ dễ nhầm", "Đáp án đúng"; cách đọc/Hán Việt được đối chiếu với từ điển ngoại tuyến.
   - Chế độ tô trên OCR (mặc định bật): sau khi khoanh, chạm/kéo để tô cụm cần học, AI chỉ tạo điểm yếu cho phần đã tô; "AI tự tìm" để AI dò cả vùng.
   - Tiêu đề chuẩn theo từ loại: động từ ở thể ます, từ loại khác ở dạng đứng đơn. "Chuẩn hóa Điểm yếu" chạy theo lô song song và bỏ qua mục đã chuẩn.
-  - Thêm thủ công một điểm yếu (mặc định ngữ pháp: mẫu, nghĩa, cách nối, ví dụ, mẫu dễ nhầm) không cần AI.
+  - Thêm thủ công một điểm yếu (mặc định ngữ pháp: mẫu, nghĩa, cách nối, ví dụ, mẫu dễ nhầm) không cần AI; gõ từ vào là tự điền furigana, Hán Việt và nghĩa từ từ điển ngoại tuyến, chữ bạn tự gõ không bị đè.
   - Nhập từ văn bản bằng cách gõ hoặc dán ghi chú bất kỳ: AI tự rút ra các mẫu ngữ pháp và từ cần học, điền nội dung rồi duyệt trước khi lưu; không có API key thì lưu được các dòng mở đầu bằng tiếng Nhật.
   - Số lượng lớn được chia lô 5 mục mỗi lần gọi AI; lô lỗi được thử lại mà không mất các lô đã xong.
   - Gặp lại điểm đã lưu thì không tạo bản trùng mà đưa về ôn ngay.

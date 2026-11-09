@@ -314,3 +314,50 @@ List<StrokePoint> previewStrokePoints(Size size) {
   }
   return points;
 }
+
+/// Vẽ furigana nhỏ phía trên các chữ kanji; dùng chung cho editor và bìa vở.
+class FuriganaPainter extends CustomPainter {
+  const FuriganaPainter(this.marks);
+  final List<FuriganaMark> marks;
+
+  static const _color = Color(0xffb4372f);
+
+  static double fontSizeFor(double kanjiHeight) =>
+      (kanjiHeight * .42).clamp(6.0, 16.0);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final mark in marks) {
+      final fontSize = fontSizeFor(mark.rect.height);
+      TextPainter layout(TextStyle style) => TextPainter(
+        text: TextSpan(
+          text: mark.reading,
+          style: style.copyWith(fontSize: fontSize, height: 1),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      // A pale outline keeps small kana legible over ink or the line above.
+      final outline = layout(
+        TextStyle(
+          foreground: Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.4
+            ..color = const Color(0xd9ffffff),
+        ),
+      );
+      final fill = layout(const TextStyle(color: _color));
+      final offset = Offset(
+        mark.rect.center.dx - fill.width / 2,
+        mark.rect.top - fill.height - 1,
+      );
+      outline.paint(canvas, offset);
+      fill.paint(canvas, offset);
+      outline.dispose();
+      fill.dispose();
+    }
+  }
+
+  @override
+  bool shouldRepaint(FuriganaPainter oldDelegate) =>
+      !identical(oldDelegate.marks, marks);
+}

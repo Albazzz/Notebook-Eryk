@@ -12,6 +12,7 @@ enum EditorTool {
   image,
   dictionary,
   quickDictionary,
+  furigana,
   aiDictionary,
   translate,
   explain,
@@ -107,6 +108,32 @@ class PageTextBox {
 /// stored in it; the editor scales the whole page to fit the screen, so
 /// turning the iPad between portrait and landscape never moves the ink.
 const Size kPageCanvasSize = Size(554.4, 770);
+
+/// Furigana sitting above a kanji on the page. [rect] is the kanji itself, in
+/// page coordinates. It stays until the learner circles it and deletes it.
+class FuriganaMark {
+  const FuriganaMark({required this.reading, required this.rect});
+  final String reading;
+  final Rect rect;
+
+  Map<String, Object?> toJson() => {
+    'reading': reading,
+    'left': rect.left,
+    'top': rect.top,
+    'width': rect.width,
+    'height': rect.height,
+  };
+
+  factory FuriganaMark.fromJson(Map<String, dynamic> json) => FuriganaMark(
+    reading: json['reading'] as String,
+    rect: Rect.fromLTWH(
+      (json['left'] as num).toDouble(),
+      (json['top'] as num).toDouble(),
+      (json['width'] as num).toDouble(),
+      (json['height'] as num).toDouble(),
+    ),
+  );
+}
 
 class PageImagePlacement {
   const PageImagePlacement({
@@ -1044,6 +1071,22 @@ class DictionaryEntry {
   final String example;
   final String exampleMeaning;
   final List<DictionaryEntry> similarEntries;
+}
+
+/// Nội dung điền sẵn cho điểm yếu nhập tay, lấy từ từ điển ngoại tuyến.
+class DictionaryFill {
+  const DictionaryFill({
+    this.reading = '',
+    this.hanViet = '',
+    this.meaning = '',
+    this.suggestedKind,
+  });
+  final String reading;
+  final String hanViet;
+  final String meaning;
+
+  /// Loại nên chọn khi người học chưa tự chọn; null: giữ nguyên.
+  final WeaknessKind? suggestedKind;
 }
 
 /// Một chữ kanji trong bảng `japanese_kanji` của từ điển ngoại tuyến.

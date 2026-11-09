@@ -20,14 +20,18 @@ Future<OcrHighlightResult?> showOcrHighlightSheet(
   BuildContext context, {
   required String ocrText,
   String? previewImagePath,
+  bool forLookup = false,
 }) => showModalBottomSheet<OcrHighlightResult>(
   context: context,
   isScrollControlled: true,
   // Kéo ngang trên chữ là thao tác tô; tắt kéo-để-đóng để hai cử chỉ không
   // giành nhau.
   enableDrag: false,
-  builder: (_) =>
-      OcrHighlightSheet(ocrText: ocrText, previewImagePath: previewImagePath),
+  builder: (_) => OcrHighlightSheet(
+    ocrText: ocrText,
+    previewImagePath: previewImagePath,
+    forLookup: forLookup,
+  ),
 );
 
 class OcrHighlightSheet extends StatefulWidget {
@@ -35,9 +39,13 @@ class OcrHighlightSheet extends StatefulWidget {
     super.key,
     required this.ocrText,
     this.previewImagePath,
+    this.forLookup = false,
   });
 
   final String ocrText;
+
+  /// Tô từ để tra từ điển thay vì tạo điểm yếu.
+  final bool forLookup;
 
   /// Ảnh vùng khoanh chỉ để người học đối chiếu OCR; không gửi cho AI.
   final String? previewImagePath;
@@ -324,6 +332,8 @@ class _OcrHighlightSheetState extends State<OcrHighlightSheet> {
     final terms = _terms;
     final imagePath = widget.previewImagePath;
     final media = MediaQuery.of(context);
+    final forLookup = widget.forLookup;
+    final accent = forLookup ? AppColors.primary : AppColors.weakness;
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(20, 16, 20, media.viewInsets.bottom + 14),
@@ -335,11 +345,11 @@ class _OcrHighlightSheetState extends State<OcrHighlightSheet> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.border_color, color: AppColors.weakness),
+                  Icon(Icons.border_color, color: accent),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'Tô cụm cần học',
+                      forLookup ? 'Tô từ cần tra' : 'Tô cụm cần học',
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
                   ),
@@ -415,7 +425,7 @@ class _OcrHighlightSheetState extends State<OcrHighlightSheet> {
                                     letterSpacing: 1.5,
                                     color: scheme.onSurface,
                                   ),
-                                  AppColors.weakness.withValues(alpha: .3),
+                                  accent.withValues(alpha: .3),
                                 ),
                               ),
                             ),
@@ -467,24 +477,29 @@ class _OcrHighlightSheetState extends State<OcrHighlightSheet> {
                             context,
                             OcrHighlightResult(text: _text, terms: const []),
                           ),
-                    icon: const Icon(Icons.auto_awesome_outlined),
-                    label: const Text('AI tự tìm'),
+                    icon: Icon(
+                      forLookup
+                          ? Icons.subject_rounded
+                          : Icons.auto_awesome_outlined,
+                    ),
+                    label: Text(forLookup ? 'Tra nguyên đoạn' : 'AI tự tìm'),
                   ),
                   FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.weakness,
-                    ),
+                    style: FilledButton.styleFrom(backgroundColor: accent),
                     onPressed: terms.isEmpty || _editing
                         ? null
                         : () => Navigator.pop(
                             context,
                             OcrHighlightResult(text: _text, terms: terms),
                           ),
-                    icon: const Icon(Icons.bookmark_add_outlined),
+                    icon: Icon(
+                      forLookup
+                          ? Icons.search_rounded
+                          : Icons.bookmark_add_outlined,
+                    ),
                     label: Text(
-                      terms.isEmpty
-                          ? 'Tạo điểm yếu'
-                          : 'Tạo điểm yếu (${terms.length})',
+                      '${forLookup ? 'Tra từ' : 'Tạo điểm yếu'}'
+                      '${terms.isEmpty ? '' : ' (${terms.length})'}',
                     ),
                   ),
                 ],

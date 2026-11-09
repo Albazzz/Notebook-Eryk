@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -168,9 +169,7 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
                       icon: Badge.count(
                         count: state.decks.length,
                         isLabelVisible: state.decks.isNotEmpty,
-                        child: const Icon(
-                          Icons.collections_bookmark_outlined,
-                        ),
+                        child: const Icon(Icons.collections_bookmark_outlined),
                       ),
                     ),
                     SearchBox(
@@ -736,6 +735,50 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
       mistake,
       tagInput,
     ];
+    // Adding by hand: furigana and meaning come from the offline dictionary as
+    // the learner types. Anything they wrote themselves is left alone.
+    Timer? fillTimer;
+    var fillSerial = 0;
+    var closed = false;
+    var kindChosen = !isNew;
+    var filledFromDictionary = false;
+    void Function(VoidCallback)? refreshSheet;
+    final autoFilled = <TextEditingController, String>{};
+    void put(TextEditingController controller, String value) {
+      final typedByLearner =
+          controller.text.trim().isNotEmpty &&
+          controller.text != autoFilled[controller];
+      if (typedByLearner) return;
+      controller.text = value;
+      autoFilled[controller] = value;
+    }
+
+    Future<void> fillFromDictionary() async {
+      final serial = ++fillSerial;
+      final fill = await state.dictionaryFillFor(title.text);
+      if (closed || serial != fillSerial) return;
+      refreshSheet?.call(() {
+        if (!kindChosen && fill?.suggestedKind != null) {
+          kind = fill!.suggestedKind!;
+        }
+        final lexical =
+            kind == WeaknessKind.vocabulary || kind == WeaknessKind.kanji;
+        put(reading, lexical ? fill?.reading ?? '' : '');
+        put(hanViet, lexical ? fill?.hanViet ?? '' : '');
+        put(content, fill?.meaning ?? '');
+        filledFromDictionary = autoFilled.values.any(
+          (value) => value.isNotEmpty,
+        );
+      });
+    }
+
+    void scheduleFill() {
+      fillTimer?.cancel();
+      // While the Japanese keyboard is still composing the word is not final.
+      if (!isNew || title.value.composing.isValid) return;
+      fillTimer = Timer(const Duration(milliseconds: 300), fillFromDictionary);
+    }
+
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -744,19 +787,26 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
       // really gone, not on a timer that can fire during the exit animation.
       builder: (context) => _DisposeControllers(
         controllers: controllers,
+        onDispose: () {
+          closed = true;
+          fillTimer?.cancel();
+        },
         child: StatefulBuilder(
           builder: (context, setSheetState) {
+            refreshSheet = setSheetState;
             Widget field(
               TextEditingController controller,
               String label, {
               int minLines = 1,
               int maxLines = 4,
+              ValueChanged<String>? onChanged,
             }) => Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: TextField(
                 controller: controller,
                 minLines: minLines,
                 maxLines: maxLines,
+                onChanged: onChanged,
                 decoration: InputDecoration(labelText: label),
               ),
             );
@@ -795,7 +845,19 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
                       WeaknessKind.vocabulary => 'Từ vựng',
                       WeaknessKind.kanji => 'Chữ Kanji',
                       _ => 'Tên điểm cần nhớ',
-                    }),
+                    }, onChanged: (_) => scheduleFill()),
+                    if (filledFromDictionary)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Text(
+                          'Đã tự điền từ từ điển ngoại tuyến, bạn sửa lại được.',
+                          style: TextStyle(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
                     DropdownButtonFormField<WeaknessKind>(
                       initialValue: kind,
                       decoration: const InputDecoration(labelText: 'Loại'),
@@ -807,8 +869,13 @@ class _WeaknessesScreenState extends State<WeaknessesScreen> {
                             ),
                           )
                           .toList(),
-                      onChanged: (value) =>
-                          setSheetState(() => kind = value ?? kind),
+                      onChanged: (value) {
+                        setSheetState(() {
+                          kind = value ?? kind;
+                          kindChosen = true;
+                        });
+                        scheduleFill();
+                      },
                     ),
                     const SizedBox(height: 12),
                     if (lexical) ...[
@@ -1566,9 +1633,16 @@ class _SourceThumbnail extends StatelessWidget {
 
 /// Giải phóng các TextEditingController khi widget thật sự bị gỡ khỏi cây.
 class _DisposeControllers extends StatefulWidget {
-  const _DisposeControllers({required this.controllers, required this.child});
+  const _DisposeControllers({
+    required this.controllers,
+    required this.child,
+    this.onDispose,
+  });
   final List<TextEditingController> controllers;
   final Widget child;
+
+  /// Chạy trước khi giải phóng, để dừng việc còn đang ghi vào các ô.
+  final VoidCallback? onDispose;
 
   @override
   State<_DisposeControllers> createState() => _DisposeControllersState();
@@ -1577,6 +1651,7 @@ class _DisposeControllers extends StatefulWidget {
 class _DisposeControllersState extends State<_DisposeControllers> {
   @override
   void dispose() {
+    widget.onDispose?.call();
     for (final controller in widget.controllers) {
       controller.dispose();
     }
