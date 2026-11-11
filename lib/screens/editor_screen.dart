@@ -1664,6 +1664,14 @@ class _EditorScreenState extends State<EditorScreen>
                                         ),
                                         onPanEnd: (_) => _commitFuriganaDrag(),
                                         onPanCancel: _commitFuriganaDrag,
+                                        // Tapping a furigana inside the area
+                                        // drops it from (or adds it to) the
+                                        // selection, so words already in place
+                                        // stay put while the rest is moved.
+                                        onTapUp: (details) => _toggleFuriganaAt(
+                                          _furiganaSelectionBounds!.topLeft +
+                                              details.localPosition,
+                                        ),
                                         child: DecoratedBox(
                                           decoration: BoxDecoration(
                                             borderRadius: BorderRadius.circular(
@@ -2571,6 +2579,12 @@ class _EditorScreenState extends State<EditorScreen>
 
     final existing = state.furiganaIn(notebookId, page, selection);
     if (_furiganaEditing) {
+      // A tap rather than an area: pick or drop the furigana under it.
+      if (selection.width < 8 && selection.height < 8) {
+        _toggleFuriganaAt(selection.center);
+        clearSelection();
+        return;
+      }
       setState(() {
         _selectedFurigana = {for (final mark in existing) mark.id};
         _furiganaDrag = Offset.zero;
@@ -2588,7 +2602,7 @@ class _EditorScreenState extends State<EditorScreen>
         builder: (dialogContext) => AlertDialog(
           title: const Text('Vùng này đã có furigana'),
           content: Text(
-            'Có ${existing.length} furigana trong vùng bạn tô. Bạn muốn xóa hay chỉnh sửa?',
+            'Có ${existing.length} furigana trong vùng bạn tô. Bạn muốn làm lại, xóa hay chỉnh sửa?',
           ),
           actions: [
             TextButton(
@@ -2599,25 +2613,34 @@ class _EditorScreenState extends State<EditorScreen>
               onPressed: () => Navigator.pop(dialogContext, 'edit'),
               child: const Text('Chỉnh sửa'),
             ),
-            FilledButton(
+            TextButton(
               onPressed: () => Navigator.pop(dialogContext, 'delete'),
               child: const Text('Xóa'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, 'redo'),
+              child: const Text('Làm lại'),
             ),
           ],
         ),
       );
       if (!mounted) return;
-      if (choice == 'delete') {
+      if (choice == 'redo') {
+        // Replace what an earlier run placed here with a fresh reading.
         state.removeFuriganaIn(notebookId, page, selection);
-      } else if (choice == 'edit') {
-        setState(() {
-          _furiganaEditing = true;
-          _selectedFurigana = {for (final mark in existing) mark.id};
-          _furiganaDrag = Offset.zero;
-        });
+      } else {
+        if (choice == 'delete') {
+          state.removeFuriganaIn(notebookId, page, selection);
+        } else if (choice == 'edit') {
+          setState(() {
+            _furiganaEditing = true;
+            _selectedFurigana = {for (final mark in existing) mark.id};
+            _furiganaDrag = Offset.zero;
+          });
+        }
+        clearSelection();
+        return;
       }
-      clearSelection();
-      return;
     }
 
     final requestSerial = ++_aiRequestSerial;
@@ -2631,13 +2654,21 @@ class _EditorScreenState extends State<EditorScreen>
     try {
       final crop = await _captureSelection();
       cropPath = crop.path;
-      final lines = await state.ocr.recognizeLayout(crop.path);
-      if (!mounted || requestSerial != _aiRequestSerial) return;
-      final marks = buildFuriganaMarks(
-        lines,
+      final marks = await recognizeFurigana(
+        capturePath: crop.path,
         region: crop.region,
         keepInside: selection.inflate(4),
+        recognize: state.ocr.recognizeLayout,
+        onProgress: (done, total) {
+          if (!mounted || requestSerial != _aiRequestSerial || total < 2) {
+            return;
+          }
+          setState(
+            () => _processingLabel = 'Đang thêm furigana... dòng $done/$total',
+          );
+        },
       );
+      if (!mounted || requestSerial != _aiRequestSerial) return;
       if (marks.isEmpty) {
         showAppSnack(context, 'Không thấy chữ kanji nào trong vùng này');
       } else {
@@ -2702,6 +2733,26 @@ class _EditorScreenState extends State<EditorScreen>
       widget.state.openPage,
       marks.map(change).toList(),
     );
+  }
+
+  /// Adds the furigana at [position] (page coordinates) to the selection, or
+  /// removes it when it is already selected.
+  void _toggleFuriganaAt(Offset position) {
+    FuriganaMark? hit;
+    for (final mark in widget.state.furiganaFor(
+      widget.notebook.id,
+      widget.state.openPage,
+    )) {
+      if (furiganaLabelRect(mark).inflate(4).contains(position)) hit = mark;
+    }
+    if (hit == null) return;
+    final id = hit.id;
+    setState(() {
+      _selectedFurigana = _selectedFurigana.contains(id)
+          ? (Set.of(_selectedFurigana)..remove(id))
+          : {..._selectedFurigana, id};
+      _furiganaDrag = Offset.zero;
+    });
   }
 
   void _commitFuriganaDrag() {
@@ -2769,7 +2820,7 @@ class _EditorScreenState extends State<EditorScreen>
                 leading: const Icon(Icons.open_with_rounded),
                 title: const Text('Chỉnh sửa furigana'),
                 subtitle: const Text(
-                  'Tô quanh furigana để chọn, rồi kéo để dời chỗ, đổi cỡ, sửa chữ hoặc xóa.',
+                  'Tô quanh furigana để chọn, chạm từng chữ để bỏ hoặc thêm vào vùng chọn, rồi kéo để dời chỗ, đổi cỡ, sửa chữ hoặc xóa.',
                 ),
                 selected: _furiganaEditing,
                 onTap: () => Navigator.pop(sheetContext, true),
@@ -2811,7 +2862,7 @@ class _EditorScreenState extends State<EditorScreen>
                 padding: const EdgeInsets.symmetric(horizontal: 6),
                 child: Text(
                   _furiganaEditing
-                      ? 'Tô quanh furigana cần sửa'
+                      ? 'Tô quanh hoặc chạm furigana cần sửa'
                       : 'Tô vùng có kanji để thêm furigana',
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),

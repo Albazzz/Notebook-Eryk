@@ -1121,13 +1121,20 @@ void main() {
       // Circling it asks first; cancelling keeps it.
       await circle();
       expect(find.text('Vùng này đã có furigana'), findsOneWidget);
+      // Old furigana from an earlier run can be replaced in one go.
+      expect(find.widgetWithText(FilledButton, 'Làm lại'), findsOneWidget);
       await tester.tap(find.text('Hủy'));
       await tester.pumpAndSettle();
       expect(state.furiganaFor('n3', 1), hasLength(2));
 
       // Deleting only touches the circled area.
       await circle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Xóa'));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(TextButton, 'Xóa'),
+        ),
+      );
       await tester.pumpAndSettle();
       expect(state.furiganaFor('n3', 1).single.reading, 'やま');
       expect(tester.takeException(), isNull);
@@ -1215,7 +1222,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Chỉnh sửa furigana'));
     await tester.pumpAndSettle();
-    expect(find.text('Tô quanh furigana cần sửa'), findsOneWidget);
+    expect(find.text('Tô quanh hoặc chạm furigana cần sửa'), findsOneWidget);
 
     final pen = TestPointer(91, PointerDeviceKind.stylus);
     await tester.sendEventToBinding(pen.down(onPage(150, 260)));
@@ -1276,6 +1283,80 @@ void main() {
     expect(restored.scale, closeTo(1.15, .001));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'chạm để bỏ furigana đã đúng khỏi vùng chọn rồi chỉ kéo chữ sai',
+    (tester) async {
+      tester.view.physicalSize = const Size(1180, 820);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final state = _stateWithNotebook();
+      addTearDown(state.dispose);
+      state.open(state.notebooks.first, page: 1);
+      const wrong = FuriganaMark(
+        id: 'wrong',
+        reading: 'いま',
+        rect: Rect.fromLTWH(200, 300, 30, 30),
+      );
+      const right = FuriganaMark(
+        id: 'right',
+        reading: 'やま',
+        rect: Rect.fromLTWH(320, 300, 30, 30),
+      );
+      state.addFurigana('n3', 1, const [wrong, right]);
+      await tester.pumpWidget(NihongoNotebookApp(state: state));
+      await tester.pumpAndSettle();
+
+      final page = tester.getRect(find.byKey(const ValueKey('page-canvas')));
+      final scale = page.width / kPageCanvasSize.width;
+      Offset onPage(Offset point) => page.topLeft + point * scale;
+
+      await tester.ensureVisible(find.byTooltip('Furigana'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Furigana'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Chỉnh sửa'));
+      await tester.pumpAndSettle();
+
+      // The area catches both words.
+      final pen = TestPointer(92, PointerDeviceKind.stylus);
+      await tester.sendEventToBinding(pen.down(onPage(const Offset(150, 260))));
+      await tester.sendEventToBinding(pen.move(onPage(const Offset(300, 300))));
+      await tester.sendEventToBinding(pen.move(onPage(const Offset(400, 345))));
+      await tester.sendEventToBinding(pen.up());
+      await tester.pumpAndSettle();
+      expect(find.text('2 furigana'), findsOneWidget);
+
+      // Tap the one already in place to leave it out.
+      await tester.tapAt(onPage(furiganaLabelRect(right).center));
+      await tester.pumpAndSettle();
+      expect(find.text('1 furigana'), findsOneWidget);
+
+      final handle = find.byKey(const ValueKey('furigana-selection'));
+      final finger = await tester.startGesture(tester.getCenter(handle));
+      // The first ~36 px only start the drag.
+      for (var step = 0; step < 10; step++) {
+        await finger.moveBy(const Offset(0, 8));
+        await tester.pump();
+      }
+      await finger.up();
+      await tester.pumpAndSettle();
+      final marks = {for (final m in state.furiganaFor('n3', 1)) m.id: m};
+      expect(marks['wrong']!.rect.top, greaterThan(300));
+      expect(marks['right']!.rect, right.rect);
+
+      // A pencil tap on a furigana outside the selection adds it back.
+      final tap = TestPointer(93, PointerDeviceKind.stylus);
+      final at = onPage(furiganaLabelRect(right).center);
+      await tester.sendEventToBinding(tap.down(at));
+      await tester.sendEventToBinding(tap.up());
+      await tester.pumpAndSettle();
+      expect(find.text('2 furigana'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('bìa vở vẽ giấy và nét viết tay của trang 1', (tester) async {
     final state = _stateWithNotebook();
