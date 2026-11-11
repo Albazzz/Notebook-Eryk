@@ -315,7 +315,7 @@ bool readingsMatch(String aiReading, String dictionaryReading) {
 }
 
 class LocalDictionaryRepository implements DictionaryRepository {
-  static const _databaseVersion = 3;
+  static const _databaseVersion = 4;
   static const _dictionaryAsset = 'assets/japanese_dictionary.sql';
   static const _similarResultLimit = 5;
   static const _ignoredMeaningWords = <String>{
