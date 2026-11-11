@@ -110,21 +110,46 @@ class PageTextBox {
 const Size kPageCanvasSize = Size(554.4, 770);
 
 /// Furigana sitting above a kanji on the page. [rect] is the kanji itself, in
-/// page coordinates. It stays until the learner circles it and deletes it.
+/// page coordinates; moving the furigana moves this anchor. It stays until the
+/// learner deletes it.
 class FuriganaMark {
-  const FuriganaMark({required this.reading, required this.rect});
+  const FuriganaMark({
+    required this.id,
+    required this.reading,
+    required this.rect,
+    this.scale = 1,
+  });
+  final String id;
   final String reading;
   final Rect rect;
 
+  /// Size relative to the automatic size taken from the kanji height.
+  final double scale;
+
+  static int _counter = 0;
+  static String newId() =>
+      'f${DateTime.now().microsecondsSinceEpoch}_${_counter++}';
+
+  FuriganaMark copyWith({String? reading, Rect? rect, double? scale}) =>
+      FuriganaMark(
+        id: id,
+        reading: reading ?? this.reading,
+        rect: rect ?? this.rect,
+        scale: scale ?? this.scale,
+      );
+
   Map<String, Object?> toJson() => {
+    'id': id,
     'reading': reading,
     'left': rect.left,
     'top': rect.top,
     'width': rect.width,
     'height': rect.height,
+    'scale': scale,
   };
 
   factory FuriganaMark.fromJson(Map<String, dynamic> json) => FuriganaMark(
+    id: json['id'] as String? ?? newId(),
     reading: json['reading'] as String,
     rect: Rect.fromLTWH(
       (json['left'] as num).toDouble(),
@@ -132,6 +157,7 @@ class FuriganaMark {
       (json['width'] as num).toDouble(),
       (json['height'] as num).toDouble(),
     ),
+    scale: (json['scale'] as num?)?.toDouble() ?? 1,
   );
 }
 

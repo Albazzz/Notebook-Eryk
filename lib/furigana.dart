@@ -1,4 +1,4 @@
-import 'dart:ui';
+import 'package:flutter/painting.dart';
 
 import 'models.dart';
 
@@ -148,22 +148,44 @@ List<FuriganaSpan> alignFurigana(String surface, String reading) {
 double _glyphWeight(int unit) =>
     unit < 0x2e80 || (unit >= 0xff61 && unit <= 0xff9f) ? .55 : 1;
 
-/// Vision may report the whole line for every character. Japanese glyphs are
-/// close to equal width, so position is then estimated along the line.
-Rect _spanBox(OcrLine line, int start, int end) {
+/// Vision's per-character boxes are used only when they look sane: narrower
+/// than the line, inside it and in reading order. Otherwise (Vision often
+/// reports the whole line for every character) the position is estimated
+/// along the line, since Japanese glyphs are close to equal width. The
+/// height always comes from the line, so a stray character box cannot pull
+/// the furigana into the middle of the text.
+bool _characterBoxesUsable(OcrLine line) {
   final boxes = line.characterBoxes;
-  final located =
-      line.text.length > 1 &&
-      boxes.length == line.text.length &&
-      boxes.first != null &&
-      boxes.first!.width < line.box.width * .9;
-  if (located) {
-    Rect? union;
-    for (var index = start; index < end; index++) {
-      final box = boxes[index];
-      if (box != null) union = union?.expandToInclude(box) ?? box;
+  if (line.text.length < 2 || boxes.length != line.text.length) return false;
+  final first = boxes.first;
+  if (first == null || first.width >= line.box.width * .9) return false;
+  final slack = line.box.width * .03;
+  var previous = double.negativeInfinity;
+  for (final box in boxes) {
+    if (box == null) continue;
+    if (box.left < line.box.left - slack ||
+        box.right > line.box.right + slack ||
+        box.left < previous - slack) {
+      return false;
     }
-    if (union != null) return union;
+    previous = box.left;
+  }
+  return true;
+}
+
+Rect _spanBox(OcrLine line, int start, int end) {
+  if (_characterBoxesUsable(line)) {
+    double? left;
+    double? right;
+    for (var index = start; index < end; index++) {
+      final box = line.characterBoxes[index];
+      if (box == null) continue;
+      left = left == null || box.left < left ? box.left : left;
+      right = right == null || box.right > right ? box.right : right;
+    }
+    if (left != null && right != null) {
+      return Rect.fromLTRB(left, line.box.top, right, line.box.bottom);
+    }
   }
   final units = line.text.codeUnits;
   final total = units.fold<double>(0, (sum, unit) => sum + _glyphWeight(unit));
@@ -188,7 +210,12 @@ List<FuriganaMark> buildFuriganaMarks(
   required Rect keepInside,
 }) {
   final marks = <FuriganaMark>[];
+  final heights = [for (final line in lines) line.box.height]..sort();
+  final typicalHeight = heights.isEmpty ? 0.0 : heights[heights.length ~/ 2];
   for (final line in lines) {
+    // A box much taller than the other lines is two lines read as one;
+    // positions inside it would be guesses.
+    if (lines.length > 2 && line.box.height > typicalHeight * 1.8) continue;
     // Vertical text would need the reading on the side of the glyphs.
     if (line.box.height > line.box.width * 1.5 && line.text.length >= 3) {
       continue;
@@ -212,10 +239,44 @@ List<FuriganaMark> buildFuriganaMarks(
           box.height * region.height,
         );
         if (keepInside.contains(rect.center)) {
-          marks.add(FuriganaMark(reading: span.reading, rect: rect));
+          marks.add(
+            FuriganaMark(
+              id: FuriganaMark.newId(),
+              reading: span.reading,
+              rect: rect,
+            ),
+          );
         }
       }
     }
   }
   return marks;
 }
+
+/// Automatic size from the kanji height, times the learner's own scale.
+double furiganaFontSize(FuriganaMark mark) =>
+    (mark.rect.height * .42).clamp(6.0, 16.0) * mark.scale;
+
+/// Where the furigana text is drawn: centred just above its kanji.
+Rect furiganaLabelRect(FuriganaMark mark) {
+  final painter = TextPainter(
+    text: TextSpan(
+      text: mark.reading,
+      style: TextStyle(fontSize: furiganaFontSize(mark), height: 1),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+  final rect = Rect.fromLTWH(
+    mark.rect.center.dx - painter.width / 2,
+    mark.rect.top - painter.height - 1,
+    painter.width,
+    painter.height,
+  );
+  painter.dispose();
+  return rect;
+}
+
+/// The learner circles what they see (the kana) or the kanji under it.
+bool furiganaInRegion(FuriganaMark mark, Rect region) =>
+    region.contains(mark.rect.center) ||
+    region.contains(furiganaLabelRect(mark).center);

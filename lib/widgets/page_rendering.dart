@@ -1,6 +1,9 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
+import '../furigana.dart';
 
 import '../models.dart';
 
@@ -316,19 +319,25 @@ List<StrokePoint> previewStrokePoints(Size size) {
 }
 
 /// Vẽ furigana nhỏ phía trên các chữ kanji; dùng chung cho editor và bìa vở.
+/// Các mục đang chọn được viền và dịch theo [dragOffset] khi đang kéo.
 class FuriganaPainter extends CustomPainter {
-  const FuriganaPainter(this.marks);
+  const FuriganaPainter(
+    this.marks, {
+    this.selectedIds = const {},
+    this.dragOffset = Offset.zero,
+  });
   final List<FuriganaMark> marks;
+  final Set<String> selectedIds;
+  final Offset dragOffset;
 
   static const _color = Color(0xffb4372f);
-
-  static double fontSizeFor(double kanjiHeight) =>
-      (kanjiHeight * .42).clamp(6.0, 16.0);
+  static const _selectionColor = Color(0xff3979d6);
 
   @override
   void paint(Canvas canvas, Size size) {
     for (final mark in marks) {
-      final fontSize = fontSizeFor(mark.rect.height);
+      final selected = selectedIds.contains(mark.id);
+      final fontSize = furiganaFontSize(mark);
       TextPainter layout(TextStyle style) => TextPainter(
         text: TextSpan(
           text: mark.reading,
@@ -345,11 +354,26 @@ class FuriganaPainter extends CustomPainter {
             ..color = const Color(0xd9ffffff),
         ),
       );
-      final fill = layout(const TextStyle(color: _color));
-      final offset = Offset(
-        mark.rect.center.dx - fill.width / 2,
-        mark.rect.top - fill.height - 1,
+      final fill = layout(
+        TextStyle(color: selected ? _selectionColor : _color),
       );
+      final offset =
+          Offset(
+            mark.rect.center.dx - fill.width / 2,
+            mark.rect.top - fill.height - 1,
+          ) +
+          (selected ? dragOffset : Offset.zero);
+      if (selected) {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            (offset & Size(fill.width, fill.height)).inflate(3),
+            const Radius.circular(4),
+          ),
+          Paint()
+            ..color = _selectionColor.withValues(alpha: .12)
+            ..style = PaintingStyle.fill,
+        );
+      }
       outline.paint(canvas, offset);
       fill.paint(canvas, offset);
       outline.dispose();
@@ -359,5 +383,7 @@ class FuriganaPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(FuriganaPainter oldDelegate) =>
-      !identical(oldDelegate.marks, marks);
+      !identical(oldDelegate.marks, marks) ||
+      !setEquals(oldDelegate.selectedIds, selectedIds) ||
+      oldDelegate.dragOffset != dragOffset;
 }

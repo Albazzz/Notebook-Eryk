@@ -1075,8 +1075,16 @@ void main() {
       addTearDown(state.dispose);
       state.open(state.notebooks.first, page: 1);
       state.addFurigana('n3', 1, const [
-        FuriganaMark(reading: 'わたし', rect: Rect.fromLTWH(200, 200, 30, 30)),
-        FuriganaMark(reading: 'やま', rect: Rect.fromLTWH(200, 500, 30, 30)),
+        FuriganaMark(
+          id: 'a',
+          reading: 'わたし',
+          rect: Rect.fromLTWH(200, 200, 30, 30),
+        ),
+        FuriganaMark(
+          id: 'b',
+          reading: 'やま',
+          rect: Rect.fromLTWH(200, 500, 30, 30),
+        ),
       ]);
       await tester.pumpWidget(NihongoNotebookApp(state: state));
       await tester.pumpAndSettle();
@@ -1112,7 +1120,7 @@ void main() {
 
       // Circling it asks first; cancelling keeps it.
       await circle();
-      expect(find.text('Xóa furigana vùng này?'), findsOneWidget);
+      expect(find.text('Vùng này đã có furigana'), findsOneWidget);
       await tester.tap(find.text('Hủy'));
       await tester.pumpAndSettle();
       expect(state.furiganaFor('n3', 1), hasLength(2));
@@ -1125,6 +1133,149 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  test(
+    'khung từng chữ sai thì ước lượng theo dòng, chiều cao luôn theo dòng',
+    () {
+      const region = Rect.fromLTWH(0, 0, 100, 100);
+      // Vision puts the second character before the first and far below.
+      final marks = buildFuriganaMarks(
+        const [
+          OcrLine(
+            text: '山川',
+            box: Rect.fromLTWH(0, .2, 1, .2),
+            characterBoxes: [
+              Rect.fromLTWH(.6, .5, .3, .3),
+              Rect.fromLTWH(.1, .6, .3, .3),
+            ],
+            tokens: [
+              OcrToken(start: 0, length: 1, reading: 'やま'),
+              OcrToken(start: 1, length: 1, reading: 'かわ'),
+            ],
+          ),
+        ],
+        region: region,
+        keepInside: region,
+      );
+      expect(marks.first.rect.left, closeTo(0, .01));
+      expect(marks.last.rect.left, closeTo(50, .01));
+      expect(marks.every((mark) => mark.rect.top == 20), isTrue);
+
+      // A box twice as tall as the others is two lines merged: skipped.
+      OcrLine line(String text, double top, double height) => OcrLine(
+        text: text,
+        box: Rect.fromLTWH(0, top, 1, height),
+        tokens: [OcrToken(start: 0, length: 1, reading: 'やま')],
+      );
+      final merged = buildFuriganaMarks(
+        [line('山', 0, .1), line('山', .2, .1), line('山', .4, .25)],
+        region: region,
+        keepInside: region,
+      );
+      expect(merged, hasLength(2));
+    },
+  );
+
+  testWidgets('chỉnh sửa furigana: tô để chọn, kéo, đổi cỡ, sửa chữ, xóa', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final state = _stateWithNotebook();
+    addTearDown(state.dispose);
+    state.open(state.notebooks.first, page: 1);
+    state.addFurigana('n3', 1, const [
+      FuriganaMark(
+        id: 'a',
+        reading: 'いま',
+        rect: Rect.fromLTWH(200, 300, 30, 30),
+      ),
+      FuriganaMark(
+        id: 'b',
+        reading: 'やま',
+        rect: Rect.fromLTWH(200, 600, 30, 30),
+      ),
+    ]);
+    await tester.pumpWidget(NihongoNotebookApp(state: state));
+    await tester.pumpAndSettle();
+
+    final page = tester.getRect(find.byKey(const ValueKey('page-canvas')));
+    final scale = page.width / kPageCanvasSize.width;
+    Offset onPage(double x, double y) => page.topLeft + Offset(x, y) * scale;
+
+    await tester.ensureVisible(find.byTooltip('Furigana'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Furigana'));
+    await tester.pumpAndSettle();
+    // Tapping the tool again opens the mode choice.
+    await tester.tap(find.byTooltip('Furigana'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Chỉnh sửa furigana'));
+    await tester.pumpAndSettle();
+    expect(find.text('Tô quanh furigana cần sửa'), findsOneWidget);
+
+    final pen = TestPointer(91, PointerDeviceKind.stylus);
+    await tester.sendEventToBinding(pen.down(onPage(150, 260)));
+    await tester.sendEventToBinding(pen.move(onPage(240, 300)));
+    await tester.sendEventToBinding(pen.move(onPage(290, 345)));
+    await tester.sendEventToBinding(pen.up());
+    await tester.pumpAndSettle();
+    expect(find.text('1 furigana'), findsOneWidget);
+
+    // Drag the selection with a finger, step by step.
+    final handle = find.byKey(const ValueKey('furigana-selection'));
+    final finger = await tester.startGesture(tester.getCenter(handle));
+    for (var step = 0; step < 5; step++) {
+      await finger.moveBy(const Offset(10, 6));
+      await tester.pump();
+    }
+    await finger.up();
+    await tester.pumpAndSettle();
+    var moved = state.furiganaFor('n3', 1).firstWhere((m) => m.id == 'a');
+    expect(moved.rect.left, greaterThan(200));
+    expect(moved.rect.top, greaterThan(300));
+    expect(
+      state.furiganaFor('n3', 1).firstWhere((m) => m.id == 'b').rect.left,
+      200,
+    );
+
+    await tester.tap(find.byTooltip('Furigana to hơn'));
+    await tester.pump();
+    moved = state.furiganaFor('n3', 1).firstWhere((m) => m.id == 'a');
+    expect(moved.scale, closeTo(1.15, .001));
+
+    await tester.tap(find.text('Sửa chữ'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('furigana-reading')),
+      'きょう',
+    );
+    await tester.tap(find.text('Lưu'));
+    await tester.pumpAndSettle();
+    expect(
+      state.furiganaFor('n3', 1).firstWhere((m) => m.id == 'a').reading,
+      'きょう',
+    );
+
+    await tester.tap(find.widgetWithText(TextButton, 'Xóa'));
+    await tester.pump();
+    expect(state.furiganaFor('n3', 1).single.id, 'b');
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Hoàn tác'));
+    await tester.pump();
+    expect(state.furiganaFor('n3', 1), hasLength(2));
+
+    // Stored with its position, size and reading.
+    final restored = FuriganaMark.fromJson(
+      state.furiganaFor('n3', 1).firstWhere((m) => m.id == 'a').toJson(),
+    );
+    expect(restored.reading, 'きょう');
+    expect(restored.scale, closeTo(1.15, .001));
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('bìa vở vẽ giấy và nét viết tay của trang 1', (tester) async {
     final state = _stateWithNotebook();

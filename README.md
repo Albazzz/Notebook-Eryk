@@ -32,7 +32,7 @@ APK debug được tạo tại `build/app/outputs/flutter-apk/app-debug.apk`.
 - Chạm đồng thời hai ngón trên canvas để hoàn tác nét vừa vẽ.
 - Gesture vùng chọn riêng cho Tra từ, AI Dịch, AI Giải thích và Điểm yếu; kết quả AI là popup có thể kéo và đóng.
 - Tra từ ngoại tuyến qua `DictionaryRepository`, tách khỏi AI. Khoanh cả câu thì hiện bảng OCR để tô đúng các từ cần tra, giống Điểm yếu.
-- Công cụ Furigana: tô một vùng, furigana nhỏ hiện đè trên từng chữ kanji và được lưu cùng trang, không dùng AI; chỉ mất khi tô lại vùng đó và chọn Xóa.
+- Công cụ Furigana: tô một vùng, furigana nhỏ hiện đè trên từng chữ kanji và được lưu cùng trang, không dùng AI. Bấm lại nút Furigana (hoặc thanh nổi) để chuyển sang Chỉnh sửa: tô quanh furigana để chọn, kéo để dời chỗ, đổi cỡ, sửa chữ đọc, xóa có hoàn tác.
 - Chọn nhà cung cấp AI: OpenRouter (nhiều model) hoặc Gemini trực tiếp bằng key Google AI Studio (mặc định Gemini 3.8 Flash); mỗi bên có key và model riêng. Tải model động, tùy chọn JLPT/ngôn ngữ.
 - API key lưu bằng secure storage và không hiển thị lại sau khi lưu.
 - Tạo, sửa, lọc, xóa Điểm yếu; mở lại đúng vở/trang nguồn.

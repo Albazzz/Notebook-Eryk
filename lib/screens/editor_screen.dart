@@ -128,6 +128,11 @@ class _EditorScreenState extends State<EditorScreen>
   int _quickDictionaryRequestSerial = 0;
   bool _quickDictionaryEditing = false;
   bool _furiganaHidden = false;
+
+  /// Furigana tool mode: false adds furigana, true selects it for editing.
+  bool _furiganaEditing = false;
+  Set<String> _selectedFurigana = {};
+  Offset _furiganaDrag = Offset.zero;
   double _quickRight = 24;
   double _quickTop = 24;
   double _quickWidth = 390;
@@ -346,6 +351,8 @@ class _EditorScreenState extends State<EditorScreen>
     // Runs during build: persist after the frame instead of notifying now.
     _commitTextEditing(rebuild: false, deferSave: true);
     _selectedTextId = null;
+    _selectedFurigana = {};
+    _furiganaDrag = Offset.zero;
     _strokesPage = page;
     _strokesNotebookId = notebookId;
   }
@@ -507,6 +514,13 @@ class _EditorScreenState extends State<EditorScreen>
                                   left: 0,
                                   right: 0,
                                   child: Center(child: _buildTextToolBar()),
+                                ),
+                              if (tool == EditorTool.furigana)
+                                Positioned(
+                                  top: 16,
+                                  left: 0,
+                                  right: 0,
+                                  child: Center(child: _buildFuriganaToolBar()),
                                 ),
                               if (tool == EditorTool.lasso &&
                                   _lassoSelected.isNotEmpty)
@@ -1537,6 +1551,12 @@ class _EditorScreenState extends State<EditorScreen>
                                                       widget.notebook.id,
                                                       widget.state.openPage,
                                                     ),
+                                                    selectedIds:
+                                                        tool ==
+                                                            EditorTool.furigana
+                                                        ? _selectedFurigana
+                                                        : const {},
+                                                    dragOffset: _furiganaDrag,
                                                   ),
                                                 ),
                                               ),
@@ -1628,6 +1648,36 @@ class _EditorScreenState extends State<EditorScreen>
                                         onResize: _resizeTextBox,
                                       ),
                                     ),
+                                  if (tool == EditorTool.furigana &&
+                                      _furiganaSelectionBounds != null)
+                                    Positioned.fromRect(
+                                      rect: _furiganaSelectionBounds!.shift(
+                                        _furiganaDrag,
+                                      ),
+                                      child: GestureDetector(
+                                        key: const ValueKey(
+                                          'furigana-selection',
+                                        ),
+                                        behavior: HitTestBehavior.opaque,
+                                        onPanUpdate: (details) => setState(
+                                          () => _furiganaDrag += details.delta,
+                                        ),
+                                        onPanEnd: (_) => _commitFuriganaDrag(),
+                                        onPanCancel: _commitFuriganaDrag,
+                                        child: DecoratedBox(
+                                          decoration: BoxDecoration(
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                            border: Border.all(
+                                              color: AppColors.primary
+                                                  .withValues(alpha: .55),
+                                              width: 1.5,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                   Positioned.fill(
                                     child: IgnorePointer(
                                       child: CustomPaint(
@@ -1681,7 +1731,11 @@ class _EditorScreenState extends State<EditorScreen>
 
   // With the text tool one finger moves a box, so it must not pan the page.
   int get _minimumCanvasTouches =>
-      widget.state.drawWithFinger || tool == EditorTool.text ? 2 : 1;
+      widget.state.drawWithFinger ||
+          tool == EditorTool.text ||
+          (tool == EditorTool.furigana && _selectedFurigana.isNotEmpty)
+      ? 2
+      : 1;
 
   static double _normalizeAngle(double degrees) {
     final value = degrees % 360;
@@ -1848,6 +1902,14 @@ class _EditorScreenState extends State<EditorScreen>
       _canvasGestureReady = false;
     }
     if (_toolHandlesOwnGestures) return;
+    // Grabbing the selected furigana drags it; it must not start a new area.
+    if (tool == EditorTool.furigana &&
+        (_furiganaSelectionBounds
+                ?.shift(_furiganaDrag)
+                .contains(event.localPosition) ??
+            false)) {
+      return;
+    }
     if (event.kind == PointerDeviceKind.touch) {
       _trackTouchDown(event);
       if (!widget.state.drawWithFinger || _touchStarts.length != 1) return;
@@ -2508,25 +2570,52 @@ class _EditorScreenState extends State<EditorScreen>
     }
 
     final existing = state.furiganaIn(notebookId, page, selection);
+    if (_furiganaEditing) {
+      setState(() {
+        _selectedFurigana = {for (final mark in existing) mark.id};
+        _furiganaDrag = Offset.zero;
+        selectionStart = null;
+        selectionEnd = null;
+      });
+      if (existing.isEmpty) {
+        showAppSnack(context, 'Không có furigana trong vùng này');
+      }
+      return;
+    }
     if (existing.isNotEmpty) {
-      final delete = await showDialog<bool>(
+      final choice = await showDialog<String>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('Xóa furigana vùng này?'),
-          content: Text('Có ${existing.length} furigana trong vùng bạn tô.'),
+          title: const Text('Vùng này đã có furigana'),
+          content: Text(
+            'Có ${existing.length} furigana trong vùng bạn tô. Bạn muốn xóa hay chỉnh sửa?',
+          ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
+              onPressed: () => Navigator.pop(dialogContext),
               child: const Text('Hủy'),
             ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, 'edit'),
+              child: const Text('Chỉnh sửa'),
+            ),
             FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
+              onPressed: () => Navigator.pop(dialogContext, 'delete'),
               child: const Text('Xóa'),
             ),
           ],
         ),
       );
-      if (delete == true) state.removeFuriganaIn(notebookId, page, selection);
+      if (!mounted) return;
+      if (choice == 'delete') {
+        state.removeFuriganaIn(notebookId, page, selection);
+      } else if (choice == 'edit') {
+        setState(() {
+          _furiganaEditing = true;
+          _selectedFurigana = {for (final mark in existing) mark.id};
+          _furiganaDrag = Offset.zero;
+        });
+      }
       clearSelection();
       return;
     }
@@ -2570,6 +2659,198 @@ class _EditorScreenState extends State<EditorScreen>
         });
       }
     }
+  }
+
+  List<FuriganaMark> get _selectedFuriganaMarks => [
+    for (final mark in widget.state.furiganaFor(
+      widget.notebook.id,
+      widget.state.openPage,
+    ))
+      if (_selectedFurigana.contains(mark.id)) mark,
+  ];
+
+  /// Area that drags the selected furigana: their kana plus a finger margin.
+  Rect? get _furiganaSelectionBounds {
+    Rect? bounds;
+    for (final mark in _selectedFuriganaMarks) {
+      final label = furiganaLabelRect(mark);
+      bounds = bounds?.expandToInclude(label) ?? label;
+    }
+    return bounds?.inflate(10);
+  }
+
+  void _setFuriganaEditing(bool editing) {
+    setState(() {
+      _furiganaEditing = editing;
+      _selectedFurigana = {};
+      _furiganaDrag = Offset.zero;
+      selectionStart = null;
+      selectionEnd = null;
+    });
+  }
+
+  void _clearFuriganaSelection() => setState(() {
+    _selectedFurigana = {};
+    _furiganaDrag = Offset.zero;
+  });
+
+  void _updateSelectedFurigana(FuriganaMark Function(FuriganaMark) change) {
+    final marks = _selectedFuriganaMarks;
+    if (marks.isEmpty) return;
+    widget.state.updateFurigana(
+      widget.notebook.id,
+      widget.state.openPage,
+      marks.map(change).toList(),
+    );
+  }
+
+  void _commitFuriganaDrag() {
+    final offset = _furiganaDrag;
+    if (offset != Offset.zero) {
+      _updateSelectedFurigana(
+        (mark) => mark.copyWith(rect: mark.rect.shift(offset)),
+      );
+    }
+    if (mounted) setState(() => _furiganaDrag = Offset.zero);
+  }
+
+  void _scaleSelectedFurigana(double factor) => _updateSelectedFurigana(
+    (mark) => mark.copyWith(scale: (mark.scale * factor).clamp(.4, 3.0)),
+  );
+
+  Future<void> _editSelectedFuriganaReading() async {
+    final marks = _selectedFuriganaMarks;
+    if (marks.length != 1) return;
+    final reading = await showDialog<String>(
+      context: context,
+      builder: (_) => _FuriganaReadingDialog(initial: marks.single.reading),
+    );
+    final value = reading?.trim() ?? '';
+    if (!mounted || value.isEmpty) return;
+    _updateSelectedFurigana((mark) => mark.copyWith(reading: value));
+  }
+
+  void _deleteSelectedFurigana() {
+    final notebookId = widget.notebook.id;
+    final page = widget.state.openPage;
+    final removed = widget.state.removeFurigana(
+      notebookId,
+      page,
+      _selectedFurigana,
+    );
+    _clearFuriganaSelection();
+    if (removed.isEmpty) return;
+    showAppSnack(
+      context,
+      'Đã xóa ${removed.length} furigana',
+      actionLabel: 'Hoàn tác',
+      onAction: () => widget.state.addFurigana(notebookId, page, removed),
+    );
+  }
+
+  Future<void> _showFuriganaOptions() async {
+    final editing = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.add_circle_outline),
+                title: const Text('Thêm furigana'),
+                subtitle: const Text('Tô vùng có kanji để chèn furigana.'),
+                selected: !_furiganaEditing,
+                onTap: () => Navigator.pop(sheetContext, false),
+              ),
+              ListTile(
+                leading: const Icon(Icons.open_with_rounded),
+                title: const Text('Chỉnh sửa furigana'),
+                subtitle: const Text(
+                  'Tô quanh furigana để chọn, rồi kéo để dời chỗ, đổi cỡ, sửa chữ hoặc xóa.',
+                ),
+                selected: _furiganaEditing,
+                onTap: () => Navigator.pop(sheetContext, true),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (editing != null && mounted) _setFuriganaEditing(editing);
+  }
+
+  Widget _buildFuriganaToolBar() {
+    final selected = _selectedFuriganaMarks;
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SegmentedButton<bool>(
+              showSelectedIcon: false,
+              style: const ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              segments: const [
+                ButtonSegment(value: false, label: Text('Thêm')),
+                ButtonSegment(value: true, label: Text('Chỉnh sửa')),
+              ],
+              selected: {_furiganaEditing},
+              onSelectionChanged: (value) => _setFuriganaEditing(value.first),
+            ),
+            const SizedBox(width: 8),
+            if (selected.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Text(
+                  _furiganaEditing
+                      ? 'Tô quanh furigana cần sửa'
+                      : 'Tô vùng có kanji để thêm furigana',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              )
+            else ...[
+              Text(
+                '${selected.length} furigana',
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              IconButton(
+                tooltip: 'Furigana nhỏ hơn',
+                onPressed: () => _scaleSelectedFurigana(1 / 1.15),
+                icon: const Icon(Icons.text_decrease_rounded, size: 20),
+              ),
+              IconButton(
+                tooltip: 'Furigana to hơn',
+                onPressed: () => _scaleSelectedFurigana(1.15),
+                icon: const Icon(Icons.text_increase_rounded, size: 20),
+              ),
+              if (selected.length == 1)
+                TextButton.icon(
+                  onPressed: _editSelectedFuriganaReading,
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('Sửa chữ'),
+                ),
+              TextButton.icon(
+                onPressed: _deleteSelectedFurigana,
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Xóa'),
+              ),
+              TextButton(
+                onPressed: _clearFuriganaSelection,
+                child: const Text('Xong'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   void _deleteTemporaryCropIfUnused(String? path, {String? except}) {
@@ -2905,6 +3186,13 @@ class _EditorScreenState extends State<EditorScreen>
       return;
     }
     if (tool == value &&
+        value == EditorTool.furigana &&
+        !returningFromQuickLookup &&
+        !_quickDictionaryOpen) {
+      _showFuriganaOptions();
+      return;
+    }
+    if (tool == value &&
         {
           EditorTool.pen,
           EditorTool.highlighter,
@@ -2920,6 +3208,10 @@ class _EditorScreenState extends State<EditorScreen>
       if (value != EditorTool.text) {
         _commitTextEditing(rebuild: false);
         _selectedTextId = null;
+      }
+      if (value != EditorTool.furigana) {
+        _selectedFurigana = {};
+        _furiganaDrag = Offset.zero;
       }
       tool = value;
       error = null;
@@ -6471,6 +6763,49 @@ class _TinyBadge extends StatelessWidget {
       label,
       style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
     ),
+  );
+}
+
+/// Hộp sửa chữ furigana; tự giữ và giải phóng controller của nó.
+class _FuriganaReadingDialog extends StatefulWidget {
+  const _FuriganaReadingDialog({required this.initial});
+  final String initial;
+
+  @override
+  State<_FuriganaReadingDialog> createState() => _FuriganaReadingDialogState();
+}
+
+class _FuriganaReadingDialogState extends State<_FuriganaReadingDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initial,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Sửa furigana'),
+    content: TextField(
+      key: const ValueKey('furigana-reading'),
+      controller: _controller,
+      autofocus: true,
+      decoration: const InputDecoration(labelText: 'Cách đọc (hiragana)'),
+      onSubmitted: (value) => Navigator.pop(context, value),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Hủy'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.pop(context, _controller.text),
+        child: const Text('Lưu'),
+      ),
+    ],
   );
 }
 

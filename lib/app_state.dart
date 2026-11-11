@@ -12,6 +12,7 @@ import 'package:pdfx/pdfx.dart' as pdfx;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'flashcard_decks.dart';
+import 'furigana.dart';
 import 'models.dart';
 import 'review.dart';
 import 'services.dart';
@@ -2320,14 +2321,35 @@ class AppState extends ChangeNotifier {
 
   List<FuriganaMark> furiganaIn(String notebookId, int page, Rect region) => [
     for (final mark in furiganaFor(notebookId, page))
-      if (region.contains(mark.rect.center)) mark,
+      if (furiganaInRegion(mark, region)) mark,
   ];
 
-  void removeFuriganaIn(String notebookId, int page, Rect region) {
+  /// Replaces marks with the same id (moved, resized or retyped).
+  void updateFurigana(String notebookId, int page, List<FuriganaMark> marks) {
+    final byId = {for (final mark in marks) mark.id: mark};
     final key = _strokeKey(notebookId, page);
+    furigana[key] = [
+      for (final mark in furiganaFor(notebookId, page)) byId[mark.id] ?? mark,
+    ];
+    notifyListeners();
+    schedulePersistence();
+  }
+
+  /// Removes the marks and returns them, so the deletion can be undone.
+  List<FuriganaMark> removeFurigana(
+    String notebookId,
+    int page,
+    Set<String> ids,
+  ) {
+    final key = _strokeKey(notebookId, page);
+    final current = furiganaFor(notebookId, page);
+    final removed = [
+      for (final mark in current)
+        if (ids.contains(mark.id)) mark,
+    ];
     final kept = [
-      for (final mark in furiganaFor(notebookId, page))
-        if (!region.contains(mark.rect.center)) mark,
+      for (final mark in current)
+        if (!ids.contains(mark.id)) mark,
     ];
     if (kept.isEmpty) {
       furigana.remove(key);
@@ -2336,7 +2358,13 @@ class AppState extends ChangeNotifier {
     }
     notifyListeners();
     schedulePersistence();
+    return removed;
   }
+
+  void removeFuriganaIn(String notebookId, int page, Rect region) =>
+      removeFurigana(notebookId, page, {
+        for (final mark in furiganaIn(notebookId, page, region)) mark.id,
+      });
 
   List<PageTextBox> textBoxesFor(String notebookId, int page) =>
       List.unmodifiable(textBoxes[_strokeKey(notebookId, page)] ?? const []);
