@@ -381,10 +381,7 @@ void main() {
     final appSource = await File('lib/app.dart').readAsString();
 
     expect(stateSource, contains('Timer(_persistenceDebounce'));
-    expect(
-      stateSource,
-      contains('await Isolate.run(() => jsonEncode(snapshot))'),
-    );
+    expect(stateSource, contains('Isolate.run(() => jsonEncode(snapshot))'));
     expect(stateSource, contains('encoded.length <= _preferencesMirrorLimit'));
     expect(stateSource, isNot(contains('_persistStrokes()')));
     expect(appSource, isNot(contains('flushPersistence(snapshot: true)')));

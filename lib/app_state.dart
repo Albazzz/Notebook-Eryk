@@ -818,7 +818,7 @@ class AppState extends ChangeNotifier {
     final snapshot = _librarySnapshot();
     // JSON encoding a long handwriting history is CPU-bound. Run that work
     // outside the UI isolate so Pencil input and scrolling remain responsive.
-    final encoded = await Isolate.run(() => jsonEncode(snapshot));
+    final encoded = await _encodeInBackground(snapshot);
     final directory = await getApplicationSupportDirectory();
     final target = File('${directory.path}/notebook_library_v2.json');
     final temporary = File('${target.path}.tmp');
@@ -3358,3 +3358,9 @@ class AppState extends ChangeNotifier {
     saveGeneralSettings();
   }
 }
+
+// Work sent to a background isolate lives in top-level functions: a closure
+// written inside a method also carries that method's other captured values
+// (the State, the widget tree), which cannot be sent to an isolate.
+Future<String> _encodeInBackground(Object? snapshot) =>
+    Isolate.run(() => jsonEncode(snapshot));

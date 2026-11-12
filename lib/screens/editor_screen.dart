@@ -3179,17 +3179,7 @@ class _EditorScreenState extends State<EditorScreen>
     // network request and gives Apple Vision a useful minimum glyph size.
     var encoded = bytes.buffer.asUint8List();
     if (source.width < 320 || source.height < 160) {
-      final small = encoded;
-      encoded = await Isolate.run(() {
-        final decoded = img.decodeImage(small);
-        if (decoded == null) return small;
-        final enlarged = img.copyResize(
-          decoded,
-          width: math.max(decoded.width, 320).toInt(),
-          interpolation: img.Interpolation.cubic,
-        );
-        return Uint8List.fromList(img.encodePng(enlarged));
-      });
+      encoded = await _enlargeForOcr(encoded);
     }
     final path =
         '${cropDirectory.path}${Platform.pathSeparator}crop_${DateTime.now().microsecondsSinceEpoch}.png';
@@ -3479,21 +3469,7 @@ class _EditorScreenState extends State<EditorScreen>
           'bottom': bottom,
         });
       } else {
-        final croppedBytes = await Isolate.run(() {
-          final sourceImage = img.decodeImage(bytes)!;
-          final x = (sourceImage.width * left).round();
-          final y = (sourceImage.height * top).round();
-          final width = (sourceImage.width * (1 - left - right)).round().clamp(
-            1,
-            sourceImage.width - x,
-          );
-          final height = (sourceImage.height * (1 - top - bottom))
-              .round()
-              .clamp(1, sourceImage.height - y);
-          return img.encodePng(
-            img.copyCrop(sourceImage, x: x, y: y, width: width, height: height),
-          );
-        });
+        final croppedBytes = await _cropPng(bytes, left, top, right, bottom);
         await File(target).writeAsBytes(croppedBytes);
       }
     } catch (exception) {
@@ -6859,6 +6835,43 @@ class _FuriganaReadingDialogState extends State<_FuriganaReadingDialog> {
     ],
   );
 }
+
+// Work sent to a background isolate lives in top-level functions: a closure
+// written inside a method also carries that method's other captured values
+// (the State, the widget tree), which cannot be sent to an isolate.
+Future<Uint8List> _enlargeForOcr(Uint8List small) => Isolate.run(() {
+  final decoded = img.decodeImage(small);
+  if (decoded == null) return small;
+  final enlarged = img.copyResize(
+    decoded,
+    width: math.max(decoded.width, 320).toInt(),
+    interpolation: img.Interpolation.cubic,
+  );
+  return Uint8List.fromList(img.encodePng(enlarged));
+});
+
+Future<Uint8List> _cropPng(
+  Uint8List bytes,
+  double left,
+  double top,
+  double right,
+  double bottom,
+) => Isolate.run(() {
+  final sourceImage = img.decodeImage(bytes)!;
+  final x = (sourceImage.width * left).round();
+  final y = (sourceImage.height * top).round();
+  final width = (sourceImage.width * (1 - left - right)).round().clamp(
+    1,
+    sourceImage.width - x,
+  );
+  final height = (sourceImage.height * (1 - top - bottom)).round().clamp(
+    1,
+    sourceImage.height - y,
+  );
+  return img.encodePng(
+    img.copyCrop(sourceImage, x: x, y: y, width: width, height: height),
+  );
+});
 
 class _CapturedRegion {
   const _CapturedRegion(this.path, this.region);

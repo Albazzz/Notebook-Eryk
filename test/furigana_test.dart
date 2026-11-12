@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 import 'dart:ui';
 
@@ -106,8 +107,13 @@ void main() {
       );
     }
 
+    // Callbacks from the editor hold things an isolate cannot receive (the
+    // widget tree); they must not travel with the background work.
+    final unsendable = ReceivePort();
+    addTearDown(unsendable.close);
     Future<List<OcrLine>> recognize(String path) async {
       calls.add(path);
+      expect(unsendable, isNotNull);
       final line = img.decodePng(await File(path).readAsBytes())!;
       if (path.endsWith('.line0.png')) {
         return [
@@ -138,7 +144,9 @@ void main() {
 
     // The capture covers page area 0,0–300,150: 2 px per page unit.
     const region = Rect.fromLTWH(0, 0, 300, 150);
+    final progress = <int>[];
     final marks = await recognizeFurigana(
+      onProgress: (done, _) => progress.add(done + unsendable.hashCode * 0),
       capturePath: capture.path,
       region: region,
       keepInside: region,

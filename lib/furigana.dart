@@ -479,6 +479,12 @@ class _PreparedCapture {
   final int textHeight;
 }
 
+// Work sent to a background isolate lives in top-level functions: a closure
+// written inside a method also carries that method's other captured values
+// (the State, the widget tree), which cannot be sent to an isolate.
+Future<_PreparedCapture?> _prepareCaptureInBackground(Uint8List png) =>
+    Isolate.run(() => _prepareCapture(png));
+
 _PreparedCapture? _prepareCapture(Uint8List png) {
   final image = img.decodeImage(png);
   if (image == null) return null;
@@ -549,7 +555,7 @@ Future<List<FuriganaMark>> recognizeFurigana({
   void Function(int done, int total)? onProgress,
 }) async {
   final bytes = await File(capturePath).readAsBytes();
-  final prepared = await Isolate.run(() => _prepareCapture(bytes));
+  final prepared = await _prepareCaptureInBackground(bytes);
   if (prepared == null || prepared.lines.isEmpty) {
     return buildFuriganaMarks(
       await recognize(capturePath),
