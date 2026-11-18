@@ -33,7 +33,10 @@ workflows:
       - name: Analyze and test
         script: |
           set -euo pipefail
-          flutter analyze
+          # Infos (e.g. the material.dart -> material_ui deprecation that
+          # newer stable Flutter reports) must not block the build; warnings
+          # and errors still do.
+          flutter analyze --no-fatal-infos
           flutter test --no-pub
           python3 tool/validate_ios_ipa.py --self-test
           # Flutter release builds reject runtime-created IconData because the
