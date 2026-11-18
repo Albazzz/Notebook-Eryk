@@ -71,6 +71,7 @@ class AppState extends ChangeNotifier {
   ];
   static const _keyStorageName = 'openrouter_api_key';
   static const _geminiKeyStorageName = 'gemini_api_key';
+  static const _vercelKeyStorageName = 'vercel_api_key';
   static const _modelIdsStorageName = 'ai_model_ids';
   static const _modelNamesStorageName = 'ai_model_names';
   static const _savedModelsStorageName = 'ai_saved_models';
@@ -119,7 +120,7 @@ class AppState extends ChangeNotifier {
   List<OpenRouterModel> savedModels = [];
   bool useAiVision = false;
 
-  /// Gọi AI qua OpenRouter hay thẳng Gemini. Mỗi bên có key, model và danh
+  /// Gọi AI qua OpenRouter, Vercel hoặc thẳng Gemini. Mỗi bên có key, model và danh
   /// sách model đã lưu riêng nên đổi qua lại không mất cấu hình.
   AiProvider aiProvider = AiProvider.openRouter;
   bool aiConnected = false;
@@ -3148,9 +3149,11 @@ class AppState extends ChangeNotifier {
   String _providerKey(String base) =>
       aiProvider == AiProvider.openRouter ? base : '${base}_${aiProvider.name}';
 
-  String get _currentKeyStorageName => aiProvider == AiProvider.openRouter
-      ? _keyStorageName
-      : _geminiKeyStorageName;
+  String get _currentKeyStorageName => switch (aiProvider) {
+    AiProvider.openRouter => _keyStorageName,
+    AiProvider.gemini => _geminiKeyStorageName,
+    AiProvider.vercel => _vercelKeyStorageName,
+  };
 
   ({String id, String name}) _providerDefault(AiModelSlot slot) =>
       aiProvider == AiProvider.gemini

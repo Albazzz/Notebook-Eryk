@@ -798,6 +798,7 @@ class OpenRouterService {
   /// Nhà cung cấp đang dùng; AppState đồng bộ từ Cài đặt AI.
   AiProvider provider = AiProvider.openRouter;
   String get _baseUrl => provider.baseUrl;
+  bool get _isOpenRouter => provider == AiProvider.openRouter;
   bool get _isGemini => provider == AiProvider.gemini;
   static const _completionTimeout = Duration(seconds: 150);
   final HttpClient _client = HttpClient()
@@ -818,7 +819,7 @@ class OpenRouterService {
   /// provider nào và trả lỗi; model lạ được phát hiện ở lần gọi đầu.
   final Set<String> _temperatureUnsupportedModels = {};
 
-  /// Model Gemini đã từ chối JSON Schema chặt; lần sau xin JSON thường kèm
+  /// Model đã từ chối JSON Schema chặt; lần sau xin JSON thường kèm
   /// schema trong prompt. Kết quả vẫn được kiểm tra theo schema ở app.
   final Set<String> _jsonObjectOnlyModels = {};
 
@@ -858,9 +859,8 @@ class OpenRouterService {
     bool jsonObjectOnly = false,
   }) => {
     'stream': false,
-    // `provider` and `plugins` are OpenRouter extensions; Gemini's
-    // OpenAI-compatible endpoint rejects unknown fields.
-    if (!_isGemini)
+    // Routing and response-healing options belong to OpenRouter only.
+    if (_isOpenRouter)
       'provider': {
         'require_parameters': true,
         // Route short interactive tasks to the provider answering fastest.
@@ -876,7 +876,7 @@ class OpenRouterService {
               'schema': spec.schema,
             },
           },
-    if (!_isGemini)
+    if (_isOpenRouter)
       'plugins': [
         {'id': 'response-healing'},
       ],
@@ -1027,7 +1027,7 @@ class OpenRouterService {
           ),
         ),
       );
-      if (_isGemini && !jsonObjectOnly && _isSchemaRejected(response)) {
+      if (!_isOpenRouter && !jsonObjectOnly && _isSchemaRejected(response)) {
         _jsonObjectOnlyModels.add(modelId);
         continue;
       }
@@ -1310,11 +1310,12 @@ class OpenRouterService {
   );
 
   Future<void> testConnection(String apiKey) async {
-    final response = await _request(
-      'GET',
-      _isGemini ? '/models' : '/key',
-      apiKey,
-    );
+    final response = await _request('GET', switch (provider) {
+      AiProvider.openRouter => '/key',
+      AiProvider.gemini => '/models',
+      // The model catalog is public; /credits validates the Gateway key.
+      AiProvider.vercel => '/credits',
+    }, apiKey);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw HttpException('${provider.label} trả về mã ${response.statusCode}');
     }
@@ -1328,6 +1329,7 @@ class OpenRouterService {
     final body = jsonDecode(response.body) as Map<String, dynamic>;
     final data = body['data'] as List<dynamic>? ?? const [];
     if (_isGemini) return parseGeminiModels(data);
+    if (provider == AiProvider.vercel) return parseVercelModels(data);
     return data
         .take(120)
         .map((raw) {
@@ -1349,6 +1351,34 @@ class OpenRouterService {
         .where((model) => model.id.isNotEmpty)
         .toList();
   }
+
+  /// Gateway metadata differs from OpenRouter: context_window, modalities
+  /// and input/output pricing. Keep models that can return text for AI tools.
+  @visibleForTesting
+  static List<OpenRouterModel> parseVercelModels(List<dynamic> data) => data
+      .whereType<Map>()
+      .where((item) {
+        if (item['type'] != null && item['type'] != 'language') return false;
+        final modalities = item['modalities'] as Map?;
+        final output = modalities?['output'] as List?;
+        return output == null || output.contains('text');
+      })
+      .map((item) {
+        final modalities = item['modalities'] as Map?;
+        final input = modalities?['input'] as List? ?? const [];
+        final pricing = item['pricing'] as Map?;
+        final inputPrice = num.tryParse('${pricing?['input']}');
+        final outputPrice = num.tryParse('${pricing?['output']}');
+        return OpenRouterModel(
+          id: item['id'] as String? ?? '',
+          name: item['name'] as String? ?? item['id'] as String? ?? 'Model',
+          contextLength: (item['context_window'] as num?)?.toInt() ?? 0,
+          vision: input.contains('image'),
+          free: inputPrice == 0 && outputPrice == 0,
+        );
+      })
+      .where((model) => model.id.isNotEmpty)
+      .toList();
 
   /// Danh sách model của Gemini (dạng `models/gemini-...`): chỉ giữ model
   /// sinh văn bản, bỏ embedding/ảnh/video/âm thanh.
@@ -1414,6 +1444,7 @@ class OpenRouterService {
       throw ArgumentError('Chưa chọn model AI');
     }
     final cacheKey = [
+      provider.name,
       normalizedModelId,
       task.name,
       jlpt,
@@ -1952,7 +1983,7 @@ tự (#). point là tiêu đề điểm yếu tương ứng. reason tối đa 1 
       throw ArgumentError('Chưa chọn model nhận diện ảnh');
     }
     final cacheKey =
-        '$normalizedModelId|${bytes.length}|${_byteFingerprint(bytes)}';
+        '${provider.name}|$normalizedModelId|${bytes.length}|${_byteFingerprint(bytes)}';
     final cached = _visionOcrCache[cacheKey];
     if (cached != null) return cached;
     final running = _visionOcrInFlight[cacheKey];
@@ -2570,9 +2601,9 @@ Chỉ tra đúng từ/cụm từ người dùng đã khoanh. Nếu có nhiều c
       'Bearer $normalizedApiKey',
     );
     request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
-    if (!_isGemini) {
+    if (_isOpenRouter) {
       request.headers.set('HTTP-Referer', 'https://nihongo-notebook.local');
-      request.headers.set('X-Title', 'Note Eryk');
+      request.headers.set('X-Title', 'AIcall');
     }
     // HttpClientRequest.write can reject non-ASCII chunks on some Android
     // runtimes. Sending explicit UTF-8 bytes is deterministic for Japanese

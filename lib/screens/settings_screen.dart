@@ -530,20 +530,27 @@ class _AiSettingsState extends State<_AiSettings> {
                   ButtonSegment(
                     value: AiProvider.gemini,
                     icon: Icon(Icons.auto_awesome_outlined),
-                    label: Text('Gemini (Google AI Studio)'),
+                    label: Text('Gemini'),
+                  ),
+                  ButtonSegment(
+                    value: AiProvider.vercel,
+                    icon: Icon(Icons.cloud_outlined),
+                    label: Text('Vercel AI Gateway'),
                   ),
                 ],
                 selected: {provider},
-                onSelectionChanged: (values) async {
-                  await widget.state.setAiProvider(values.first);
-                  if (!mounted) return;
-                  setState(() {
-                    replacing = false;
-                    tested = false;
-                    error = null;
-                    keyController.clear();
-                  });
-                },
+                onSelectionChanged: testing
+                    ? null
+                    : (values) async {
+                        await widget.state.setAiProvider(values.first);
+                        if (!mounted) return;
+                        setState(() {
+                          replacing = false;
+                          tested = false;
+                          error = null;
+                          keyController.clear();
+                        });
+                      },
               ),
               const SizedBox(height: 6),
               Text(

@@ -33,7 +33,7 @@ APK debug được tạo tại `build/app/outputs/flutter-apk/app-debug.apk`.
 - Gesture vùng chọn riêng cho Tra từ, AI Dịch, AI Giải thích và Điểm yếu; kết quả AI là popup có thể kéo và đóng.
 - Tra từ ngoại tuyến qua `DictionaryRepository`, tách khỏi AI. Khoanh cả câu thì hiện bảng OCR để tô đúng các từ cần tra, giống Điểm yếu.
 - Công cụ Furigana: tô một vùng, furigana nhỏ hiện đè trên từng chữ kanji và được lưu cùng trang, không dùng AI. Bấm lại nút Furigana (hoặc thanh nổi) để chuyển sang Chỉnh sửa: tô quanh furigana để chọn, kéo để dời chỗ, đổi cỡ, sửa chữ đọc, xóa có hoàn tác.
-- Chọn nhà cung cấp AI: OpenRouter (nhiều model) hoặc Gemini trực tiếp bằng key Google AI Studio (mặc định Gemini 3.8 Flash); mỗi bên có key và model riêng. Tải model động, tùy chọn JLPT/ngôn ngữ.
+- Chọn nhà cung cấp AI: OpenRouter (nhiều model), Vercel AI Gateway (key AI Gateway) hoặc Gemini trực tiếp bằng key Google AI Studio (mặc định Gemini 3.8 Flash); mỗi bên có key và model riêng. Tải model động, tùy chọn JLPT/ngôn ngữ. Tên ứng dụng gửi tới OpenRouter là `AIcall`.
 - API key lưu bằng secure storage và không hiển thị lại sau khi lưu.
 - Tạo, sửa, lọc, xóa Điểm yếu; mở lại đúng vở/trang nguồn.
   - AI tách từng điểm theo câu hỏi, nhận dạng dạng đề JLPT (漢字読み, 文脈規定, 文の組み立て★, 読解...) và ghi "Chỗ dễ nhầm", "Đáp án đúng"; cách đọc/Hán Việt được đối chiếu với từ điển ngoại tuyến.
@@ -62,7 +62,7 @@ Nguồn từ vựng/ngữ pháp được copy vào `data/sources/` (từ dự á
 - `LocalDictionaryRepository` có dữ liệu mẫu. Hãy thay implementation bằng database Nhật–Việt thực tế của sản phẩm.
 - Sheet nhập PDF đã có UX và mô hình notebook; chọn file/render từng trang PDF cần nối plugin PDF/file picker trong giai đoạn tích hợp thiết bị.
 
-OpenRouter chỉ được gọi khi người dùng đã cấu hình key/model và chủ động khoanh vùng bằng công cụ AI. Tra từ không đi qua OpenRouter.
+Nhà cung cấp AI đã chọn chỉ được gọi khi người dùng đã cấu hình key/model và chủ động dùng công cụ AI. Tra từ ngoại tuyến không gọi AI. Để dùng Vercel, vào Cài đặt → AI → Vercel AI Gateway, nhập key AI Gateway, kiểm tra kết nối rồi lưu cài đặt. Tích hợp dùng [API tương thích OpenAI của Vercel](https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-chat-completions).
 
 ## Chạy trên iPad
 

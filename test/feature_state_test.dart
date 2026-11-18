@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:noteeryk/app_state.dart';
 import 'package:noteeryk/models.dart';
 import 'package:noteeryk/review.dart';
@@ -1246,20 +1247,50 @@ void main() {
     PathProviderPlatform.instance = _TestPathProvider(root.path);
     addTearDown(() => PathProviderPlatform.instance = originalProvider);
     SharedPreferences.setMockInitialValues({'autoSave': false});
+    FlutterSecureStorage.setMockInitialValues({
+      'openrouter_api_key': 'openrouter-test-key',
+      'gemini_api_key': 'gemini-test-key',
+    });
+    addTearDown(() => FlutterSecureStorage.setMockInitialValues({}));
 
     final state = AppState();
     addTearDown(state.dispose);
     await state.initialize();
     expect(state.aiProvider, AiProvider.openRouter);
+    expect(state.apiKey, 'openrouter-test-key');
     expect(state.modelIds[AiModelSlot.translate], AppState.defaultAiModelId);
 
     await state.setAiProvider(AiProvider.gemini);
     expect(state.aiService.provider, AiProvider.gemini);
+    expect(state.apiKey, 'gemini-test-key');
     for (final slot in AiModelSlot.values) {
       expect(state.modelIds[slot], AppState.defaultGeminiModelId);
     }
 
+    await state.setAiProvider(AiProvider.vercel);
+    expect(state.aiService.provider, AiProvider.vercel);
+    expect(state.hasApiKey, isFalse);
+    expect(state.modelIds[AiModelSlot.translate], AppState.defaultAiModelId);
+    const vercelModel = OpenRouterModel(
+      id: 'anthropic/claude-sonnet-4.6',
+      name: 'Claude Sonnet 4.6',
+      contextLength: 200000,
+      vision: true,
+      free: false,
+    );
+    state.setModelFor(AiModelSlot.translate, vercelModel);
+    await state.saveAiSettings(key: 'vercel-test-key');
+
+    // Restarting restores the active provider, its key, and chosen model.
+    final reloaded = AppState();
+    addTearDown(reloaded.dispose);
+    await reloaded.initialize();
+    expect(reloaded.aiProvider, AiProvider.vercel);
+    expect(reloaded.apiKey, 'vercel-test-key');
+    expect(reloaded.modelIds[AiModelSlot.translate], vercelModel.id);
+
     await state.setAiProvider(AiProvider.openRouter);
+    expect(state.apiKey, 'openrouter-test-key');
     expect(
       state.modelIds[AiModelSlot.dictionary],
       AppState.defaultDictionaryModelId,
@@ -1271,6 +1302,16 @@ void main() {
       prefs.getString('ai_model_ids_gemini'),
       contains('gemini-3.8-flash'),
     );
+
+    await state.setAiProvider(AiProvider.vercel);
+    expect(state.apiKey, 'vercel-test-key');
+    expect(state.modelIds[AiModelSlot.translate], vercelModel.id);
+    await state.deleteApiKey();
+    expect(state.hasApiKey, isFalse);
+    await state.setAiProvider(AiProvider.gemini);
+    expect(state.apiKey, 'gemini-test-key');
+    await state.setAiProvider(AiProvider.openRouter);
+    expect(state.apiKey, 'openrouter-test-key');
   });
 
   const pastedNotes = '''. Trọng tâm ngữ pháp & Từ vựng N2-N3 (文法・語彙のポイント)

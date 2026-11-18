@@ -344,7 +344,7 @@ extension TranslationStyleLabel on TranslationStyle {
   };
 }
 
-/// Nơi gọi AI. Cả hai đều dùng API kiểu OpenAI `/chat/completions`.
+/// Nơi gọi AI. Các nhà cung cấp dùng API kiểu OpenAI `/chat/completions`.
 enum AiProvider {
   openRouter(
     label: 'OpenRouter',
@@ -359,6 +359,13 @@ enum AiProvider {
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     keyHint: 'AIza...',
     keyUrl: 'aistudio.google.com/apikey',
+  ),
+  vercel(
+    label: 'Vercel AI Gateway',
+    description: 'Key Vercel AI Gateway, dùng model của nhiều hãng',
+    baseUrl: 'https://ai-gateway.vercel.sh/v1',
+    keyHint: 'Vercel AI Gateway API key',
+    keyUrl: 'vercel.com/dash/ai-gateway/api-keys',
   );
 
   const AiProvider({

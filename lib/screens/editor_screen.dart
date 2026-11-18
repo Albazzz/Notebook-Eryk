@@ -3193,7 +3193,7 @@ class _EditorScreenState extends State<EditorScreen>
       return 'API key không hợp lệ. Hãy kiểm tra trong Cài đặt AI.';
     }
     if (value.contains('quota') || value.contains('402')) {
-      return 'Tài khoản OpenRouter không đủ credit cho yêu cầu này. Nạp thêm hoặc giảm "Mức suy luận AI" trong Cài đặt.';
+      return 'Tài khoản ${widget.state.aiProvider.label} không đủ credit cho yêu cầu này. Nạp thêm hoặc giảm "Mức suy luận AI" trong Cài đặt.';
     }
     if (value.contains('429')) {
       return 'Dịch vụ AI đang giới hạn lượt. Hãy đợi một chút rồi thử lại.';
